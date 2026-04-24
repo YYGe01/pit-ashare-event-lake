@@ -1,0 +1,24 @@
+﻿name: pit-ashare-event-lake
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pandas
+  - pyarrow
+  - duckdb
+  - requests
+  - beautifulsoup4
+  - lxml
+  - pydantic
+  - pyyaml
+  - typer
+  - rich
+  - tqdm
+  - python-dotenv
+  - loguru
+  - pytest
+  - ruff
+  - pip:
+      - akshare
