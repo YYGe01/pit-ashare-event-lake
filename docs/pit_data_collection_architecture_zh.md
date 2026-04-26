@@ -17,11 +17,11 @@
 | PIT / point-in-time | 按当时可见时间记录 | 防止回测使用未来才知道的数据 |
 | raw | 原始数据 | 未经语义加工的 API 响应、网页、PDF、CSV、附件等 |
 | append-only | 只追加不覆盖 | 新版本新增记录，旧版本永远保留 |
-| manifest | 采集清单 | 某一天或某一小时已经发布的数据文件和元数据清单 |
+| manifest | 采集清单 | 某一天已经发布的数据文件和元数据清单；必要时可扩展到小时级 |
 | source | 具体数据源 | 某个网页、接口、RSS、文件目录或供应商接口 |
 | provider | 数据供应商 | 巨潮、交易所、AkShare、Wind、Choice 等来源主体 |
 | connector | 采集连接器 | 负责拉取某个 source 的代码模块 |
-| logical dataset | 逻辑数据集 | 研究层看到的稳定数据产品，例如公告索引、行情快照 |
+| logical dataset | 逻辑数据集 | 研究层看到的稳定数据产品，例如公告索引、日线行情、复权因子 |
 | dataset contract | 数据契约 | 约束字段、主键、时间、质量规则和兼容性的规范 |
 | quality gate | 质量门禁 | 数据发布前必须通过的校验流程 |
 | lineage | 数据血缘 | 记录数据从哪个源、哪次运行、哪些输入生成 |
@@ -30,6 +30,21 @@
 | shadow run | 影子运行 | 新数据源先并行采集和对账，不立刻替换主源 |
 
 ## 0. 现有 PIT 文档审阅结论
+
+### 0.1 日/周频研究默认模式
+
+本项目当前默认服务日频/周频量化研究：每日或每周生成候选股票和预测分，用于辅助调仓，而不是高频交易、分钟级择时或盘口微观结构研究。
+
+因此，采集层默认资源应投向：
+
+```text
+A 股盘后日线、复权因子、交易日历、停复牌、涨跌停；
+上市公司公告、财报披露文件、监管和政策信息；
+宏观、商品、全球市场等日频外部变量；
+能支撑严格 PIT 回放的 manifest、first_seen_at、source_publish_time 和 provider 版本。
+```
+
+分钟级 Level-1 快照、Level-2、tick、逐笔委托、盘口委托簿等数据不进入 P0。它们只能作为 P2 可选增强，并且应独立成子系统，避免把存储、授权、调度和质量成本提前压到主线框架上。
 
 现有 `realtime_pit_data_collection_plan_zh.md` 的方向是正确的，尤其是以下判断必须保留：
 
@@ -52,7 +67,7 @@
 | 缺少血缘和可观测性 | 出错时难以定位是源、连接器、解析器还是存储问题 | 记录数据集、任务、运行级数据血缘，建立数据源健康状态和告警 |
 | 缺少供应商切换流程 | 免费源失效或付费源替换时容易断流 | 设计双源并行、影子对比、正式切换和回滚 |
 | 缺少合规/授权细粒度记录 | 新闻、研报、社媒、付费数据版权风险高 | 在 source/provider 层记录授权、使用范围、留存策略、再分发限制 |
-| 缺少成本治理 | 高频采集、付费 API、Level-2、新闻全文成本可能失控 | 记录供应商成本、额度、限速和价值优先级 |
+| 缺少成本治理 | 把分钟级/高频采集、付费 API、Level-2、新闻全文误放进 P0 会导致成本失控 | 记录供应商成本、额度、限速和价值优先级 |
 | 缺少恢复演练 | 多年数据资产一旦损坏不可重来 | 设计校验、备份、恢复、重放、演练制度 |
 
 因此，推荐把原方案升级为：
@@ -157,7 +172,7 @@ logical_dataset = announcement_index
 
 ### 1.5 免费源优先起步，付费源作为可插拔增强
 
-免费源用于快速积累和验证框架。付费源用于提升覆盖率、稳定性、历史深度、法律授权和高频能力。架构上必须允许：
+免费源用于快速积累和验证框架。付费源用于提升覆盖率、稳定性、历史深度、法律授权和跨源对账能力；高频能力只作为未来可选增强。架构上必须允许：
 
 - 同一逻辑数据集同时接入多个 provider。
 - 免费源和付费源并行采集、对账。
@@ -215,7 +230,7 @@ logical_dataset = announcement_index
 | 不可变原始数据湖（Raw Immutable Lake） | 保存原始响应、HTML、JSON、CSV、PDF、压缩包、附件，不覆盖 |
 | 最小观测层（Minimal Observed Layer） | 保存最小标准化索引，便于发现、检索、回放和下游读取 |
 | 质量门禁（Quality Gate） | 做数据契约校验、硬约束、异常检测、跨源对账、隔离坏数据 |
-| 采集清单与血缘（Manifest & Lineage） | 每日/每小时发布清单、哈希、血缘、质量报告和可回放快照 |
+| 采集清单与血缘（Manifest & Lineage） | 默认每日发布清单、哈希、血缘、质量报告和可回放快照；必要时扩展小时级 |
 | 运维治理（Operations） | 监控、告警、备份、恢复演练、密钥管理、成本报表和合规审计 |
 
 ## 3. 分层数据模型
@@ -227,7 +242,7 @@ logical_dataset = announcement_index
 | `raw_immutable` | Bronze/raw | append-only | 原始响应、文件、请求、响应头、哈希 | 采集、审计、重放 |
 | `observed_min` | Silver 的最小观测层 | append-only + 版本化 | 标准时间、证券代码、标题、URL、source key、raw 指针 | 后处理、检索、回放 |
 | `quality_reports` | Data quality | append-only | 检查结果、异常、覆盖率、对账差异 | 运维、研究 |
-| `published_manifests` | Snapshot/commit | append-only | 每日/小时可见数据清单 | 回放、审计、研究 |
+| `published_manifests` | Snapshot/commit | append-only | 默认每日可见数据清单；必要时小时级 | 回放、审计、研究 |
 | `derived` | Research/Gold | 可重算 | parsed text、events、features、labels、predictions | 研究层 |
 
 采集项目只负责前四层。`derived` 可以放在同一个 `data_lake` 下，但必须与采集层有清晰边界。
@@ -238,7 +253,7 @@ logical_dataset = announcement_index
 
 ```text
 logical_dataset（逻辑数据集）:
-  稳定的数据产品名称，例如 market_snapshot_l1、announcement_index。
+  稳定的数据产品名称，例如 market_daily_ohlcv、adjustment_factor、announcement_index。
 
 provider（数据供应商）:
   一个供应商或来源实体，例如 akshare、tushare、cninfo、wind、choice。
@@ -281,7 +296,7 @@ terms_url: https://www.cninfo.com.cn/new/commonUrl?url=disclosure/list/notice
 robots_url: https://www.cninfo.com.cn/robots.txt
 license_type: public_disclosure
 redistribution_policy: raw_internal_only
-allowed_frequency: 5m
+allowed_frequency: 1h
 priority: P0
 trading_calendar: cn_ashare
 active: true
@@ -552,10 +567,9 @@ data_lake/
     raw_immutable/
       source=cninfo_announcement_list/
         dt=2026-04-26/
-          hour=09/
-            *.json
-            *.html
-            *.pdf
+          *.json
+          *.html
+          *.pdf
     staging/
       run_id=.../
     observed_min/
@@ -590,8 +604,10 @@ data_lake/
 raw 文件：
 
 ```text
-source_id / dt / hour
+source_id / dt
 ```
+
+公告、新闻等日内低频轮询源可按需增加 `hour` 分区；不要把小时级分区作为所有数据源的默认要求。
 
 observed_min：
 
@@ -599,7 +615,7 @@ observed_min：
 logical_dataset / dt
 ```
 
-高频行情可增加：
+如果未来独立接入分钟级行情，可增加：
 
 ```text
 logical_dataset / trading_date / instrument_bucket / hour
@@ -840,14 +856,12 @@ quarantine 样本
 
 | 逻辑数据集 | 免费/公开来源 | 付费/高稳定来源 | 采集频率 | 备注 |
 | --- | --- | --- | --- | --- |
-| A 股日线/复权/基础行情 | AkShare、BaoStock、交易所公开文件 | Wind、Choice、iFinD、聚源、券商 API | 日内快照 1-5 分钟，盘后日线 | 免费源先起步，付费源用于对账和历史修正 |
-| A 股实时快照 | AkShare、部分公开行情接口 | 券商 Level-1、Wind、Choice、交易所授权行情 | 1-5 分钟 | 个人研究先不追求 tick 级 |
-| 上市公司公告 | 巨潮、上交所、深交所、北交所 | Wind、Choice、iFinD、聚源 | 5-15 分钟 | 必须保存列表页和 PDF |
-| 交易日历/停复牌/涨跌停 | 交易所、AkShare、BaoStock | Wind、Choice、聚源 | 每日 + 盘中 | 研究层最基础约束 |
-| 政策/监管新闻 | 证监会、交易所、人民银行、发改委、财政部、中国政府网 | Wind 新闻、Choice 新闻、iFinD | 15-60 分钟 | A 股政策驱动强，优先级高 |
-| 商品/期货价格 | 上期所、大商所、郑商所、广期所、中金所公开数据 | Wind、Choice、Bloomberg、LSEG | 1-5 分钟/盘后 | 周期股、通胀、成本冲击 |
-| 全球市场指标 | Yahoo Finance、Stooq、FRED、交易所公开数据 | Bloomberg、LSEG、FactSet | 5-30 分钟/每日 | 美股、美元、美债、VIX、原油、黄金 |
-| GDELT/全球事件 | GDELT Project、GDELT DOC/GKG | GDELT Cloud、RavenPack、NewsAPI 付费计划 | 15-60 分钟 | 地缘、灾害、海外政策 |
+| A 股日线/复权/基础行情 | AkShare、BaoStock、交易所公开文件 | Wind、Choice、iFinD、聚源、券商 API | 16:30、20:00、次日 08:30 兜底 | 日/周频模型的价格和成交量底座，免费源先起步，付费源用于对账和历史修正 |
+| 交易日历/停复牌/涨跌停 | 交易所、AkShare、BaoStock | Wind、Choice、聚源 | 每日盘前 + 盘后 | 回测、标签和候选池最基础约束 |
+| 上市公司公告/财报披露文件 | 巨潮、上交所、深交所、北交所 | Wind、Choice、iFinD、聚源 | 交易日每 1-2 小时，盘后 20:00/23:00 兜底 | 必须保存列表页、PDF 和附件 |
+| 政策/监管新闻 | 证监会、交易所、人民银行、发改委、财政部、中国政府网 | Wind 新闻、Choice 新闻、iFinD | 每日 1-4 次，盘后兜底 | A 股政策驱动强，优先级高 |
+| 商品/期货日频价格 | 上期所、大商所、郑商所、广期所、中金所公开数据 | Wind、Choice、Bloomberg、LSEG | 盘后结算价/收盘价 + 次日兜底 | 周期股、通胀、成本冲击 |
+| 全球市场日频指标 | Yahoo Finance、Stooq、FRED、交易所公开数据 | Bloomberg、LSEG、FactSet | 海外收盘后 + 次日早晨 | 美股、美元、美债、VIX、原油、黄金 |
 
 ### 10.2 P1：框架稳定后接入
 
@@ -861,12 +875,14 @@ quarantine 样本
 | 宏观指标/日历 | 国家统计局、央行、财政部、FRED、IMF、World Bank | Wind、CEIC、Bloomberg、LSEG | 修订数据、发布时间、节假日 |
 | 天气/灾害 | Open-Meteo、NASA FIRMS、NOAA | 商业天气、卫星、遥感供应商 | 地理映射、分辨率、延迟 |
 | 航运/能源 | 公开指数、交易所、EIA | Bloomberg、LSEG、Kpler、Vortexa、Clarksons | 费用高、授权复杂 |
+| GDELT/全球事件摘要 | GDELT Project、GDELT DOC/GKG | GDELT Cloud、RavenPack、NewsAPI 付费计划 | 噪声高，需要实体映射和主题聚合，先做日频或 6 小时级汇总 |
 
 ### 10.3 P2：长期高成本/高难数据
 
 | 数据 | 价值 | 难点 | 建议 |
 | --- | --- | --- | --- |
-| Level-2 / tick / 逐笔委托 | 微观结构、盘口冲击 | 授权贵、数据量大、存储和回放复杂 | 等框架稳定后独立子系统接入 |
+| A 股分钟级/盘中快照 | 盘中状态和更细粒度回放 | 对日/周频调仓不是刚需，存储、授权和质量成本更高 | 不进入默认 P0，需要明确研究假设后独立接入 |
+| Level-2 / tick / 逐笔委托 | 微观结构、盘口冲击 | 授权贵、数据量大、存储和回放复杂 | 不建议当前项目主线接入；如要做，作为独立子系统 |
 | 全量新闻全文 | 事件覆盖完整 | 版权、去重、正文抓取、授权 | 优先元数据，全文只保存有授权内容 |
 | 研报全文/电话会纪要 | 机构观点 | 版权和供应商限制 | 只在明确授权下存 raw |
 | 社交媒体/论坛 | 情绪、热度 | 合规、隐私、反爬、噪声 | 先采公开聚合指标，不碰非公开用户数据 |
@@ -947,9 +963,9 @@ graceful degradation
 ### 12.2 优先级
 
 ```text
-P0：行情、公告、交易日历、监管政策、核心商品和全球风险
-P1：财务、宏观、资金、行业、概念、天气灾害
-P2：Level-2、研报、社媒、另类数据、专业事件库
+P0：盘后日线/复权、公告/财报披露文件、交易日历、停复牌/涨跌停、监管政策、核心商品和全球风险日频指标
+P1：财务指标、宏观、资金、行业、概念、天气灾害、GDELT/财经新闻摘要
+P2：分钟级快照、Level-2、tick、研报、社媒、另类数据、专业事件库
 ```
 
 ### 12.3 补采规则
@@ -1035,8 +1051,8 @@ API 额度不足
 
 ```text
 P0 source 连续失败 3 次
-公告源交易时间 30 分钟无成功 run
-行情快照股票数量低于近 20 日中位数 80%
+公告源交易日 2 小时无成功 run
+日线行情股票数量低于近 20 日中位数 80%
 raw 文件 0 字节
 content_hash 缺失
 manifest 未生成
@@ -1170,7 +1186,7 @@ feature_code_version
 3. 建立 dataset_contracts
 4. 建立 data_lake/collection 目录
 5. 实现 crawl_run、request_ledger、raw_object、raw_item_version
-6. 接入 2 个 P0 源：公告 + A 股日线/快照
+6. 接入 2 个 P0 源：公告 + A 股盘后日线/复权
 7. 实现 raw 保存、hash、first_seen_at
 8. 实现 daily manifest
 9. 实现基础质量检查和 source health
@@ -1194,8 +1210,8 @@ feature_code_version
 
 ```text
 1. 扩展公告到巨潮、上交所、深交所、北交所
-2. 扩展行情到至少两个 provider
-3. 接入政策/监管、商品、全球市场、GDELT
+2. 扩展盘后日线/复权到至少两个 provider
+3. 接入政策/监管、商品日频、全球市场日频
 4. 建立 quality report
 5. 建立 cross-source reconciliation
 6. 建立 source failover 流程
@@ -1301,7 +1317,7 @@ src/pitlake/
 3. 元数据存储
 4. 基础连接器接口
 5. 一个公告采集连接器
-6. 一个行情采集连接器
+6. 一个盘后日线行情采集连接器
 7. 每日采集清单
 8. 质量检查
 9. 按历史时点回放
