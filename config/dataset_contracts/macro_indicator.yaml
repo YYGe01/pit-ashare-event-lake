@@ -1,0 +1,30 @@
+logical_dataset: macro_indicator
+contract_version: 1
+description: Macro indicator observations from public provider snapshots.
+primary_key_fields:
+  - provider_id
+  - indicator_group
+  - observation_date
+required_fields:
+  - provider_id
+  - source_id
+  - indicator_group
+  - observation_date
+  - metric_payload
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - region
+  - frequency
+  - source_timestamp
+  - quality_status
+quality_rules:
+  hard:
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+    - observation_date_not_null
+    - metric_payload_not_empty
+  soft:
+    - row_count_near_recent_median

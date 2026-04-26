@@ -59,6 +59,9 @@ pitlake quality-report --date 2026-04-26
 pitlake run-source --source-id akshare_market_daily_ohlcv --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
 pitlake run-enabled --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
 pitlake quality-report --date 2026-04-26
+pitlake reconcile --date 2026-04-26
+pitlake alert --message "pitlake daily check failed" --payload-json data_lake/collection/reconciliation_reports/dt=2026-04-26/latest_reconciliation_report.json
+pitlake backup
 ```
 
 日线和涨跌停连接器默认采样 `000001`、`600000`、`300750`。交易日历连接器默认采集 `20260424` 的 `cn_ashare` 交易日记录。交易状态连接器默认查询 `20260424` 的停复牌记录。同一天重复运行时，框架会保留 raw 采集事实，并在 `raw_item_version` 层识别已存在的 item version。
@@ -69,3 +72,41 @@ pitlake quality-report --date 2026-04-26
 - 每条数据都记录 `first_seen_at`，即系统第一次看到它的时间。
 - 保存数据源元信息、原始响应、原始文件、内容哈希和每日采集清单。
 - 下游解析、事件抽取、特征、模型和回测不写入采集层。
+## V0 对账、告警和备份
+
+`pitlake reconcile --date YYYY-MM-DD` 生成每日对账报告，默认覆盖 `adjustment_factor`、`price_limit`、`announcement_index` 和 `policy_regulatory_doc`。当前只有一个已采集 source 时，报告会标记 `missing_counterparty_source`；后续启用 shadow/official source 后，同一命令会比较同一观察项的关键字段差异。
+
+```powershell
+pitlake reconcile --date 2026-04-26
+pitlake reconcile --date 2026-04-26 --datasets adjustment_factor,price_limit
+```
+
+`pitlake alert` 默认写入 `data_lake/collection/logs/alerts.jsonl`。如需外部 webhook，不要把 URL 写入 git，用环境变量或命令参数：
+
+```powershell
+$env:PITLAKE_ALERT_WEBHOOK_URL="https://example.invalid/webhook"
+pitlake alert --message "pitlake daily check failed" --payload-json data_lake/collection/quality_reports/dt=2026-04-26/latest_quality_report.json
+```
+
+`pitlake backup` 默认备份 SQLite metadata、manifest、quality report 和 reconciliation report 到 `data_lake/backups/local/`。外部备份目录优先用 `PITLAKE_EXTERNAL_BACKUP_DIR`，也可以用 `--target-dir` 指定；raw 数据需要显式加 `--include-raw`。
+
+```powershell
+pitlake backup
+$env:PITLAKE_EXTERNAL_BACKUP_DIR="E:\pitlake_backup"
+pitlake backup --include-raw
+pitlake backup --target-dir E:\pitlake_backup
+```
+
+## P1 bootstrap
+
+P0 目前已经达到 bootstrap 闭环：9 个 P0 logical_dataset 都有至少一个 enabled source。严格意义上的 P0 长期稳定完成，还需要继续观察连续运行、shadow/official source 对账、外部告警和外部备份。
+
+当前已开始 P1 采集层 bootstrap：
+
+- `akshare_financial_indicator`：A 股财务指标，使用 `akshare.stock_financial_analysis_indicator`，将 provider 返回的指标列原样保存到 `metric_payload`。
+
+单独运行示例：
+
+```powershell
+pitlake run-source --source-id akshare_financial_indicator --start-date 20240101 --limit-symbols 1 --manifest-date 2026-04-26
+```

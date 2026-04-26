@@ -2,6 +2,15 @@ timezone: Asia/Shanghai
 default_calendar: cn_ashare
 
 policies:
+  - logical_dataset: financial_indicator
+    priority: P1
+    cadence: quarterly_disclosure_daily_fallback
+    windows:
+      - "20:30"
+      - "next_trading_day 08:30"
+    freshness_slo_minutes: 2880
+    notes: "P1 financial indicator bootstrap; run daily during disclosure season and lower cadence otherwise."
+
   - logical_dataset: market_daily_ohlcv
     priority: P0
     cadence: daily
@@ -87,4 +96,3 @@ policies:
       - "09:00"
     freshness_slo_minutes: 1440
     notes: "海外收盘后和 A 股开盘前兜底。"
-

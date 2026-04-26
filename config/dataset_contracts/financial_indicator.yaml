@@ -1,0 +1,33 @@
+logical_dataset: financial_indicator
+contract_version: 1
+description: A-share financial analysis indicators observed from public provider snapshots.
+primary_key_fields:
+  - provider_id
+  - instrument
+  - report_date
+required_fields:
+  - provider_id
+  - source_id
+  - instrument
+  - exchange
+  - report_date
+  - metric_payload
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - report_year
+  - period_type
+  - source_timestamp
+  - quality_status
+quality_rules:
+  hard:
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+    - instrument_format_valid
+    - report_date_not_null
+    - metric_payload_not_empty
+  soft:
+    - row_count_near_recent_median
+    - metric_coverage_near_recent_median

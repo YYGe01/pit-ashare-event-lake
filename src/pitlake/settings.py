@@ -24,6 +24,7 @@ class ProjectSettings:
     alert_backend: str
     prefer_free_sources: bool
     paid_providers_enabled: bool
+    external_backup_dir: Path | None = None
 
     @classmethod
     def from_yaml(cls, config_path: str | Path) -> "ProjectSettings":
@@ -42,6 +43,8 @@ class ProjectSettings:
         if missing:
             raise ConfigError(f"Missing required project path fields: {', '.join(missing)}")
 
+        external_backup_dir = paths.get("external_backup_dir")
+
         return cls(
             project_root=project_root,
             config_dir=path.parent.resolve(),
@@ -49,6 +52,11 @@ class ProjectSettings:
             metadata_db=resolve_project_path(project_root, paths["metadata_db"]),
             logs_dir=resolve_project_path(project_root, paths["logs_dir"]),
             local_backup_dir=resolve_project_path(project_root, paths["local_backup_dir"]),
+            external_backup_dir=(
+                resolve_project_path(project_root, external_backup_dir)
+                if external_backup_dir
+                else None
+            ),
             timezone=str(project.get("timezone", "Asia/Shanghai")),
             metadata_backend=str(runtime.get("metadata_backend", "sqlite")),
             raw_store=str(runtime.get("raw_store", "filesystem")),
@@ -65,6 +73,7 @@ class ProjectSettings:
             "metadata_db": str(self.metadata_db),
             "logs_dir": str(self.logs_dir),
             "local_backup_dir": str(self.local_backup_dir),
+            "external_backup_dir": str(self.external_backup_dir) if self.external_backup_dir else None,
             "timezone": self.timezone,
             "metadata_backend": self.metadata_backend,
             "raw_store": self.raw_store,
@@ -72,4 +81,3 @@ class ProjectSettings:
             "prefer_free_sources": self.prefer_free_sources,
             "paid_providers_enabled": self.paid_providers_enabled,
         }
-

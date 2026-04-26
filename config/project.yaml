@@ -20,6 +20,7 @@ paths:
   metadata_db: data_lake/collection/metadata/pitlake.sqlite
   logs_dir: data_lake/collection/logs
   local_backup_dir: data_lake/backups/local
+  external_backup_dir:
 
 runtime:
   metadata_backend: sqlite
@@ -36,4 +37,3 @@ policy:
   raw_append_only: true
   default_storage_permission: raw_allowed
   unknown_copyright_policy: metadata_only
-

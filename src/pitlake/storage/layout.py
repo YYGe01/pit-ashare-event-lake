@@ -37,6 +37,10 @@ class LakeLayout:
         return self.collection_root / "quality_reports"
 
     @property
+    def reconciliation_root(self) -> Path:
+        return self.collection_root / "reconciliation_reports"
+
+    @property
     def staging_root(self) -> Path:
         return self.collection_root / "staging"
 
@@ -61,6 +65,7 @@ class LakeLayout:
             self.metadata_root,
             self.manifests_root,
             self.quality_root,
+            self.reconciliation_root,
             self.staging_root,
             self.quarantine_root,
             self.logs_root,
@@ -70,4 +75,3 @@ class LakeLayout:
     def create(self) -> None:
         for path in self.required_directories():
             path.mkdir(parents=True, exist_ok=True)
-

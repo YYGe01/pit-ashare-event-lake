@@ -19,6 +19,31 @@
 全球市场日频
 ```
 
+## 14. 2026-04-26 P1 bootstrap 开始：财务指标
+
+P0 当前状态：已达到“每个 P0 logical_dataset 至少一个 enabled bootstrap source”；但长期稳定完成仍需要 7 天以上连续运行、shadow/official source 对账、外部告警和外部备份。在不扩大到研究层的前提下，已开始 P1 采集层 bootstrap。
+
+首个 P1 source：
+
+```text
+source_id: akshare_financial_indicator
+logical_dataset: financial_indicator
+provider_id: akshare
+connector: pitlake.connectors.fundamentals.akshare_financial.AkshareFinancialIndicatorConnector
+akshare function: stock_financial_analysis_indicator
+default sample symbols: 600000
+default start_year: 2024
+```
+
+说明：
+
+```text
+P1 财务指标先作为 bootstrap source 接入；
+connector 只标准化 instrument、exchange、report_date、period_type 等 PIT 基础字段；
+AkShare/Sina 返回的指标列先完整保存到 metric_payload，不在 V0 阶段强行绑定具体财务指标字段口径；
+真正 PIT 研究使用前，还需要结合公告/财报披露时间、修订版本和官方文件对账。
+```
+
 P0 稳定运行后，再升级 P1 和 P2。
 
 ## 2. 账号和付费源策略
@@ -405,4 +430,24 @@ quality_report: collection/quality_reports/dt=2026-04-26/quality_report_20260426
 2. 增加 shadow/official source 对账，优先复权因子、涨跌停、公告和政策监管；
 3. 接外部告警和备份；
 4. P0 稳定后再进入 P1/P2 或研究层。
+```
+## 13. 2026-04-26 对账、告警和备份入口
+
+已新增最小可运行的 P0 对账、告警和备份能力：
+
+```powershell
+pitlake reconcile --date 2026-04-26
+pitlake alert --message "pitlake daily check failed" --payload-json data_lake/collection/reconciliation_reports/dt=2026-04-26/latest_reconciliation_report.json
+pitlake backup
+```
+
+说明：
+
+```text
+reconcile 默认覆盖 adjustment_factor、price_limit、announcement_index、policy_regulatory_doc；
+当前只有单一 bootstrap source 时，会把缺少 shadow/official counterparty 作为 warning 写入报告；
+后续启用 shadow/official source 后，同一命令会自动按观察项 identity 比较关键字段；
+alert 默认写本地 alerts.jsonl，可通过 PITLAKE_ALERT_WEBHOOK_URL 或 --webhook-url 发送外部 webhook；
+backup 默认备份 SQLite metadata、manifest、quality report 和 reconciliation report，可通过 PITLAKE_EXTERNAL_BACKUP_DIR 或 --target-dir 指向外部盘/NAS/同步目录；
+raw 数据体量更大，需显式使用 --include-raw。
 ```

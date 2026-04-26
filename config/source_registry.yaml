@@ -440,3 +440,25 @@ sources:
     storage_permission: metadata_only
     redistribution_policy: internal_only
     notes: "Use cautiously; confirm terms before storing raw at scale."
+
+  - source_id: akshare_financial_indicator
+    provider_id: akshare
+    logical_dataset: financial_indicator
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.fundamentals.akshare_financial.AkshareFinancialIndicatorConnector
+    allowed_frequency: "quarterly disclosure season plus daily fallback, max 1 run/day"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options:
+      start_year: "2024"
+      symbols:
+        - "600000"
+      limit_symbols: 1
+    notes: "P1 bootstrap A-share financial indicator source using akshare.stock_financial_analysis_indicator. It preserves provider metric columns in metric_payload; PIT disclosure timestamp and revised versions should be cross-checked with announcements or official filings later."

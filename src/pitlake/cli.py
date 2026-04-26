@@ -9,6 +9,9 @@ from pathlib import Path
 
 from pitlake.connectors.runner import ConnectorRunner
 from pitlake.control.registry import SourceRegistry, assert_valid_control_plane, validate_control_plane
+from pitlake.ops.alerts import dispatch_alert
+from pitlake.ops.backup import backup_collection_state
+from pitlake.quality.reconciliation import ReconciliationReportStore
 from pitlake.settings import ProjectSettings
 from pitlake.storage.layout import LakeLayout
 from pitlake.storage.manifest_store import ManifestStore
@@ -16,7 +19,7 @@ from pitlake.storage.metadata_store import MetadataStore
 from pitlake.storage.raw_store import RawStore
 from pitlake.quality.checks import QualityRunner
 from pitlake.quality.report import QualityReportStore
-from pitlake.utils import isoformat
+from pitlake.utils import isoformat, read_json
 
 
 DEFAULT_CONFIG = Path("config/project.yaml")
@@ -80,6 +83,70 @@ def cmd_quality_report(args: argparse.Namespace) -> int:
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["status"] in {"pass", "fail"} else 1
+
+
+def cmd_reconcile(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    LakeLayout(settings).create()
+    metadata = MetadataStore(settings)
+    metadata.init_schema()
+    datasets = None
+    if args.datasets:
+        datasets = [item.strip() for item in args.datasets.split(",") if item.strip()]
+    report = ReconciliationReportStore(settings).generate_daily_report(
+        report_date=args.date,
+        metadata_store=metadata,
+        datasets=datasets,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report["status"] in {"pass", "warn", "fail"} else 1
+
+
+def cmd_alert(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    LakeLayout(settings).create()
+    payload = _load_alert_payload(args.payload_json)
+    status = str(payload.get("status", "unknown")) if payload else "manual"
+    message = args.message or f"pitlake alert: status={status}"
+    result = dispatch_alert(
+        logs_dir=settings.logs_dir,
+        message=message,
+        payload=payload,
+        webhook_url=args.webhook_url,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    webhook_result = result.get("webhook_result") or {}
+    if result.get("webhook_attempted") and not webhook_result.get("ok"):
+        return 1
+    return 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    LakeLayout(settings).create()
+    target_root = Path(args.target_dir).resolve() if args.target_dir else None
+    result = backup_collection_state(
+        settings,
+        target_root=target_root,
+        include_raw=args.include_raw,
+    )
+    payload = {
+        "status": "ok",
+        "backup_dir": str(result.backup_dir),
+        "copied_files": [str(path) for path in result.copied_files],
+        "skipped": result.skipped,
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _load_alert_payload(path: str | None) -> dict[str, object]:
+    if not path:
+        return {}
+    payload = read_json(Path(path))
+    if not isinstance(payload, dict):
+        raise ValueError("alert payload JSON must be an object")
+    return payload
 
 
 def cmd_smoke_run(args: argparse.Namespace) -> int:
@@ -245,6 +312,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     quality_report_parser.add_argument("--date", required=True, help="Report date, e.g. 2026-04-26")
     quality_report_parser.set_defaults(func=cmd_quality_report)
+
+    reconcile_parser = subparsers.add_parser(
+        "reconcile", help="Generate a daily cross-source reconciliation report"
+    )
+    reconcile_parser.add_argument("--date", required=True, help="Report date, e.g. 2026-04-26")
+    reconcile_parser.add_argument(
+        "--datasets",
+        help="Comma-separated logical datasets. Defaults to P0 high-risk datasets.",
+    )
+    reconcile_parser.set_defaults(func=cmd_reconcile)
+
+    alert_parser = subparsers.add_parser(
+        "alert", help="Write local alert and optionally send webhook notification"
+    )
+    alert_parser.add_argument("--message", help="Alert message")
+    alert_parser.add_argument("--payload-json", help="Path to report JSON payload")
+    alert_parser.add_argument("--webhook-url", help="Webhook URL; otherwise PITLAKE_ALERT_WEBHOOK_URL")
+    alert_parser.set_defaults(func=cmd_alert)
+
+    backup_parser = subparsers.add_parser(
+        "backup", help="Back up metadata, manifests, reports, and optionally raw data"
+    )
+    backup_parser.add_argument("--target-dir", help="Backup root; otherwise config/env default")
+    backup_parser.add_argument("--include-raw", action="store_true")
+    backup_parser.set_defaults(func=cmd_backup)
 
     smoke_parser = subparsers.add_parser("smoke-run", help="Run a local no-network smoke test")
     smoke_parser.set_defaults(func=cmd_smoke_run)
