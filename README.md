@@ -106,8 +106,21 @@ P0 目前已经达到 bootstrap 闭环：9 个 P0 logical_dataset 都有至少�
 - `akshare_financial_indicator`：A 股财务指标，使用 `akshare.stock_financial_analysis_indicator`，将 provider 返回的指标列原样保存到 `metric_payload`。
 - `akshare_macro_china_financial_credit`：中国新增金融信贷宏观指标，使用 `akshare.macro_china_new_financial_credit`，将 provider 返回指标保存到 `metric_payload`。
 - `akshare_stock_capital_flow`：个股资金流样例，使用 `akshare.stock_individual_fund_flow`，默认采样 `600000`。
+- `akshare_margin_trading_detail`：沪深融资融券明细，使用 `akshare.stock_margin_detail_sse` / `stock_margin_detail_szse`。
+- `akshare_lhb_detail`：龙虎榜明细，使用 `akshare.stock_lhb_detail_em`。
+- `akshare_hsgt_northbound_flow`：北向资金汇总，使用 `akshare.stock_hsgt_hist_em`。
 - `akshare_industry_membership`：行业板块成分股快照，使用 `akshare.stock_board_industry_cons_em`，默认采样 `银行`。
 - `akshare_concept_membership`：概念板块成分股快照，使用 `akshare.stock_board_concept_cons_em`，默认采样 `机器人概念`。
+- `gdelt_doc_global_event_summary`：全球新闻/事件元数据摘要，使用 GDELT DOC 2.0 `ArtList`，只保存文章元数据，不做事件抽取。
+- `open_meteo_weather_daily`：天气日频观测，使用 Open-Meteo Historical Weather API，默认采样上海和深圳。
+- `akshare_fund_portfolio_hold`：基金持仓公开快照，使用 `akshare.stock_report_fund_hold`。
+- `akshare_stock_news_main_cx`：财经新闻标题元数据，使用 `akshare.stock_news_main_cx`。
+- `akshare_baidu_economic_news`：百度经济日历/财经事件，使用 `akshare.news_economic_baidu`。
+- `akshare_stock_hot_rank`：股票公开热度排行代理，使用 `akshare.stock_hot_rank_em`。
+
+当前 P1 bootstrap 已可交付：低成本公开源覆盖了财务、宏观、资金行为、行业/概念、新闻/事件、天气、基金持仓和公开热度代理。严格生产级仍需要连续运行观察、官方/付费源对账和采样范围扩大。
+
+`akshare_stock_news_em` 当前在本地 AkShare 1.18.57 会触发上游正则错误，保留为 disabled planned source，不进入 P1 交付闭环。
 
 单独运行示例：
 
@@ -115,8 +128,17 @@ P0 目前已经达到 bootstrap 闭环：9 个 P0 logical_dataset 都有至少�
 pitlake run-source --source-id akshare_financial_indicator --start-date 20240101 --limit-symbols 1 --manifest-date 2026-04-26
 pitlake run-source --source-id akshare_macro_china_financial_credit --manifest-date 2026-04-26
 pitlake run-source --source-id akshare_stock_capital_flow --limit-symbols 1 --manifest-date 2026-04-26
+pitlake run-source --source-id akshare_margin_trading_detail --end-date 20260424 --manifest-date 2026-04-26
+pitlake run-source --source-id akshare_lhb_detail --start-date 20260424 --end-date 20260424 --manifest-date 2026-04-26
+pitlake run-source --source-id akshare_hsgt_northbound_flow --manifest-date 2026-04-26
 pitlake run-source --source-id akshare_industry_membership --manifest-date 2026-04-26
 pitlake run-source --source-id akshare_concept_membership --manifest-date 2026-04-26
+pitlake run-source --source-id gdelt_doc_global_event_summary --manifest-date 2026-04-26
+pitlake run-source --source-id open_meteo_weather_daily --manifest-date 2026-04-26
+pitlake run-source --source-id akshare_fund_portfolio_hold --manifest-date 2026-04-26
+pitlake run-source --source-id akshare_stock_news_main_cx --manifest-date 2026-04-26
+pitlake run-source --source-id akshare_baidu_economic_news --manifest-date 2026-04-26
+pitlake run-source --source-id akshare_stock_hot_rank --manifest-date 2026-04-26
 ```
 
 Windows 深路径下运行测试时，如果 raw 文件路径触发 260 字符限制，可把测试根目录指向较短路径：

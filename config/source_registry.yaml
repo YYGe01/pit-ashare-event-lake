@@ -502,6 +502,163 @@ sources:
       limit_symbols: 1
     notes: "P1 bootstrap stock-level capital flow source using akshare.stock_individual_fund_flow. Provider columns are preserved in metric_payload."
 
+  - source_id: akshare_margin_trading_detail
+    provider_id: akshare
+    logical_dataset: capital_flow
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.AkshareMarginTradingDetailConnector
+    allowed_frequency: "daily post-market, max 1 run/day"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options:
+      end_date: "20260424"
+      markets:
+        - SSE
+        - SZSE
+    notes: "P1 bootstrap margin trading detail source using akshare.stock_margin_detail_sse and stock_margin_detail_szse. Provider columns are preserved in metric_payload."
+
+  - source_id: akshare_lhb_detail
+    provider_id: akshare
+    logical_dataset: capital_flow
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.AkshareLhbDetailConnector
+    allowed_frequency: "daily post-market, max 1 run/day"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options:
+      start_date: "20260424"
+      end_date: "20260424"
+    notes: "P1 bootstrap Dragon Tiger List source using akshare.stock_lhb_detail_em. It is stored under capital_flow with flow_scope=lhb_detail."
+
+  - source_id: akshare_hsgt_northbound_flow
+    provider_id: akshare
+    logical_dataset: capital_flow
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.AkshareHsgtNorthboundConnector
+    allowed_frequency: "daily post-market, max 1 run/day"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options:
+      symbol: 北向资金
+    notes: "P1 bootstrap northbound capital flow source using akshare.stock_hsgt_hist_em. Aggregate records are stored under capital_flow with flow_scope=hsgt_northbound."
+
+  - source_id: akshare_fund_portfolio_hold
+    provider_id: akshare
+    logical_dataset: fund_holding
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.AkshareFundPortfolioHoldConnector
+    allowed_frequency: "quarterly disclosure season plus weekly fallback"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options:
+      end_date: "20260331"
+      symbol: 基金持仓
+    notes: "P1 bootstrap public fund holding source using akshare.stock_report_fund_hold. Provider columns are preserved in metric_payload; fund filing timestamp and full holding detail still require official disclosure reconciliation."
+
+  - source_id: akshare_stock_news_em
+    provider_id: akshare
+    logical_dataset: financial_news
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: false
+    implementation_status: planned_upstream_issue
+    adapter_class: pitlake.connectors.p1_bootstrap.AkshareStockNewsConnector
+    allowed_frequency: "daily or every 6h for selected symbols"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options:
+      symbols:
+        - "600000"
+      limit_symbols: 1
+    notes: "Planned stock financial news metadata source using akshare.stock_news_em. In local AkShare 1.18.57 it currently raises an upstream regex error, so it is not enabled for P1 delivery."
+
+  - source_id: akshare_stock_news_main_cx
+    provider_id: akshare
+    logical_dataset: financial_news
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.AkshareStockNewsMainCxConnector
+    allowed_frequency: "daily or every 6h for low-volume headline monitoring"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options: {}
+    notes: "P1 bootstrap financial headline metadata source using akshare.stock_news_main_cx. It stores article metadata and provider payload only; event extraction is out of collection scope."
+
+  - source_id: akshare_baidu_economic_news
+    provider_id: akshare
+    logical_dataset: financial_news
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.AkshareBaiduEconomicNewsConnector
+    allowed_frequency: "daily, max 2 runs/day"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options:
+      end_date: "20260424"
+    notes: "P1 bootstrap economic news metadata source using akshare.news_economic_baidu without cookies. It complements GDELT with Chinese finance headlines."
+
+  - source_id: akshare_stock_hot_rank
+    provider_id: akshare
+    logical_dataset: public_sentiment
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.AkshareStockHotRankConnector
+    allowed_frequency: "daily or every 6h for low-volume monitoring"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options: {}
+    notes: "P1 bootstrap public attention proxy source using akshare.stock_hot_rank_em. The rank is stored as observed provider metadata, not as a sentiment label."
+
   - source_id: akshare_industry_membership
     provider_id: akshare
     logical_dataset: industry_membership
@@ -543,3 +700,58 @@ sources:
         - 机器人概念
       limit_boards: 1
     notes: "P1 bootstrap concept board membership source using akshare.stock_board_concept_cons_em. Snapshot membership is stored append-only with snapshot_date."
+
+  - source_id: gdelt_doc_global_event_summary
+    provider_id: gdelt
+    logical_dataset: global_event_summary
+    source_type: public_api
+    access_method: public_web_api
+    base_url: https://api.gdeltproject.org/api/v2/doc/doc
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.GdeltDocArtListConnector
+    allowed_frequency: "daily or every 6h for selected low-volume queries"
+    storage_permission: metadata_only
+    redistribution_policy: internal_only
+    default_options:
+      query: "(china OR chinese) (market OR economy OR policy)"
+      timespan: "24h"
+      maxrecords: 20
+    notes: "P1 bootstrap global news/event metadata source using GDELT DOC 2.0 ArtList. It stores article metadata only and does not perform event extraction."
+
+  - source_id: open_meteo_weather_daily
+    provider_id: open_meteo
+    logical_dataset: weather_daily
+    source_type: public_api
+    access_method: public_web_api
+    base_url: https://archive-api.open-meteo.com/v1/archive
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.OpenMeteoWeatherDailyConnector
+    allowed_frequency: "daily; higher cadence only during disaster monitoring windows"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options:
+      start_date: "2026-04-24"
+      end_date: "2026-04-24"
+      timezone: Asia/Shanghai
+      daily_fields:
+        - temperature_2m_max
+        - temperature_2m_min
+        - temperature_2m_mean
+        - precipitation_sum
+        - wind_speed_10m_max
+      locations:
+        - location_id: shanghai
+          latitude: 31.2304
+          longitude: 121.4737
+        - location_id: shenzhen
+          latitude: 22.5431
+          longitude: 114.0579
+    notes: "P1 bootstrap daily weather source using Open-Meteo archive API. It records location observations only; downstream stock/industry impact mapping is out of collection scope."

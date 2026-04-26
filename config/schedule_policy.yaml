@@ -26,7 +26,35 @@ policies:
     windows:
       - "20:30"
     freshness_slo_minutes: 2880
-    notes: "P1 stock-level capital flow bootstrap; sample symbols only until source stability is observed."
+    notes: "P1 stock-level fund flow, margin trading, and Dragon Tiger List bootstrap; keep sample scope small until source stability is observed."
+
+  - logical_dataset: fund_holding
+    priority: P1
+    cadence: quarterly_disclosure_weekly_fallback
+    windows:
+      - "21:30"
+    freshness_slo_minutes: 10080
+    notes: "P1 public fund holding bootstrap; treat provider rows as observed snapshots until official filings are reconciled."
+
+  - logical_dataset: financial_news
+    priority: P1
+    cadence: daily_or_six_hour_summary
+    windows:
+      - "08:45"
+      - "14:45"
+      - "20:45"
+    freshness_slo_minutes: 720
+    notes: "P1 financial news metadata bootstrap; no event extraction or sentiment scoring in collection layer."
+
+  - logical_dataset: public_sentiment
+    priority: P1
+    cadence: daily_or_six_hour_summary
+    windows:
+      - "09:00"
+      - "15:30"
+      - "21:00"
+    freshness_slo_minutes: 720
+    notes: "P1 public attention proxy bootstrap; rank/heat fields remain provider payload, not normalized sentiment labels."
 
   - logical_dataset: industry_membership
     priority: P1
@@ -43,6 +71,24 @@ policies:
       - "21:00"
     freshness_slo_minutes: 4320
     notes: "P1 concept board membership snapshot bootstrap."
+
+  - logical_dataset: global_event_summary
+    priority: P1
+    cadence: six_hour_or_daily_summary
+    windows:
+      - "08:30"
+      - "14:30"
+      - "20:30"
+    freshness_slo_minutes: 720
+    notes: "P1 GDELT/global event metadata summary; collect metadata only before event extraction exists."
+
+  - logical_dataset: weather_daily
+    priority: P1
+    cadence: daily
+    windows:
+      - "09:30"
+    freshness_slo_minutes: 2880
+    notes: "P1 weather bootstrap; keep geographic observations separate from downstream impact mapping."
 
   - logical_dataset: market_daily_ohlcv
     priority: P0

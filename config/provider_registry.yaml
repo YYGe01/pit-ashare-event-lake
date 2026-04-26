@@ -191,6 +191,30 @@ providers:
     risk_level: medium
     notes: "Candidate global market daily source."
 
+  - provider_id: gdelt
+    provider_name: GDELT Project
+    provider_type: public_api
+    homepage: https://www.gdeltproject.org/
+    auth_method: none
+    credential_ref: ""
+    storage_permission: metadata_only
+    redistribution_scope: internal_only
+    cost_model: free
+    risk_level: medium
+    notes: "P1 global event/news metadata source. Store low-frequency article metadata first; do not treat it as structured event truth."
+
+  - provider_id: open_meteo
+    provider_name: Open-Meteo
+    provider_type: public_api
+    homepage: https://open-meteo.com/
+    auth_method: none
+    credential_ref: ""
+    storage_permission: raw_allowed
+    redistribution_scope: internal_only
+    cost_model: free
+    risk_level: low
+    notes: "P1 weather daily bootstrap source. Keep weather observations separate from downstream stock impact mapping."
+
   - provider_id: tushare
     provider_name: Tushare Pro
     provider_type: api_vendor
@@ -226,4 +250,3 @@ providers:
     cost_model: paid
     risk_level: high
     notes: "Reserved paid provider for future reconciliation and fallback."
-

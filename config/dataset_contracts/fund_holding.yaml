@@ -1,0 +1,33 @@
+logical_dataset: fund_holding
+contract_version: 1
+description: Public fund portfolio stock holding observations.
+primary_key_fields:
+  - provider_id
+  - fund_code
+  - instrument
+  - report_date
+required_fields:
+  - provider_id
+  - source_id
+  - fund_code
+  - instrument
+  - exchange
+  - report_date
+  - metric_payload
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - source_timestamp
+  - quality_status
+quality_rules:
+  hard:
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+    - instrument_format_valid
+    - report_date_not_null
+    - metric_payload_not_empty
+  soft:
+    - holding_weight_non_negative_if_present
+    - row_count_near_recent_median

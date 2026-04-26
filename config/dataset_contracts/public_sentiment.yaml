@@ -1,0 +1,32 @@
+logical_dataset: public_sentiment
+contract_version: 1
+description: Public attention, heat, or sentiment proxy snapshots.
+primary_key_fields:
+  - provider_id
+  - sentiment_scope
+  - instrument
+  - snapshot_date
+required_fields:
+  - provider_id
+  - source_id
+  - sentiment_scope
+  - instrument
+  - exchange
+  - snapshot_date
+  - metric_payload
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - source_timestamp
+  - quality_status
+quality_rules:
+  hard:
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+    - instrument_format_valid
+    - snapshot_date_not_null
+    - metric_payload_not_empty
+  soft:
+    - row_count_near_recent_median

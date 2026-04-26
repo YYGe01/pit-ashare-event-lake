@@ -1,0 +1,35 @@
+logical_dataset: financial_news
+contract_version: 1
+description: Public financial news metadata snapshots.
+primary_key_fields:
+  - provider_id
+  - news_key
+  - snapshot_date
+required_fields:
+  - provider_id
+  - source_id
+  - news_key
+  - news_scope
+  - snapshot_date
+  - title
+  - source_url
+  - metric_payload
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - instrument
+  - exchange
+  - source_timestamp
+  - quality_status
+quality_rules:
+  hard:
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+    - title_not_empty
+    - source_url_not_empty
+    - metric_payload_not_empty
+  soft:
+    - source_timestamp_not_in_future_over_10m
+    - row_count_near_recent_median
