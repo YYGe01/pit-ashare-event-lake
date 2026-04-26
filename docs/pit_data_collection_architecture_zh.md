@@ -4,6 +4,31 @@
 > 目标：建立一个可长期运行、可审计、可回放、可替换数据源的 A 股多源数据采集框架，为后续量化研究、事件抽取、超图建模和 Qlib/回测流程提供高质量 point-in-time 数据底座。
 > 边界：本文只设计“采集层和采集治理层”。事件抽取、实体链接、特征工程、模型训练和回测属于后处理/研究层。
 
+阅读说明：
+
+- 文档正文尽量使用中文解释。
+- 字段名、目录名、配置名、API 名和表名保留英文，例如 `first_seen_at`、`source_registry`、`raw_object`。这些名称后续会直接进入代码、配置和数据表，统一使用英文更稳定。
+- 第一次出现的重要英文术语会给出中文解释，后续可直接使用英文简称。
+
+常用术语对照：
+
+| 英文术语 | 中文含义 | 在本项目中的含义 |
+| --- | --- | --- |
+| PIT / point-in-time | 按当时可见时间记录 | 防止回测使用未来才知道的数据 |
+| raw | 原始数据 | 未经语义加工的 API 响应、网页、PDF、CSV、附件等 |
+| append-only | 只追加不覆盖 | 新版本新增记录，旧版本永远保留 |
+| manifest | 采集清单 | 某一天或某一小时已经发布的数据文件和元数据清单 |
+| source | 具体数据源 | 某个网页、接口、RSS、文件目录或供应商接口 |
+| provider | 数据供应商 | 巨潮、交易所、AkShare、Wind、Choice 等来源主体 |
+| connector | 采集连接器 | 负责拉取某个 source 的代码模块 |
+| logical dataset | 逻辑数据集 | 研究层看到的稳定数据产品，例如公告索引、行情快照 |
+| dataset contract | 数据契约 | 约束字段、主键、时间、质量规则和兼容性的规范 |
+| quality gate | 质量门禁 | 数据发布前必须通过的校验流程 |
+| lineage | 数据血缘 | 记录数据从哪个源、哪次运行、哪些输入生成 |
+| replay / as-of query | 回放 / 按时点查询 | 按某个历史时刻还原当时系统可见的数据 |
+| quarantine | 隔离区 | 保存未通过关键质量检查、默认不供研究层使用的数据 |
+| shadow run | 影子运行 | 新数据源先并行采集和对账，不立刻替换主源 |
+
 ## 0. 现有 PIT 文档审阅结论
 
 现有 `realtime_pit_data_collection_plan_zh.md` 的方向是正确的，尤其是以下判断必须保留：
@@ -19,29 +44,29 @@
 
 | 缺口 | 风险 | 改进方向 |
 | --- | --- | --- |
-| 缺少控制面 | 数据源、任务、授权、成本、优先级散落在代码里，后期难维护 | 建立 Source Registry、Provider Registry、Dataset Contract、Run Ledger |
-| 缺少“逻辑数据集 vs 物理供应商”抽象 | 换数据源会污染下游表结构和研究代码 | 用 logical dataset 固定研究接口，用 provider adapter 替换采集来源 |
-| 缺少数据契约 | 字段变更、含义变更、单位变更容易静默污染数据 | 每个逻辑数据集维护 contract、schema observation、quality rule |
-| 缺少质量门禁 | 爬虫成功不等于数据可信 | 引入 hard checks、soft checks、异常检测、跨源对账、quarantine |
-| 缺少发布机制 | 半成功数据可能被研究层读到 | 使用 staging -> validate -> publish 的 Write-Audit-Publish 流程 |
-| 缺少血缘和可观测性 | 出错时难以定位是源、连接器、解析器还是存储问题 | 记录 dataset/job/run 级 lineage，建立 source health 和告警 |
-| 缺少供应商切换流程 | 免费源失效或付费源替换时容易断流 | 设计 dual-run、shadow compare、cutover、rollback |
+| 缺少控制面 | 数据源、任务、授权、成本、优先级散落在代码里，后期难维护 | 建立数据源注册表、供应商注册表、数据契约和运行账本 |
+| 缺少“逻辑数据集 vs 物理供应商”抽象 | 换数据源会污染下游表结构和研究代码 | 用逻辑数据集固定研究接口，用供应商适配器替换采集来源 |
+| 缺少数据契约 | 字段变更、含义变更、单位变更容易静默污染数据 | 每个逻辑数据集维护数据契约、字段观测和质量规则 |
+| 缺少质量门禁 | 爬虫成功不等于数据可信 | 引入硬性检查、软性检查、异常检测、跨源对账和隔离区 |
+| 缺少发布机制 | 半成功数据可能被研究层读到 | 使用“暂存 -> 校验 -> 发布”的 Write-Audit-Publish 流程 |
+| 缺少血缘和可观测性 | 出错时难以定位是源、连接器、解析器还是存储问题 | 记录数据集、任务、运行级数据血缘，建立数据源健康状态和告警 |
+| 缺少供应商切换流程 | 免费源失效或付费源替换时容易断流 | 设计双源并行、影子对比、正式切换和回滚 |
 | 缺少合规/授权细粒度记录 | 新闻、研报、社媒、付费数据版权风险高 | 在 source/provider 层记录授权、使用范围、留存策略、再分发限制 |
-| 缺少成本治理 | 高频采集、付费 API、Level-2、新闻全文成本可能失控 | 记录 provider_cost、quota、rate limit、价值优先级 |
+| 缺少成本治理 | 高频采集、付费 API、Level-2、新闻全文成本可能失控 | 记录供应商成本、额度、限速和价值优先级 |
 | 缺少恢复演练 | 多年数据资产一旦损坏不可重来 | 设计校验、备份、恢复、重放、演练制度 |
 
 因此，推荐把原方案升级为：
 
 ```text
-PIT Collection Lakehouse
-  = Source/Provider Control Plane
-  + Connector Runtime
-  + Immutable Raw Lake
-  + Minimal Observed Layer
-  + Quality Gate
-  + Manifest & Lineage
-  + Replay Interface
-  + Operations & Governance
+PIT 采集湖仓
+  = 数据源/供应商控制面
+  + 采集连接器运行时
+  + 不可变原始数据湖
+  + 最小观测数据层
+  + 质量门禁
+  + 采集清单与数据血缘
+  + 历史回放接口
+  + 运维与治理体系
 ```
 
 ## 1. 总体设计原则
@@ -78,15 +103,15 @@ is_backfilled
 研究层不应该直接依赖 `akshare.xxx()`、`tushare.xxx()`、某个网页 DOM 或某个付费 API 字段名。采集层应拆成两层：
 
 ```text
-logical dataset：研究层看到的稳定数据产品
-physical provider：实际采集来源，可以免费、付费、备用、临时替换
+逻辑数据集（logical dataset）：研究层看到的稳定数据产品
+物理供应商（physical provider）：实际采集来源，可以免费、付费、备用、临时替换
 ```
 
 例子：
 
 ```text
 logical_dataset = announcement_index
-  provider candidates:
+  候选供应商（provider candidates）:
     cninfo
     sse_announcement
     szse_announcement
@@ -144,54 +169,54 @@ logical_dataset = announcement_index
 
 ```text
                   +-----------------------------+
-                  | Control Plane               |
-                  | source/provider/contract    |
-                  | schedule/quota/cost/policy  |
+                  | 控制面 Control Plane        |
+                  | 数据源/供应商/数据契约      |
+                  | 调度/额度/成本/策略         |
                   +--------------+--------------+
                                  |
                                  v
 +----------------+     +---------+----------+     +------------------+
-| External       | --> | Connector Runtime  | --> | Staging Area      |
-| Sources        |     | API/RSS/Web/File   |     | raw temp + ledger |
+| 外部数据源     | --> | 连接器运行时       | --> | 暂存区           |
+| External       |     | API/RSS/网页/文件  |     | raw 临时数据+账本|
 +----------------+     +---------+----------+     +--------+---------+
                                  |                         |
                                  v                         v
                         +--------+----------+     +--------+---------+
-                        | Raw Immutable     | <-- | Quality Gate     |
-                        | object store      |     | contract/checks  |
+                        | 不可变原始数据湖 | <-- | 质量门禁        |
+                        | raw 对象存储      |     | 契约/检查        |
                         +--------+----------+     +--------+---------+
                                  |                         |
                                  v                         v
                         +--------+----------+     +--------+---------+
-                        | Metadata Store    | --> | Published        |
-                        | run/item/file     |     | manifests        |
+                        | 元数据存储        | --> | 已发布清单      |
+                        | 运行/条目/文件    |     | manifests        |
                         +--------+----------+     +--------+---------+
                                  |
                                  v
                         +--------+----------+
-                        | Replay Interface  |
-                        | as_of queries     |
+                        | 历史回放接口      |
+                        | as-of 查询        |
                         +--------+----------+
                                  |
                                  v
                         +--------+----------+
-                        | Research Layer    |
-                        | derived only      |
+                        | 研究层            |
+                        | 只读派生数据      |
                         +-------------------+
 ```
 
 架构拆成 8 个子系统：
 
-| 子系统 | 职责 |
+| 子系统 | 中文说明 |
 | --- | --- |
-| Control Plane | 管理数据源、供应商、授权、频率、优先级、数据契约、成本和任务配置 |
-| Connector Runtime | 执行 API/RSS/Web/File/Manual/Vendor 采集，负责限速、重试、幂等、断点续采 |
-| Crawl Ledger | 记录每次请求、响应状态、错误、分页、游标、重试和运行环境 |
-| Raw Immutable Lake | 保存原始响应、HTML、JSON、CSV、PDF、压缩包、附件，不覆盖 |
-| Minimal Observed Layer | 保存最小标准化索引，便于发现、检索、回放和下游读取 |
-| Quality Gate | 做数据契约校验、硬约束、异常检测、跨源对账、隔离坏数据 |
-| Manifest & Lineage | 每日/每小时发布清单、哈希、血缘、质量报告和可回放快照 |
-| Operations | 监控、告警、备份、恢复演练、密钥管理、成本报表和合规审计 |
+| 控制面（Control Plane） | 管理数据源、供应商、授权、频率、优先级、数据契约、成本和任务配置 |
+| 连接器运行时（Connector Runtime） | 执行 API、RSS、网页、文件、手工导入和供应商接口采集，负责限速、重试、幂等、断点续采 |
+| 采集账本（Crawl Ledger） | 记录每次请求、响应状态、错误、分页、游标、重试和运行环境 |
+| 不可变原始数据湖（Raw Immutable Lake） | 保存原始响应、HTML、JSON、CSV、PDF、压缩包、附件，不覆盖 |
+| 最小观测层（Minimal Observed Layer） | 保存最小标准化索引，便于发现、检索、回放和下游读取 |
+| 质量门禁（Quality Gate） | 做数据契约校验、硬约束、异常检测、跨源对账、隔离坏数据 |
+| 采集清单与血缘（Manifest & Lineage） | 每日/每小时发布清单、哈希、血缘、质量报告和可回放快照 |
+| 运维治理（Operations） | 监控、告警、备份、恢复演练、密钥管理、成本报表和合规审计 |
 
 ## 3. 分层数据模型
 
@@ -212,16 +237,16 @@ logical_dataset = announcement_index
 ### 4.1 Source、Provider、Dataset 的区别
 
 ```text
-logical_dataset:
+logical_dataset（逻辑数据集）:
   稳定的数据产品名称，例如 market_snapshot_l1、announcement_index。
 
-provider:
+provider（数据供应商）:
   一个供应商或来源实体，例如 akshare、tushare、cninfo、wind、choice。
 
-source:
+source（具体数据源）:
   provider 下的具体接口、网页、RSS、文件目录或手工数据集。
 
-connector:
+connector（采集连接器）:
   代码实现，负责从 source 拉取数据。
 ```
 
@@ -476,13 +501,13 @@ source_item_state 只指向 latest，但不删除历史。
 适合当前项目先落地：
 
 ```text
-metadata: DuckDB 或 SQLite
-raw files: 本地文件系统
-tables: Parquet
-scheduler: Windows Task Scheduler / cron / APScheduler
-logs: JSONL + loguru
-quality: 自写规则 + pytest
-backup: 本地硬盘 + 对象存储/云盘
+元数据存储：DuckDB 或 SQLite
+原始文件存储：本地文件系统
+分析表格式：Parquet
+任务调度：Windows Task Scheduler / cron / APScheduler
+日志：JSONL + loguru
+质量检查：自写规则 + pytest
+备份：本地硬盘 + 对象存储/云盘
 ```
 
 优点是简单、低成本、可控。缺点是并发、权限、血缘和远程恢复较弱。
@@ -490,26 +515,26 @@ backup: 本地硬盘 + 对象存储/云盘
 ### 7.2 V1：稳定运行版
 
 ```text
-metadata: PostgreSQL
-raw object store: MinIO / S3 compatible storage
-tables: Parquet + DuckDB
-scheduler: Dagster 或 Airflow
-quality: Great Expectations / 自定义 check
-lineage: OpenLineage optional
-monitoring: Prometheus + Grafana optional
-secrets: .env -> password manager / Vault
+元数据存储：PostgreSQL
+原始对象存储：MinIO / S3 兼容存储
+分析表格式：Parquet + DuckDB
+任务调度：Dagster 或 Airflow
+质量检查：Great Expectations / 自定义检查
+数据血缘：可选 OpenLineage
+监控：可选 Prometheus + Grafana
+密钥管理：.env -> 密码管理器 / Vault
 ```
 
 ### 7.3 V2：长期资产版
 
 ```text
-table format: Apache Iceberg 或 Delta Lake
-data versioning: lakeFS 或对象存储版本控制
-catalog: Iceberg REST Catalog / Hive Metastore / Glue compatible
-orchestration: Dagster assets 或 Airflow DAGs
-compute: DuckDB for local research, Spark/Flink when scale requires
-quality gate: Great Expectations + custom PIT checks
-lineage: OpenLineage + metadata catalog
+表格式：Apache Iceberg 或 Delta Lake
+数据版本管理：lakeFS 或对象存储版本控制
+数据目录：Iceberg REST Catalog / Hive Metastore / Glue 兼容目录
+任务编排：Dagster assets 或 Airflow DAGs
+计算引擎：本地研究用 DuckDB，规模变大后再用 Spark/Flink
+质量门禁：Great Expectations + 自定义 PIT 检查
+数据血缘：OpenLineage + 元数据目录
 ```
 
 V2 不是第一天要做，但目录、manifest、schema 和接口应从第一天兼容未来升级。
@@ -771,25 +796,25 @@ status
 
 | 类型 | 目的 | 示例 |
 | --- | --- | --- |
-| Hard checks | 不满足就不能发布 | raw 文件存在、content_hash 非空、first_seen_at 非空 |
-| Soft checks | 可发布但要告警 | 字段缺失率升高、标题过短、附件大小异常 |
-| Anomaly checks | 发现源异常 | 行情股票数突然少 50%、公告数异常为 0 |
-| Reconciliation checks | 跨源对账 | cninfo 与交易所公告数量差异、行情收盘价与备用源差异 |
-| PIT checks | 防未来函数 | `first_seen_at` 晚于 `source_publish_time` 合理，不能被补采改早 |
+| 硬性检查（Hard checks） | 不满足就不能发布 | raw 文件存在、content_hash 非空、first_seen_at 非空 |
+| 软性检查（Soft checks） | 可发布但要告警 | 字段缺失率升高、标题过短、附件大小异常 |
+| 异常检查（Anomaly checks） | 发现源异常 | 行情股票数突然少 50%、公告数异常为 0 |
+| 跨源对账（Reconciliation checks） | 对比多个来源是否一致 | cninfo 与交易所公告数量差异、行情收盘价与备用源差异 |
+| PIT 检查（PIT checks） | 防未来函数 | `first_seen_at` 晚于 `source_publish_time` 合理，不能被补采改早 |
 
 ### 9.2 质量门禁策略
 
 ```text
-critical fail:
+关键失败（critical fail）:
   raw 保留，observed_min 进入 quarantine，不进入 published manifest。
 
-warning fail:
+警告失败（warning fail）:
   进入 manifest，但标记 warning，并进入日报。
 
-source anomaly:
+数据源异常（source anomaly）:
   本次 run 标记 degraded，触发备用源或人工检查。
 
-provider disagreement:
+供应商不一致（provider disagreement）:
   同时保留各 provider 版本，不在采集层强行判断谁对。
 ```
 
@@ -911,12 +936,12 @@ graceful degradation
 ### 12.1 调度维度
 
 ```text
-trading_calendar: cn_ashare / global_24x7 / source_specific
-session: pre_market / intraday / post_market / overnight
-frequency: cron / interval / event_triggered
-priority: P0 / P1 / P2
-freshness_slo: expected maximum delay
-quota_budget: API calls per day/month
+交易日历（trading_calendar）: cn_ashare / global_24x7 / source_specific
+交易时段（session）: pre_market / intraday / post_market / overnight
+采集频率（frequency）: cron / interval / event_triggered
+优先级（priority）: P0 / P1 / P2
+新鲜度目标（freshness_slo）: 允许的最大延迟
+额度预算（quota_budget）: 每日或每月可用 API 调用次数
 ```
 
 ### 12.2 优先级
@@ -964,25 +989,25 @@ API 额度不足
 ```text
 1. 新 provider 注册到 provider_registry
 2. 为同一 logical_dataset 建立 adapter
-3. 以 role=shadow 运行 7-30 天
-4. 生成 coverage、latency、field mapping、reconciliation 报告
-5. 数据契约不破坏时升级为 supplemental 或 primary
-6. 旧源降级为 fallback 或 retired
+3. 以 role=shadow（影子运行）运行 7-30 天
+4. 生成覆盖率、延迟、字段映射、跨源对账报告
+5. 数据契约不破坏时升级为 supplemental（补充源）或 primary（主源）
+6. 旧源降级为 fallback（备用源）或 retired（退役源）
 7. 保留历史 source mapping 和 raw 数据
 ```
 
 ### 13.3 对账指标
 
 ```text
-coverage_ratio
-latency_distribution
-missing_item_count
-extra_item_count
-field_diff_rate
-price_diff_bps
-announcement_pdf_hash_match_rate
-schema_drift_count
-cost_per_10k_items
+覆盖率（coverage_ratio）
+延迟分布（latency_distribution）
+缺失条目数（missing_item_count）
+额外条目数（extra_item_count）
+字段差异率（field_diff_rate）
+价格差异，单位 bp（price_diff_bps）
+公告 PDF 哈希匹配率（announcement_pdf_hash_match_rate）
+字段结构漂移次数（schema_drift_count）
+每一万条数据成本（cost_per_10k_items）
 ```
 
 ## 14. 可观测性和告警
@@ -990,20 +1015,20 @@ cost_per_10k_items
 ### 14.1 核心指标
 
 ```text
-source_freshness_minutes
-crawl_success_rate
-new_item_count
-updated_item_count
-duplicate_rate
-quarantine_count
-raw_file_missing_count
-content_hash_missing_count
-schema_change_count
-provider_latency_p50/p95
-backfill_ratio
-quota_remaining
-storage_growth_gb
-cost_cny_daily
+数据源新鲜度分钟数（source_freshness_minutes）
+采集成功率（crawl_success_rate）
+新增条目数（new_item_count）
+更新条目数（updated_item_count）
+重复率（duplicate_rate）
+隔离条目数（quarantine_count）
+原始文件缺失数（raw_file_missing_count）
+内容哈希缺失数（content_hash_missing_count）
+字段结构变化次数（schema_change_count）
+供应商延迟 p50/p95（provider_latency_p50/p95）
+补采比例（backfill_ratio）
+剩余额度（quota_remaining）
+存储增长 GB（storage_growth_gb）
+每日成本人民币（cost_cny_daily）
 ```
 
 ### 14.2 告警规则
@@ -1025,11 +1050,11 @@ quota 低于 10%
 每天生成：
 
 ```text
-collection_daily_report_YYYY-MM-DD.md
-source_health_YYYY-MM-DD.json
-quality_manifest.json
-cost_report.json
-action_items.json
+每日采集报告：collection_daily_report_YYYY-MM-DD.md
+数据源健康状态：source_health_YYYY-MM-DD.json
+质量清单：quality_manifest.json
+成本报告：cost_report.json
+待处理事项：action_items.json
 ```
 
 ## 15. 备份、恢复和安全
@@ -1037,12 +1062,12 @@ action_items.json
 ### 15.1 备份策略
 
 ```text
-metadata: 每日增量 + 每周全量
-manifest: 每日多地备份
-raw: 每周增量，重要源每日备份
-source registry/contracts: 跟随 git 版本管理
-credentials: 不进入 git，只进入安全密钥管理
-logs: 至少保留 1-3 年，P0 源更久
+元数据（metadata）: 每日增量 + 每周全量
+采集清单（manifest）: 每日多地备份
+原始数据（raw）: 每周增量，重要源每日备份
+数据源注册表/数据契约（source registry/contracts）: 跟随 git 版本管理
+密钥凭据（credentials）: 不进入 git，只进入安全密钥管理
+日志（logs）: 至少保留 1-3 年，P0 源更久
 ```
 
 ### 15.2 恢复演练
@@ -1222,12 +1247,12 @@ P0 源失败会告警；
 Python 3.11
 DuckDB + Parquet
 本地 raw 文件系统
-YAML registry
+YAML 注册表
 APScheduler / Windows Task Scheduler
 requests + beautifulsoup4 + lxml
-pydantic contract validation
-pytest quality checks
-loguru JSONL logs
+pydantic 数据契约校验
+pytest 质量检查
+loguru JSONL 日志
 ```
 
 原因：
@@ -1271,16 +1296,16 @@ src/pitlake/
 优先实现顺序：
 
 ```text
-1. control registry + contract loader
-2. raw store + hash
-3. metadata store
-4. base connector
-5. one announcement connector
-6. one market data connector
-7. daily manifest
-8. quality checks
-9. as_of replay
-10. scheduler
+1. 控制面注册表 + 数据契约加载器
+2. 原始数据存储 + 哈希计算
+3. 元数据存储
+4. 基础连接器接口
+5. 一个公告采集连接器
+6. 一个行情采集连接器
+7. 每日采集清单
+8. 质量检查
+9. 按历史时点回放
+10. 调度器
 ```
 
 ## 21. 架构验收标准
@@ -1302,22 +1327,22 @@ src/pitlake/
 
 ## 22. 参考资料
 
-以下资料用于本次架构设计取舍：
+以下资料用于本次架构设计取舍。英文名称是工具或项目原名，括号里是中文说明：
 
-- Databricks Medallion Architecture：`https://learn.microsoft.com/en-us/azure/databricks/lakehouse/medallion`
-- Apache Airflow：`https://airflow.apache.org/docs/apache-airflow/`
-- Dagster：`https://docs.dagster.io/`
-- Delta Lake：`https://docs.delta.io/`
-- Apache Iceberg：`https://iceberg.apache.org/docs/latest/`
-- lakeFS：`https://docs.lakefs.io/`
-- Great Expectations：`https://docs.greatexpectations.io/`
-- OpenLineage：`https://openlineage.io/`
-- Scrapy：`https://docs.scrapy.org/`
-- GDELT Project：`https://www.gdeltproject.org/`
-- Qlib：`https://qlib.readthedocs.io/`
-- AkShare：`https://akshare.akfamily.xyz/`
-- Tushare Pro：`https://tushare.pro/document/2`
-- BaoStock：`http://baostock.com/baostock/index.php`
+- Databricks Medallion Architecture（湖仓铜/银/金分层架构）：`https://learn.microsoft.com/en-us/azure/databricks/lakehouse/medallion`
+- Apache Airflow（批处理工作流调度和监控平台）：`https://airflow.apache.org/docs/apache-airflow/`
+- Dagster（面向数据资产的数据编排和可观测平台）：`https://docs.dagster.io/`
+- Delta Lake（支持事务、时间旅行和批流统一的数据湖表格式）：`https://docs.delta.io/`
+- Apache Iceberg（支持 schema 演进、分区演进和时间旅行的数据湖表格式）：`https://iceberg.apache.org/docs/latest/`
+- lakeFS（面向数据湖的数据版本管理工具，类似“数据版 Git”）：`https://docs.lakefs.io/`
+- Great Expectations（数据质量校验和数据文档工具）：`https://docs.greatexpectations.io/`
+- OpenLineage（开放的数据血缘采集标准）：`https://openlineage.io/`
+- Scrapy（网页采集和爬虫框架）：`https://docs.scrapy.org/`
+- GDELT Project（全球新闻和事件开放数据库）：`https://www.gdeltproject.org/`
+- Qlib（微软开源的 AI 量化研究平台）：`https://qlib.readthedocs.io/`
+- AkShare（开源金融数据接口库）：`https://akshare.akfamily.xyz/`
+- Tushare Pro（金融数据接口服务）：`https://tushare.pro/document/2`
+- BaoStock（证券数据接口服务）：`http://baostock.com/baostock/index.php`
 - 巨潮资讯：`https://www.cninfo.com.cn/`
 - 上交所信息披露：`https://www.sse.com.cn/disclosure/listedinfo/announcement/`
 - 深交所信息披露：`https://www.szse.cn/disclosure/listed/notice/`

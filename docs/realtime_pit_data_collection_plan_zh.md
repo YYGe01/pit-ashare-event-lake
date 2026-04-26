@@ -1574,24 +1574,24 @@ pit_data_collection_architecture_zh.md
 
 本次补充后，采集层设计应增加以下硬性要求：
 
-1. 必须区分 `logical_dataset`、`provider`、`source`、`connector`，研究层只依赖稳定的 `logical_dataset`，不能直接依赖某个免费库、网页或付费 API。
-2. 每个数据源必须进入 `source_registry`，每个供应商必须进入 `provider_registry`，授权、频率、额度、成本、留存和再分发限制都要显式记录。
-3. 每个逻辑数据集必须有 `dataset_contract`，定义主键、必填字段、时间字段、证券代码规范、去重规则、质量规则和兼容性策略。
-4. 采集写入必须采用 `staging -> audit -> publish` 流程；raw 数据可以保存，但未通过 critical 检查的数据不能进入默认可读的 published manifest。
-5. 免费源和付费源必须通过同一套 provider adapter 接口接入，支持 shadow run、双源对账、主备切换和回滚。
-6. 除 `first_seen_at` 外，应增加 `published_at` 和可选的 `market_available_at`，用于后续研究层严格控制回测可用时间。
-7. 质量体系不能只看爬虫是否成功，还要覆盖 raw 文件完整性、字段缺失、schema drift、异常波动、跨源对账和 PIT 防泄漏检查。
-8. 必须建立 `lineage_event` 或等价记录，使每个 manifest、后处理产物和研究结果都能追溯到输入数据、运行版本和配置哈希。
-9. 必须建立供应商切换流程：新源先以 `shadow` 角色运行，完成覆盖率、延迟、字段差异、成本和质量对账后才能升为 `primary`。
-10. 备份不只备份派生表，必须备份 raw、metadata、manifest、registry、contract 和日志，并定期做恢复演练。
+1. 必须区分 `logical_dataset`（逻辑数据集）、`provider`（数据供应商）、`source`（具体数据源）、`connector`（采集连接器），研究层只依赖稳定的逻辑数据集，不能直接依赖某个免费库、网页或付费 API。
+2. 每个数据源必须进入 `source_registry`（数据源注册表），每个供应商必须进入 `provider_registry`（供应商注册表），授权、频率、额度、成本、留存和再分发限制都要显式记录。
+3. 每个逻辑数据集必须有 `dataset_contract`（数据契约），定义主键、必填字段、时间字段、证券代码规范、去重规则、质量规则和兼容性策略。
+4. 采集写入必须采用 `staging -> audit -> publish`（暂存 -> 审计校验 -> 发布）流程；raw 原始数据可以保存，但未通过 critical 关键检查的数据不能进入默认可读的 published manifest（已发布采集清单）。
+5. 免费源和付费源必须通过同一套 `provider adapter`（供应商适配器）接口接入，支持 `shadow run`（影子运行）、双源对账、主备切换和回滚。
+6. 除 `first_seen_at`（系统首次看到时间）外，应增加 `published_at`（进入采集清单的发布时间）和可选的 `market_available_at`（研究层最早可用于交易决策的时间），用于后续研究层严格控制回测可用时间。
+7. 质量体系不能只看爬虫是否成功，还要覆盖 raw 原始文件完整性、字段缺失、`schema drift`（字段结构漂移）、异常波动、跨源对账和 PIT 防泄漏检查。
+8. 必须建立 `lineage_event`（数据血缘事件）或等价记录，使每个 manifest（采集清单）、后处理产物和研究结果都能追溯到输入数据、运行版本和配置哈希。
+9. 必须建立供应商切换流程：新源先以 `shadow`（影子源）角色运行，完成覆盖率、延迟、字段差异、成本和质量对账后才能升为 `primary`（主源）。
+10. 备份不只备份派生表，必须备份 raw 原始数据、metadata 元数据、manifest 采集清单、registry 注册表、contract 数据契约和日志，并定期做恢复演练。
 
 因此，后续实现时建议采用以下优先级：
 
 ```text
-第一优先级：raw append-only + first_seen_at + manifest + source registry
-第二优先级：logical_dataset/provider/source/connector 抽象 + dataset contract
-第三优先级：quality gate + source health + replay snapshot
-第四优先级：多 provider shadow run + cross-source reconciliation
+第一优先级：原始数据只追加保存 + 系统首次看到时间 + 采集清单 + 数据源注册表
+第二优先级：逻辑数据集/供应商/具体数据源/采集连接器抽象 + 数据契约
+第三优先级：质量门禁 + 数据源健康状态 + 历史回放快照
+第四优先级：多供应商影子运行 + 跨源对账
 第五优先级：对象存储、PostgreSQL、Dagster/Airflow、OpenLineage、Iceberg/Delta/lakeFS 等长期升级
 ```
 

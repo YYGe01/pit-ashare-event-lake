@@ -1,24 +1,24 @@
-﻿# PIT A-Share Event Lake
+# A 股 PIT 事件数据湖
 
-A point-in-time data collection project for China A-share research.
+这是一个面向中国 A 股量化研究的 point-in-time 数据采集项目。
 
-This repository currently focuses on the data collection layer only: source registry, crawl ledger, raw append-only storage, collection manifests, monitoring, backup, and auditability.
+当前仓库只聚焦“数据采集层”：数据源注册、采集运行账本、原始数据追加保存、每日清单、监控、备份和审计。事件抽取、特征工程、模型训练和回测属于后续研究层。
 
-Design documents:
+## 设计文档
 
-- `docs/realtime_pit_data_collection_plan_zh.md`: PIT collection implementation handbook.
-- `docs/pit_data_collection_architecture_zh.md`: long-term collection architecture, source/provider abstraction, quality gates, governance, and operations.
+- `docs/realtime_pit_data_collection_plan_zh.md`：PIT 数据采集实施手册，说明如何保存原始数据、时间账本、核心表、目录和首月落地任务。
+- `docs/pit_data_collection_architecture_zh.md`：长期采集架构总纲，说明数据源/供应商抽象、质量门禁、治理、运维和供应商切换机制。
 
-## Environment
+## 环境
 
 ```powershell
 conda env create -f environment.yml
 conda activate pit-ashare-event-lake
 ```
 
-## Scope
+## 范围
 
-- Keep raw collected data immutable.
-- Record `first_seen_at` for every item.
-- Preserve source metadata, raw payloads, content hashes, and daily manifests.
-- Keep downstream parsing, event extraction, features, models, and backtests outside the collection layer.
+- 原始采集数据只追加保存，不覆盖历史版本。
+- 每条数据都记录 `first_seen_at`，即系统第一次看到它的时间。
+- 保存数据源元信息、原始响应、原始文件、内容哈希和每日采集清单。
+- 下游解析、事件抽取、特征、模型和回测不写入采集层。
