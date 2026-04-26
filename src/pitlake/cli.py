@@ -15,6 +15,7 @@ from pitlake.storage.manifest_store import ManifestStore
 from pitlake.storage.metadata_store import MetadataStore
 from pitlake.storage.raw_store import RawStore
 from pitlake.quality.checks import QualityRunner
+from pitlake.quality.report import QualityReportStore
 from pitlake.utils import isoformat
 
 
@@ -66,6 +67,19 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     )
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
     return 0
+
+
+def cmd_quality_report(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    LakeLayout(settings).create()
+    metadata = MetadataStore(settings)
+    metadata.init_schema()
+    report = QualityReportStore(settings).generate_daily_report(
+        report_date=args.date,
+        metadata_store=metadata,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report["status"] in {"pass", "fail"} else 1
 
 
 def cmd_smoke_run(args: argparse.Namespace) -> int:
@@ -225,6 +239,12 @@ def build_parser() -> argparse.ArgumentParser:
     manifest_parser.add_argument("--date", required=True, help="Manifest date, e.g. 2026-04-26")
     manifest_parser.add_argument("--status", default="complete")
     manifest_parser.set_defaults(func=cmd_manifest)
+
+    quality_report_parser = subparsers.add_parser(
+        "quality-report", help="Generate a daily local quality report"
+    )
+    quality_report_parser.add_argument("--date", required=True, help="Report date, e.g. 2026-04-26")
+    quality_report_parser.set_defaults(func=cmd_quality_report)
 
     smoke_parser = subparsers.add_parser("smoke-run", help="Run a local no-network smoke test")
     smoke_parser.set_defaults(func=cmd_smoke_run)

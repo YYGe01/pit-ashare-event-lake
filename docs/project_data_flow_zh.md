@@ -5,9 +5,9 @@
 当前同步版本：
 
 - 项目阶段：`v0_p0_daily`
-- 当前已跑通真实链路：A 股日线 `market_daily_ohlcv`、交易日历 `trading_calendar`、交易状态 `trade_status`、涨跌停价格 `price_limit`
-- 当前启用 source：`akshare_market_daily_ohlcv`、`ashare_trading_calendar`、`ashare_trade_status`、`ashare_price_limit`
-- 当前真实函数：`akshare.stock_zh_a_daily`、`akshare.tool_trade_date_hist_sina`、`akshare.stock_tfp_em`
+- 当前已跑通真实链路：P0 bootstrap 全部 logical_dataset
+- 当前启用 source：9 个 AkShare bootstrap source，覆盖日线、复权、交易日历、交易状态、涨跌停、公告、政策、商品和全球市场
+- 当前真实函数：`stock_zh_a_daily`、`tool_trade_date_hist_sina`、`stock_tfp_em`、`stock_notice_report`、`news_cctv`、`futures_zh_daily_sina`、`stock_us_daily`
 - 当前贯穿样例：`600000` 在 `2026-04-24` 的日线
 - 文档最后同步日期：`2026-04-26`
 
@@ -383,12 +383,16 @@ class = AkshareMarketDailyConnector
 | source_id | logical_dataset | enabled | implementation_status | 当前作用 |
 | --- | --- | --- | --- | --- |
 | `akshare_market_daily_ohlcv` | `market_daily_ohlcv` | `true` | `active_v0` | 已跑通真实 A 股日线 |
+| `akshare_adjustment_factor` | `adjustment_factor` | `true` | `active_v0` | 已跑通 V0 A 股复权因子推算 |
+| `akshare_announcement_index` | `announcement_index` | `true` | `active_v0` | 已跑通 A 股公告索引 bootstrap |
+| `akshare_cctv_policy_news` | `policy_regulatory_doc` | `true` | `active_v0` | 已跑通政策/宏观新闻 bootstrap |
 | `ashare_trading_calendar` | `trading_calendar` | `true` | `active_v0` | 已跑通真实 A 股交易日历 |
 | `ashare_trade_status` | `trade_status` | `true` | `active_v0` | 已跑通真实 A 股停复牌/交易状态 |
 | `ashare_price_limit` | `price_limit` | `true` | `active_v0` | 已跑通 V0 A 股涨跌停价格推算 |
-| `akshare_adjustment_factor` | `adjustment_factor` | `false` | `planned` | 计划接复权因子 |
+| `akshare_commodity_daily` | `commodity_daily` | `true` | `active_v0` | 已跑通商品期货日频 bootstrap |
+| `akshare_global_market_daily` | `global_market_daily` | `true` | `active_v0` | 已跑通全球市场日频 bootstrap |
 | `baostock_market_daily_shadow` | `market_daily_ohlcv` | `false` | `planned_shadow` | 计划做日线交叉验证 |
-| 公告、政策、商品、全球市场 source | 多个 P0 dataset | `false` | `planned` | 后续逐步接入 |
+| 官方公告、政策、商品、全球市场 source | 多个 P0 dataset | `false` | `planned` | 后续作为 authoritative/shadow source 接入 |
 
 当前校验逻辑在 `SourceRegistry.validate()`：
 
@@ -1908,11 +1912,11 @@ quality_status = pass
 
 ```json
 {
-  "run_count": 17,
-  "raw_object_count": 32,
-  "new_item_count": 18,
+  "run_count": 21,
+  "raw_object_count": 40,
+  "new_item_count": 21,
   "error_count": 4,
-  "quality_check_count": 171
+  "quality_check_count": 229
 }
 ```
 
@@ -1924,7 +1928,13 @@ quality_status = pass
     "logical_dataset": "market_daily_ohlcv",
     "providers": ["akshare"],
     "sources": ["akshare_market_daily_ohlcv"],
-    "raw_object_count": 26
+    "raw_object_count": 29
+  },
+  {
+    "logical_dataset": "price_limit",
+    "providers": ["akshare"],
+    "sources": ["ashare_price_limit"],
+    "raw_object_count": 3
   },
   {
     "logical_dataset": "system_smoke_test",
@@ -1936,13 +1946,13 @@ quality_status = pass
     "logical_dataset": "trade_status",
     "providers": ["akshare"],
     "sources": ["ashare_trade_status"],
-    "raw_object_count": 2
+    "raw_object_count": 3
   },
   {
     "logical_dataset": "trading_calendar",
     "providers": ["akshare"],
     "sources": ["ashare_trading_calendar"],
-    "raw_object_count": 3
+    "raw_object_count": 4
   }
 ]
 ```

@@ -334,16 +334,75 @@ ashare_trade_status
 ashare_price_limit
 ```
 
-待本地验证命令：
+本地验证结果：
 
-```powershell
-pitlake run-enabled --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
+```text
+command: pitlake run-enabled --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
+status: success
+source_count: 4
+akshare_market_daily_ohlcv: request_count=3, success_count=3, error_count=0, duplicate_count=3
+ashare_trading_calendar: request_count=1, success_count=1, error_count=0, duplicate_count=1
+ashare_trade_status: request_count=1, success_count=1, error_count=0, duplicate_count=27
+ashare_price_limit: request_count=3, success_count=3, error_count=0, new_item_count=3
+manifest: collection/published_manifests/dt=2026-04-26/collection_manifest_11b3639d1628ad57.json
 ```
 
 后续默认顺序更新为：
 
 ```text
-1. 让 market_daily_ohlcv、trading_calendar、trade_status、price_limit 通过 run-enabled 一起稳定运行；
-2. 生成每日质量报告；
+1. 生成每日质量报告；
+2. 连续运行观察四个 enabled P0 source 的稳定性；
 3. 简单市场约束数据稳定后，再接公告采集。
+```
+
+## 12. 2026-04-26 P0 bootstrap 闭环
+
+已补齐 V0/P0 bootstrap source：
+
+```text
+akshare_market_daily_ohlcv -> market_daily_ohlcv
+akshare_adjustment_factor -> adjustment_factor
+akshare_announcement_index -> announcement_index
+akshare_cctv_policy_news -> policy_regulatory_doc
+ashare_trading_calendar -> trading_calendar
+ashare_trade_status -> trade_status
+ashare_price_limit -> price_limit
+akshare_commodity_daily -> commodity_daily
+akshare_global_market_daily -> global_market_daily
+```
+
+同时新增每日质量报告命令：
+
+```powershell
+pitlake quality-report --date 2026-04-26
+```
+
+最终本地验证结果：
+
+```text
+validate-config: ok
+pytest: 12 passed
+ruff check .: passed
+run-enabled: success
+source_count: 9
+manifest: collection/published_manifests/dt=2026-04-26/collection_manifest_4954ce04b2ecf768.json
+quality_report: collection/quality_reports/dt=2026-04-26/quality_report_20260426T160001+0800.json
+```
+
+说明：
+
+```text
+当前 P0 已达到“每个 P0 logical_dataset 至少一个 enabled bootstrap source”的状态；
+部分 source 是 V0 推算或非官方 bootstrap 口径，例如 adjustment_factor、price_limit、announcement_index、policy_regulatory_doc；
+交易所、监管机构、Stooq/Yahoo 等官方或 shadow source 仍保留为后续稳定性和对账增强。
+2026-04-26 的质量报告状态为 fail，是因为当天早期调试失败 run 也被如实纳入报告；最新一次 9 source run-enabled 全部成功。
+```
+
+后续默认顺序更新为：
+
+```text
+1. 连续运行 7 天观察 P0 bootstrap source 稳定性；
+2. 增加 shadow/official source 对账，优先复权因子、涨跌停、公告和政策监管；
+3. 接外部告警和备份；
+4. P0 稳定后再进入 P1/P2 或研究层。
 ```

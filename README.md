@@ -34,24 +34,31 @@ pip install -e .
 pitlake validate-config
 pitlake init
 pitlake smoke-run
+pitlake quality-report --date 2026-04-26
 ```
 
 `smoke-run` 不访问外网，只验证本地 raw 写入、SQLite 元数据账本、质量检查和每日 manifest 生成。
 
 ## V0 真实采集
 
-当前已启用四个 AkShare P0 source：
+当前已启用九个 P0 bootstrap source：
 
 - `akshare_market_daily_ohlcv`：A 股日线 OHLCV，使用 `akshare.stock_zh_a_daily`。
+- `akshare_adjustment_factor`：A 股复权因子，使用不复权 close 与前复权 close 比值做 V0 推算。
+- `akshare_announcement_index`：A 股公告索引，使用 `akshare.stock_notice_report`。
+- `akshare_cctv_policy_news`：政策/宏观新闻，使用 `akshare.news_cctv`。
 - `ashare_trading_calendar`：A 股交易日历，使用 `akshare.tool_trade_date_hist_sina`。
 - `ashare_trade_status`：A 股停复牌/交易状态，使用 `akshare.stock_tfp_em`。
 - `ashare_price_limit`：A 股涨跌停价格，使用 `akshare.stock_zh_a_daily` 的前收盘价和板块规则做 V0 推算。
+- `akshare_commodity_daily`：商品期货日频，使用 `akshare.futures_zh_daily_sina`。
+- `akshare_global_market_daily`：全球市场日频样例，使用 `akshare.stock_us_daily`。
 
 第一次本地测试建议限制 symbol 数量：
 
 ```powershell
 pitlake run-source --source-id akshare_market_daily_ohlcv --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
 pitlake run-enabled --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
+pitlake quality-report --date 2026-04-26
 ```
 
 日线和涨跌停连接器默认采样 `000001`、`600000`、`300750`。交易日历连接器默认采集 `20260424` 的 `cn_ashare` 交易日记录。交易状态连接器默认查询 `20260424` 的停复牌记录。同一天重复运行时，框架会保留 raw 采集事实，并在 `raw_item_version` 层识别已存在的 item version。
