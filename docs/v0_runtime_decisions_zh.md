@@ -251,3 +251,99 @@ manifest generated: yes
 4. 生成每日质量报告；
 5. 简单市场约束数据稳定后，再接公告采集。
 ```
+
+## 10. 2026-04-26 交易状态连接器
+
+已落地第三个真实 P0 source：
+
+```text
+source_id: ashare_trade_status
+logical_dataset: trade_status
+provider_id: akshare
+connector: pitlake.connectors.market.akshare_trade_status.AkshareTradeStatusConnector
+akshare function: stock_tfp_em
+default date window: 20260424 - 20260424
+```
+
+说明：
+
+```text
+AkShare 的 stock_tfp_em 返回指定日期的停复牌信息；
+V0 先把返回行标准化为 trade_status item，并将 trade_status 写为 halted；
+全市场正常交易状态、盘中临停细分状态和交易所官方对账后续再补。
+```
+
+当前 enabled P0 source 已变为：
+
+```text
+akshare_market_daily_ohlcv
+ashare_trading_calendar
+ashare_trade_status
+```
+
+本地验证结果：
+
+```text
+command: pitlake run-enabled --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
+status: success
+source_count: 3
+akshare_market_daily_ohlcv: request_count=3, success_count=3, error_count=0, duplicate_count=3
+ashare_trading_calendar: request_count=1, success_count=1, error_count=0, duplicate_count=1
+ashare_trade_status: request_count=1, success_count=1, error_count=0, new_item_count=13, duplicate_count=14
+manifest: collection/published_manifests/dt=2026-04-26/collection_manifest_6b0a89e558f4defb.json
+```
+
+后续默认顺序更新为：
+
+```text
+1. 实现 price_limit；
+2. 让 market_daily_ohlcv、trading_calendar、trade_status、price_limit 通过 run-enabled 一起稳定运行；
+3. 生成每日质量报告；
+4. 简单市场约束数据稳定后，再接公告采集。
+```
+
+## 11. 2026-04-26 涨跌停价格连接器
+
+已落地第四个真实 P0 source：
+
+```text
+source_id: ashare_price_limit
+logical_dataset: price_limit
+provider_id: akshare
+connector: pitlake.connectors.market.akshare_price_limit.AksharePriceLimitConnector
+akshare function: stock_zh_a_daily
+default sample symbols: 000001, 600000, 300750
+default date window: 20260424 - 20260424
+```
+
+说明：
+
+```text
+V0 先使用 AkShare 日线的目标日前一条 close 作为 prev_close；
+再按板块规则推算 limit_up / limit_down：
+主板普通股票 10%，创业板/科创板普通股票 20%，北交所普通股票 30%；
+ST、退市整理、上市初期无涨跌幅限制等特殊规则暂未覆盖，后续需接官方或更完整 source 对账。
+```
+
+当前 enabled P0 source 已变为：
+
+```text
+akshare_market_daily_ohlcv
+ashare_trading_calendar
+ashare_trade_status
+ashare_price_limit
+```
+
+待本地验证命令：
+
+```powershell
+pitlake run-enabled --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
+```
+
+后续默认顺序更新为：
+
+```text
+1. 让 market_daily_ohlcv、trading_calendar、trade_status、price_limit 通过 run-enabled 一起稳定运行；
+2. 生成每日质量报告；
+3. 简单市场约束数据稳定后，再接公告采集。
+```

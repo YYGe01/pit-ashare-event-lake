@@ -5,9 +5,9 @@
 当前同步版本：
 
 - 项目阶段：`v0_p0_daily`
-- 当前已跑通真实链路：A 股日线 `market_daily_ohlcv`、交易日历 `trading_calendar`
-- 当前启用 source：`akshare_market_daily_ohlcv`、`ashare_trading_calendar`
-- 当前真实函数：`akshare.stock_zh_a_daily`、`akshare.tool_trade_date_hist_sina`
+- 当前已跑通真实链路：A 股日线 `market_daily_ohlcv`、交易日历 `trading_calendar`、交易状态 `trade_status`、涨跌停价格 `price_limit`
+- 当前启用 source：`akshare_market_daily_ohlcv`、`ashare_trading_calendar`、`ashare_trade_status`、`ashare_price_limit`
+- 当前真实函数：`akshare.stock_zh_a_daily`、`akshare.tool_trade_date_hist_sina`、`akshare.stock_tfp_em`
 - 当前贯穿样例：`600000` 在 `2026-04-24` 的日线
 - 文档最后同步日期：`2026-04-26`
 
@@ -56,6 +56,8 @@
 | `src/pitlake/connectors/base.py` | 源码 | 所有 connector 的基类 |
 | `src/pitlake/connectors/market/akshare_daily.py` | 源码 | 当前真实 A 股日线 connector |
 | `src/pitlake/connectors/market/akshare_calendar.py` | 源码 | 当前真实 A 股交易日历 connector |
+| `src/pitlake/connectors/market/akshare_trade_status.py` | 源码 | 当前真实 A 股停复牌/交易状态 connector |
+| `src/pitlake/connectors/market/akshare_price_limit.py` | 源码 | 当前 V0 A 股涨跌停价格推算 connector |
 | `src/pitlake/storage/raw_store.py` | 源码 | 保存 raw 文件和 `.meta.json` |
 | `src/pitlake/storage/metadata_store.py` | 源码 | SQLite 表结构和写入逻辑 |
 | `src/pitlake/storage/manifest_store.py` | 源码 | 生成每日 manifest |
@@ -382,10 +384,10 @@ class = AkshareMarketDailyConnector
 | --- | --- | --- | --- | --- |
 | `akshare_market_daily_ohlcv` | `market_daily_ohlcv` | `true` | `active_v0` | 已跑通真实 A 股日线 |
 | `ashare_trading_calendar` | `trading_calendar` | `true` | `active_v0` | 已跑通真实 A 股交易日历 |
+| `ashare_trade_status` | `trade_status` | `true` | `active_v0` | 已跑通真实 A 股停复牌/交易状态 |
+| `ashare_price_limit` | `price_limit` | `true` | `active_v0` | 已跑通 V0 A 股涨跌停价格推算 |
 | `akshare_adjustment_factor` | `adjustment_factor` | `false` | `planned` | 计划接复权因子 |
 | `baostock_market_daily_shadow` | `market_daily_ohlcv` | `false` | `planned_shadow` | 计划做日线交叉验证 |
-| `ashare_trade_status` | `trade_status` | `false` | `planned` | 计划接停复牌/交易状态 |
-| `ashare_price_limit` | `price_limit` | `false` | `planned` | 计划接涨跌停 |
 | 公告、政策、商品、全球市场 source | 多个 P0 dataset | `false` | `planned` | 后续逐步接入 |
 
 当前校验逻辑在 `SourceRegistry.validate()`：
@@ -1906,11 +1908,11 @@ quality_status = pass
 
 ```json
 {
-  "run_count": 9,
-  "raw_object_count": 18,
-  "new_item_count": 4,
-  "error_count": 3,
-  "quality_check_count": 75
+  "run_count": 17,
+  "raw_object_count": 32,
+  "new_item_count": 18,
+  "error_count": 4,
+  "quality_check_count": 171
 }
 ```
 
@@ -1922,13 +1924,25 @@ quality_status = pass
     "logical_dataset": "market_daily_ohlcv",
     "providers": ["akshare"],
     "sources": ["akshare_market_daily_ohlcv"],
-    "raw_object_count": 17
+    "raw_object_count": 26
   },
   {
     "logical_dataset": "system_smoke_test",
     "providers": ["internal"],
     "sources": ["pitlake_smoke_test"],
     "raw_object_count": 1
+  },
+  {
+    "logical_dataset": "trade_status",
+    "providers": ["akshare"],
+    "sources": ["ashare_trade_status"],
+    "raw_object_count": 2
+  },
+  {
+    "logical_dataset": "trading_calendar",
+    "providers": ["akshare"],
+    "sources": ["ashare_trading_calendar"],
+    "raw_object_count": 3
   }
 ]
 ```

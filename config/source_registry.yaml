@@ -208,13 +208,16 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
-    implementation_status: planned
+    enabled: true
+    implementation_status: active_v0
     adapter_class: pitlake.connectors.market.akshare_trade_status.AkshareTradeStatusConnector
     allowed_frequency: "daily pre-market and post-market"
     storage_permission: raw_allowed
     redistribution_policy: internal_only
-    notes: "停复牌/交易状态 dataset."
+    default_options:
+      start_date: "20260424"
+      end_date: "20260424"
+    notes: "Bootstrap A-share halt/resume status source using akshare.stock_tfp_em. The function returns halt/resume rows for the queried date; V0 normalizes returned rows as trade_status=halted observations."
 
   - source_id: ashare_price_limit
     provider_id: akshare
@@ -225,13 +228,23 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
-    implementation_status: planned
+    enabled: true
+    implementation_status: active_v0
     adapter_class: pitlake.connectors.market.akshare_price_limit.AksharePriceLimitConnector
     allowed_frequency: "daily pre-market and post-market"
     storage_permission: raw_allowed
     redistribution_policy: internal_only
-    notes: "涨跌停价格 dataset."
+    default_options:
+      start_date: "20260424"
+      end_date: "20260424"
+      adjust: ""
+      symbols:
+        - "000001"
+        - "600000"
+        - "300750"
+      limit_symbols: 3
+      lookback_days: 14
+    notes: "Bootstrap A-share price-limit source using akshare.stock_zh_a_daily prior close plus board rules. V0 inferred limits should be cross-checked with official/exchange sources later."
 
   - source_id: shfe_daily_commodity
     provider_id: shfe

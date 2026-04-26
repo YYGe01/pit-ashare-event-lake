@@ -40,10 +40,12 @@ pitlake smoke-run
 
 ## V0 真实采集
 
-当前已启用两个 AkShare P0 source：
+当前已启用四个 AkShare P0 source：
 
 - `akshare_market_daily_ohlcv`：A 股日线 OHLCV，使用 `akshare.stock_zh_a_daily`。
 - `ashare_trading_calendar`：A 股交易日历，使用 `akshare.tool_trade_date_hist_sina`。
+- `ashare_trade_status`：A 股停复牌/交易状态，使用 `akshare.stock_tfp_em`。
+- `ashare_price_limit`：A 股涨跌停价格，使用 `akshare.stock_zh_a_daily` 的前收盘价和板块规则做 V0 推算。
 
 第一次本地测试建议限制 symbol 数量：
 
@@ -52,7 +54,7 @@ pitlake run-source --source-id akshare_market_daily_ohlcv --start-date 20260424 
 pitlake run-enabled --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
 ```
 
-日线连接器默认采样 `000001`、`600000`、`300750`。交易日历连接器默认采集 `20260424` 的 `cn_ashare` 交易日记录。同一天重复运行时，框架会保留 raw 采集事实，并在 `raw_item_version` 层识别已存在的 item version。
+日线和涨跌停连接器默认采样 `000001`、`600000`、`300750`。交易日历连接器默认采集 `20260424` 的 `cn_ashare` 交易日记录。交易状态连接器默认查询 `20260424` 的停复牌记录。同一天重复运行时，框架会保留 raw 采集事实，并在 `raw_item_version` 层识别已存在的 item version。
 
 ## 范围
 
