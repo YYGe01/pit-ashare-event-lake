@@ -1,0 +1,19 @@
+---
+description: PIT A 股数据湖项目级 agent 工作流规则。
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# PIT A 股数据湖 Agent 规则
+
+- 使用 `AGENTS.md` 作为 Codex 和 Cursor 共用的项目级指令文件。
+- 默认用中文和用户沟通，项目文档也尽量用中文；代码标识符、配置 key、dataset 名和 schema 字段保持英文。
+- 继续之前的工作时，先读取 `README.md`、`docs/v0_runtime_decisions_zh.md` 和 `config/source_registry.yaml`。
+- V0 只聚焦 A 股日频 PIT 数据采集，不要加入研究层的事件抽取、建模、回测或交易逻辑。
+- 保持 raw append-only 语义，永远不要改写 `first_seen_at`。
+- 运行数据放在 `data_lake/`，不要提交到 git。
+- 不要把真实凭据、cookie 或 API key 写进仓库。
+- 完成代码改动前，在环境可用时运行 `pitlake validate-config`、`pytest` 和 `ruff check .`。
+
+@AGENTS.md
+

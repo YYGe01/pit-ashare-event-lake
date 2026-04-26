@@ -10,8 +10,15 @@
 
 - `docs/pre_collection_requirements_zh.md`：正式建立采集框架前需要由使用者提供或确认的输入清单，包括账号/API Key、授权、数据源下载包、部署环境、存储、备份、预算和告警。
 - `docs/v0_runtime_decisions_zh.md`：V0 已确认的运行决策，包括只做 A 股日频 P0、免费源优先、本地电脑先验证、服务器迁移建议、C 盘数据湖路径、备份和告警策略。
+- `docs/project_data_flow_zh.md`：小白版当前项目数据流说明，用真实 A 股日线样例解释每个阶段的输入、处理和输出。
 - `docs/realtime_pit_data_collection_plan_zh.md`：PIT 数据采集实施手册，说明如何保存原始数据、时间账本、核心表、目录和首月落地任务。
 - `docs/pit_data_collection_architecture_zh.md`：长期采集架构总纲，说明数据源/供应商抽象、质量门禁、治理、运维和供应商切换机制。
+
+## Agent 开发入口
+
+- `AGENTS.md`：Codex、Cursor 和其他 coding agent 的通用项目指令。
+- `.cursor/rules/`：Cursor Project Rules，按 Cursor 官方推荐的 `.mdc` 格式保存。
+- `docs/agent_journal/`：每次 agent 工作的简短日志，用于跨天续接。
 
 ## 环境
 

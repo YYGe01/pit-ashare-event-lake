@@ -1,0 +1,15 @@
+---
+description: PIT 数据采集和连接器实现规则。
+globs: ["src/pitlake/connectors/**/*.py", "src/pitlake/storage/**/*.py", "src/pitlake/quality/**/*.py", "config/**/*.yaml"]
+alwaysApply: false
+---
+
+# PIT 数据采集规则
+
+- 一个连接器只有在完成 run 记录、raw payload 保存、metadata 写入、quality check 和 manifest 输出后，才算完成。
+- 启用新的 `logical_dataset` 前，先新增或更新 `config/dataset_contracts/` 中的数据契约。
+- provider/source 细节放在 `config/source_registry.yaml` 和 `config/provider_registry.yaml`。
+- V0 优先免费/公开源；付费 provider 在凭据和授权确认前保持 disabled。
+- 补采和历史导入必须保留真实系统观察时间。
+- source 失败必须记录为 quality result 或 run error，不要静默吞掉。
+

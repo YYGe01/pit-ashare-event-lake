@@ -1,0 +1,19 @@
+---
+description: pitlake 源码和测试的 Python 质量规则。
+globs: ["src/**/*.py", "tests/**/*.py"]
+alwaysApply: false
+---
+
+# Python 质量规则
+
+- 即使本地安装了更新版本 Python，也按 Python 3.11 语义开发。
+- 模块保持小而明确。除非下一个已验证连接器确实需要，否则不要引入大型框架。
+- 优先使用标准库、`environment.yml` 中已有依赖和当前 `pitlake` helper。
+- 新增存储、metadata、manifest、config validation、connector normalization 逻辑时，要补充聚焦测试。
+- 修改后运行：
+
+```powershell
+pytest
+ruff check .
+```
+
