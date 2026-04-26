@@ -44,7 +44,43 @@ AkShare/Sina 返回的指标列先完整保存到 metric_payload，不在 V0 阶
 真正 PIT 研究使用前，还需要结合公告/财报披露时间、修订版本和官方文件对账。
 ```
 
-P0 稳定运行后，再升级 P1 和 P2。
+第二批 P1 bootstrap source：
+
+```text
+source_id: akshare_macro_china_financial_credit
+logical_dataset: macro_indicator
+connector: pitlake.connectors.p1_bootstrap.AkshareMacroChinaFinancialCreditConnector
+akshare function: macro_china_new_financial_credit
+
+source_id: akshare_stock_capital_flow
+logical_dataset: capital_flow
+connector: pitlake.connectors.p1_bootstrap.AkshareCapitalFlowConnector
+akshare function: stock_individual_fund_flow
+default sample symbols: 600000
+
+source_id: akshare_industry_membership
+logical_dataset: industry_membership
+connector: pitlake.connectors.p1_bootstrap.AkshareIndustryMembershipConnector
+akshare function: stock_board_industry_cons_em
+default sample board: 银行
+
+source_id: akshare_concept_membership
+logical_dataset: concept_membership
+connector: pitlake.connectors.p1_bootstrap.AkshareConceptMembershipConnector
+akshare function: stock_board_concept_cons_em
+default sample board: 机器人概念
+```
+
+说明：
+
+```text
+第二批 P1 source 仍只做采集层 bootstrap；
+宏观、资金流、行业/概念成分均保留 provider 原始指标列到 metric_payload；
+行业/概念成分以 snapshot_date 表示采集快照日期，不在当前阶段推断历史真实生效区间；
+这些 P1 source 进入 enabled source 后，需要先用小样本观察稳定性，再扩大采样范围。
+```
+
+P0 稳定运行后，再扩大 P1 和 P2 覆盖范围。
 
 ## 2. 账号和付费源策略
 

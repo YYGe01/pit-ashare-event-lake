@@ -300,7 +300,7 @@ class AkshareIndustryMembershipConnector(_AkshareFrameConnector):
         return [{"symbol": name} for name in names]
 
     def _normalize_record(self, *, record: dict[str, Any], params: dict[str, Any], raw: Any) -> dict[str, Any]:
-        symbol_value = _first_present(record, ("代码", "stock_code", "symbol", "股票代码"))
+        symbol_value = _first_present(record, ("代码", "股票代码", "stock_code", "symbol"))
         instrument = _plain_symbol(symbol_value)
         snapshot_date = raw.stored_at[:10]
         industry_name = str(params["symbol"])

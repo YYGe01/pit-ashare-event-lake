@@ -104,9 +104,24 @@ P0 目前已经达到 bootstrap 闭环：9 个 P0 logical_dataset 都有至少�
 当前已开始 P1 采集层 bootstrap：
 
 - `akshare_financial_indicator`：A 股财务指标，使用 `akshare.stock_financial_analysis_indicator`，将 provider 返回的指标列原样保存到 `metric_payload`。
+- `akshare_macro_china_financial_credit`：中国新增金融信贷宏观指标，使用 `akshare.macro_china_new_financial_credit`，将 provider 返回指标保存到 `metric_payload`。
+- `akshare_stock_capital_flow`：个股资金流样例，使用 `akshare.stock_individual_fund_flow`，默认采样 `600000`。
+- `akshare_industry_membership`：行业板块成分股快照，使用 `akshare.stock_board_industry_cons_em`，默认采样 `银行`。
+- `akshare_concept_membership`：概念板块成分股快照，使用 `akshare.stock_board_concept_cons_em`，默认采样 `机器人概念`。
 
 单独运行示例：
 
 ```powershell
 pitlake run-source --source-id akshare_financial_indicator --start-date 20240101 --limit-symbols 1 --manifest-date 2026-04-26
+pitlake run-source --source-id akshare_macro_china_financial_credit --manifest-date 2026-04-26
+pitlake run-source --source-id akshare_stock_capital_flow --limit-symbols 1 --manifest-date 2026-04-26
+pitlake run-source --source-id akshare_industry_membership --manifest-date 2026-04-26
+pitlake run-source --source-id akshare_concept_membership --manifest-date 2026-04-26
+```
+
+Windows 深路径下运行测试时，如果 raw 文件路径触发 260 字符限制，可把测试根目录指向较短路径：
+
+```powershell
+$env:PITLAKE_TEST_ROOT="C:\Users\73498\.codex\memories\pitlake_tests"
+pytest
 ```

@@ -462,3 +462,84 @@ sources:
         - "600000"
       limit_symbols: 1
     notes: "P1 bootstrap A-share financial indicator source using akshare.stock_financial_analysis_indicator. It preserves provider metric columns in metric_payload; PIT disclosure timestamp and revised versions should be cross-checked with announcements or official filings later."
+
+  - source_id: akshare_macro_china_financial_credit
+    provider_id: akshare
+    logical_dataset: macro_indicator
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.AkshareMacroChinaFinancialCreditConnector
+    allowed_frequency: "monthly release plus daily fallback around release window, max 1 run/day"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options: {}
+    notes: "P1 bootstrap macro indicator source using akshare.macro_china_new_financial_credit. It preserves provider metrics in metric_payload for later PIT validation."
+
+  - source_id: akshare_stock_capital_flow
+    provider_id: akshare
+    logical_dataset: capital_flow
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.AkshareCapitalFlowConnector
+    allowed_frequency: "daily post-market, max 1 run/day"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options:
+      symbols:
+        - "600000"
+      limit_symbols: 1
+    notes: "P1 bootstrap stock-level capital flow source using akshare.stock_individual_fund_flow. Provider columns are preserved in metric_payload."
+
+  - source_id: akshare_industry_membership
+    provider_id: akshare
+    logical_dataset: industry_membership
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.AkshareIndustryMembershipConnector
+    allowed_frequency: "daily post-market, max 1 run/day"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options:
+      board_names:
+        - 银行
+      limit_boards: 1
+    notes: "P1 bootstrap industry board membership source using akshare.stock_board_industry_cons_em. Snapshot membership is stored append-only with snapshot_date."
+
+  - source_id: akshare_concept_membership
+    provider_id: akshare
+    logical_dataset: concept_membership
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P1
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p1_bootstrap.AkshareConceptMembershipConnector
+    allowed_frequency: "daily post-market, max 1 run/day"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options:
+      board_names:
+        - 机器人概念
+      limit_boards: 1
+    notes: "P1 bootstrap concept board membership source using akshare.stock_board_concept_cons_em. Snapshot membership is stored append-only with snapshot_date."

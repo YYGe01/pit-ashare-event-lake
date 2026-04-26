@@ -294,7 +294,7 @@ class AkshareFinancialIndicatorConnector(BaseConnector):
         }
 
     def _date_key(self, record: dict[str, Any]) -> Any:
-        for key in ("date", "report_date", "日期"):
+        for key in ("date", "report_date", "日期", "报告期"):
             if key in record:
                 return key
         return next(iter(record))

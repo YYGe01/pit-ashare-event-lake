@@ -11,6 +11,39 @@ policies:
     freshness_slo_minutes: 2880
     notes: "P1 financial indicator bootstrap; run daily during disclosure season and lower cadence otherwise."
 
+  - logical_dataset: macro_indicator
+    priority: P1
+    cadence: monthly_release_daily_fallback
+    windows:
+      - "10:30"
+      - "20:30"
+    freshness_slo_minutes: 4320
+    notes: "P1 macro bootstrap; preserve provider metric_payload and reconcile release timestamp later."
+
+  - logical_dataset: capital_flow
+    priority: P1
+    cadence: daily
+    windows:
+      - "20:30"
+    freshness_slo_minutes: 2880
+    notes: "P1 stock-level capital flow bootstrap; sample symbols only until source stability is observed."
+
+  - logical_dataset: industry_membership
+    priority: P1
+    cadence: daily
+    windows:
+      - "20:45"
+    freshness_slo_minutes: 4320
+    notes: "P1 industry board membership snapshot bootstrap."
+
+  - logical_dataset: concept_membership
+    priority: P1
+    cadence: daily
+    windows:
+      - "21:00"
+    freshness_slo_minutes: 4320
+    notes: "P1 concept board membership snapshot bootstrap."
+
   - logical_dataset: market_daily_ohlcv
     priority: P0
     cadence: daily

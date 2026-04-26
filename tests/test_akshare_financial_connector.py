@@ -1,3 +1,4 @@
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -50,7 +51,8 @@ def test_akshare_financial_connector_collects_indicator_rows(
         "akshare",
         SimpleNamespace(stock_financial_analysis_indicator=fake_financial),
     )
-    run_root = (Path("data_lake/test_runs") / f"financial_connector_{uuid.uuid4().hex}").resolve()
+    base = Path(os.environ.get("PITLAKE_TEST_ROOT", "data_lake/test_runs"))
+    run_root = base / f"financial_{uuid.uuid4().hex[:8]}"
     settings = make_settings(run_root)
     LakeLayout(settings).create()
     metadata = MetadataStore(settings)
