@@ -1552,3 +1552,47 @@ V0 验收标准：
 - Caldara & Iacoviello Geopolitical Risk Index：https://www.matteoiacoviello.com/gpr.htm
 - AI-GPR Index：https://www.matteoiacoviello.com/ai_gpr.html
 
+## 21. 2026-04-26 架构审阅与升级补充
+
+本次审阅结论：本文的核心方向正确，可以作为“采集层实施手册”继续保留；但如果项目目标是多年运行、频繁切换免费/付费数据源、并长期服务量化研究，仅靠本文当前版本还不够，需要补充更完整的采集架构总纲。
+
+已经新增总纲文档：
+
+```text
+docs/pit_data_collection_architecture_zh.md
+```
+
+两份文档的职责划分如下：
+
+```text
+realtime_pit_data_collection_plan_zh.md
+  侧重：PIT 采集原则、原始数据保存、时间账本、核心表、目录、采集频率、首月落地任务。
+
+pit_data_collection_architecture_zh.md
+  侧重：长期架构、控制面、数据源抽象、供应商替换、数据契约、质量门禁、湖仓分层、血缘、成本、合规和运维治理。
+```
+
+本次补充后，采集层设计应增加以下硬性要求：
+
+1. 必须区分 `logical_dataset`、`provider`、`source`、`connector`，研究层只依赖稳定的 `logical_dataset`，不能直接依赖某个免费库、网页或付费 API。
+2. 每个数据源必须进入 `source_registry`，每个供应商必须进入 `provider_registry`，授权、频率、额度、成本、留存和再分发限制都要显式记录。
+3. 每个逻辑数据集必须有 `dataset_contract`，定义主键、必填字段、时间字段、证券代码规范、去重规则、质量规则和兼容性策略。
+4. 采集写入必须采用 `staging -> audit -> publish` 流程；raw 数据可以保存，但未通过 critical 检查的数据不能进入默认可读的 published manifest。
+5. 免费源和付费源必须通过同一套 provider adapter 接口接入，支持 shadow run、双源对账、主备切换和回滚。
+6. 除 `first_seen_at` 外，应增加 `published_at` 和可选的 `market_available_at`，用于后续研究层严格控制回测可用时间。
+7. 质量体系不能只看爬虫是否成功，还要覆盖 raw 文件完整性、字段缺失、schema drift、异常波动、跨源对账和 PIT 防泄漏检查。
+8. 必须建立 `lineage_event` 或等价记录，使每个 manifest、后处理产物和研究结果都能追溯到输入数据、运行版本和配置哈希。
+9. 必须建立供应商切换流程：新源先以 `shadow` 角色运行，完成覆盖率、延迟、字段差异、成本和质量对账后才能升为 `primary`。
+10. 备份不只备份派生表，必须备份 raw、metadata、manifest、registry、contract 和日志，并定期做恢复演练。
+
+因此，后续实现时建议采用以下优先级：
+
+```text
+第一优先级：raw append-only + first_seen_at + manifest + source registry
+第二优先级：logical_dataset/provider/source/connector 抽象 + dataset contract
+第三优先级：quality gate + source health + replay snapshot
+第四优先级：多 provider shadow run + cross-source reconciliation
+第五优先级：对象存储、PostgreSQL、Dagster/Airflow、OpenLineage、Iceberg/Delta/lakeFS 等长期升级
+```
+
+不要过早把工程复杂度推到 Kafka、Spark 或大型湖仓平台。当前项目更合理的路径是先用本地文件系统、DuckDB/SQLite、Parquet、YAML registry 和 Python connector 把 PIT 账本跑稳；等 P0 数据源连续运行 30-90 天后，再升级调度、对象存储、质量框架和血缘系统。
