@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pit-ashare-event-lake"
+version = "0.1.0"
+description = "Point-in-time A-share data collection lake."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "beautifulsoup4",
+  "duckdb",
+  "loguru",
+  "lxml",
+  "pandas",
+  "pyarrow",
+  "pydantic",
+  "python-dotenv",
+  "pyyaml",
+  "requests",
+  "rich",
+  "tqdm",
+  "typer",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+market = ["akshare"]
+
+[project.scripts]
+pitlake = "pitlake.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+

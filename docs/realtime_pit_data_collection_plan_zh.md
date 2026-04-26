@@ -1595,6 +1595,14 @@ V0 验收标准：
 docs/pit_data_collection_architecture_zh.md
 ```
 
+正式实施前还需要先确认使用者侧输入清单：
+
+```text
+docs/pre_collection_requirements_zh.md
+```
+
+这份清单明确哪些事项必须先提供或确认，包括账号/API Key、授权边界、是否需要手工下载历史数据、部署环境、存储路径、备份、告警和预算。真实账号、密码、Token、Cookie 不应写入文档或聊天记录，只记录 `credential_ref`。
+
 两份文档的职责划分如下：
 
 ```text

@@ -1,0 +1,34 @@
+logical_dataset: policy_regulatory_doc
+contract_version: 1
+description: Policy and regulatory documents relevant to A-share research.
+primary_key_fields:
+  - provider_id
+  - source_item_key
+required_fields:
+  - provider_id
+  - source_id
+  - source_item_key
+  - title
+  - source_url
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - source_department
+  - doc_no
+  - category
+  - source_publish_time
+  - source_update_time
+  - attachment_urls
+  - quality_status
+quality_rules:
+  hard:
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+    - title_not_empty
+    - source_url_not_empty
+  soft:
+    - attachment_hash_present_if_downloaded
+    - source_publish_time_not_in_future_over_10m
+

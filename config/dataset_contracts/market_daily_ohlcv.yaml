@@ -1,0 +1,41 @@
+logical_dataset: market_daily_ohlcv
+contract_version: 1
+description: A-share daily OHLCV observations.
+primary_key_fields:
+  - provider_id
+  - instrument
+  - trading_date
+required_fields:
+  - provider_id
+  - source_id
+  - instrument
+  - exchange
+  - trading_date
+  - open
+  - high
+  - low
+  - close
+  - volume
+  - amount
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - name
+  - prev_close
+  - turnover
+  - vwap
+  - source_timestamp
+  - quality_status
+quality_rules:
+  hard:
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+    - instrument_format_valid
+    - trading_date_not_null
+  soft:
+    - row_count_near_recent_median
+    - price_fields_non_negative
+    - high_greater_equal_low
+

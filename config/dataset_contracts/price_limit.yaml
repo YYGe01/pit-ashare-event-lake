@@ -1,0 +1,31 @@
+logical_dataset: price_limit
+contract_version: 1
+description: A-share daily upper and lower price limits.
+primary_key_fields:
+  - provider_id
+  - instrument
+  - trading_date
+required_fields:
+  - provider_id
+  - source_id
+  - instrument
+  - exchange
+  - trading_date
+  - limit_up
+  - limit_down
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - prev_close
+  - limit_rule
+  - quality_status
+quality_rules:
+  hard:
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+    - limit_up_down_not_null
+  soft:
+    - limit_up_greater_than_limit_down
+

@@ -1,0 +1,39 @@
+project:
+  name: pit-ashare-event-lake
+  timezone: Asia/Shanghai
+  phase: v0_p0_daily
+  scope:
+    market: cn_ashare
+    frequency: daily
+    include_exchanges:
+      - SSE
+      - SZSE
+      - BSE
+    exclude:
+      - minute_bar
+      - level2
+      - tick
+      - order_book
+
+paths:
+  data_lake_root: data_lake
+  metadata_db: data_lake/collection/metadata/pitlake.sqlite
+  logs_dir: data_lake/collection/logs
+  local_backup_dir: data_lake/backups/local
+
+runtime:
+  metadata_backend: sqlite
+  raw_store: filesystem
+  default_trigger_type: manual
+  alert_backend: local_report
+  credentials_env_file: .env
+
+policy:
+  prefer_free_sources: true
+  paid_providers_enabled: false
+  allow_login_bypass: false
+  allow_captcha_bypass: false
+  raw_append_only: true
+  default_storage_permission: raw_allowed
+  unknown_copyright_policy: metadata_only
+

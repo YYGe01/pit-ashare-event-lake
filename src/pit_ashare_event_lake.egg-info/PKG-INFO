@@ -1,3 +1,28 @@
+Metadata-Version: 2.4
+Name: pit-ashare-event-lake
+Version: 0.1.0
+Summary: Point-in-time A-share data collection lake.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: beautifulsoup4
+Requires-Dist: duckdb
+Requires-Dist: loguru
+Requires-Dist: lxml
+Requires-Dist: pandas
+Requires-Dist: pyarrow
+Requires-Dist: pydantic
+Requires-Dist: python-dotenv
+Requires-Dist: pyyaml
+Requires-Dist: requests
+Requires-Dist: rich
+Requires-Dist: tqdm
+Requires-Dist: typer
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Provides-Extra: market
+Requires-Dist: akshare; extra == "market"
+
 # A 股 PIT 事件数据湖
 
 这是一个面向中国 A 股日频/周频量化研究的 point-in-time 数据采集项目。
