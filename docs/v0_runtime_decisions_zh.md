@@ -63,6 +63,14 @@ P0 的长期生产级完成条件仍是：
 
 `baostock_market_daily_shadow` 已实现为 `market_daily_ohlcv` 的免费 shadow/fallback connector，但默认仍保持 `enabled: false`。使用者可通过 `pitlake run-source --source-id baostock_market_daily_shadow ...` 手动观察稳定性和字段口径；在连续运行和对账结果稳定前，不纳入默认 `run-enabled` 主流程。
 
+`cninfo_announcement_list` 已实现为 `announcement_index` 的官方公开索引 connector，但默认仍保持 `enabled: false`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；使用者可通过 `pitlake run-source --source-id cninfo_announcement_list ...` 手动观察分页、限频、字段漂移和与 AkShare 公告索引的差异。
+
+`sse_announcement_list` 已实现为 `announcement_index` 的上交所官方公开索引 connector，但默认仍保持 `enabled: false`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；使用者可通过 `pitlake run-source --source-id sse_announcement_list ...` 手动观察分页、限频、字段漂移和与 AkShare/CNINFO 公告索引的差异。
+
+`szse_announcement_list` 已实现为 `announcement_index` 的深交所官方公开索引 connector，但默认仍保持 `enabled: false`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；使用者可通过 `pitlake run-source --source-id szse_announcement_list ...` 手动观察分页、限频、字段漂移和与 AkShare/CNINFO/SSE 公告索引的差异。
+
+`bse_announcement_list` 已实现为 `announcement_index` 的北交所官方公开索引 connector，但默认仍保持 `enabled: false`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；使用者可通过 `pitlake run-source --source-id bse_announcement_list ...` 手动观察分页、限频、字段漂移和与 AkShare/CNINFO/SSE/SZSE 公告索引的差异。
+
 ## P1 交付边界
 
 P1 bootstrap 已可交付，当前覆盖：
@@ -193,7 +201,7 @@ raw 数据只追加不覆盖；不得修改历史 raw 文件或伪造更早的 `
 生产级数据湖仍未完成，主要缺口是：
 
 ```text
-免费 shadow/official source connector：BaoStock 日线 shadow 已实现但默认不启用；CNINFO/SSE/SZSE/BSE、CSRC/gov.cn/PBC、SHFE/DCE/CZCE/GFEX、Stooq/Yahoo 仍未开发；
+免费 shadow/official source connector：BaoStock 日线 shadow、CNINFO/SSE/SZSE/BSE 公告索引已实现但默认不启用；CSRC/gov.cn/PBC、SHFE/DCE/CZCE/GFEX、Stooq/Yahoo 仍未开发；
 高风险 P0 数据集的真实跨源对账；
 默认采样范围从少量 symbol/board/item 扩大到稳定全市场或明确覆盖范围；
 财务、基金、公告、新闻、研报等数据的真实披露时间和修订版本验证；

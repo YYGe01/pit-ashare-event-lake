@@ -865,7 +865,527 @@ AkShare 在本项目中的可接受用法：
 - 没有授权时保存研报、新闻、电话会或社媒全文。
 - 忽略官方源或付费源对账，直接进入生产级研究结论。
 
-## 11. 最终判断
+## 11. 风险是否可以通过处理解决
+
+结论：不是完全不能用。大部分风险可以通过工程治理显著降低；少数风险如果历史当时版本从未被我们采集、也没有 vendor/官方 vintage 数据，则不能从 AkShare 单源历史 backfill 中完全恢复。
+
+应分三档处理：
+
+| 档位 | 含义 | 可接受用途 |
+| --- | --- | --- |
+| 可完全控制 | 从今天开始持续采集，或拿到带 `as_of` / vintage / disclosure timestamp 的官方或 vendor 数据 | 可进入严格 PIT 回测 |
+| 可近似控制 | 只有历史 backfill，但能补披露日期、上市退市、公司行为、官方公告等关键约束 | 可做 approximate PIT，实验必须标注 |
+| 不可从 AkShare 单源恢复 | 上游只给当前最新版历史表，历史旧版本、旧算法、旧网页列表不存在 | 只能做非严格 PIT 研究或探索性分析 |
+
+### 11.0 小白版：这些词到底是什么意思
+
+这一节里出现的海外名字和英文词，不是说本项目要改做美股，也不是说 A 股不能处理。它们只是成熟市场里已经验证过的一套数据治理方法。A 股也适用，因为问题本质一样：回测时不能让模型提前看到未来才知道的信息。
+
+几个核心词先翻译成人话：
+
+| 词 | 小白解释 | A 股例子 |
+| --- | --- | --- |
+| PIT / point-in-time | 只使用“当时已经能看到”的数据 | 2024-04-25 晚上才披露的年报，不能在 2024-04-25 开盘前使用 |
+| as-of | 截至某个时间点 | `as_of=2023-12-29 15:00` 表示只看这个时间之前已知的数据 |
+| vintage | 某个数据在某个观察时点的版本 | 2024-01-15 看到的社融历史序列，和 2026-04-26 下载的社融历史序列可能不是同一版 |
+| vendor | 数据供应商 | Wind、Choice、Tushare、交易所、CNINFO、AkShare 上游网站都可以理解为 provider/vendor |
+| LSEG / S&P / CRSP / FRED | 海外成熟数据产品或数据库 | 这里只是借鉴它们的做法：保存版本、披露时间、上市退市、公司行为 |
+| disclosure timestamp | 披露时间 | 公告实际发布时间、财报实际披露时间 |
+| security master | 证券主数据 | 股票什么时候上市、退市、改名、改代码、属于哪个交易所 |
+| corporate action | 公司行为 | 分红、送转、配股、除权除息、拆股、合并 |
+| survivorship bias | 幸存者偏差 | 只用今天还活着的股票回测 2015 年，会漏掉后来退市的差公司 |
+
+所以，不要被这些词吓到。落到本项目，其实就是五句话：
+
+```text
+1. 每条数据要知道“我们什么时候看到它”。
+2. 每条数据要尽量知道“市场什么时候能用它”。
+3. 股票池要知道每只股票当时是否存在、是否可交易。
+4. 复权、分红、送转不能用今天的结果倒灌历史。
+5. 找不到历史版本的数据，要诚实标记为历史补采，不能冒充严格 PIT。
+```
+
+### 11.0.1 这些方案适合 A 股吗
+
+适合，但要按 A 股特性落地。
+
+A 股和美股/宏观数据源不同，但风险类型完全类似：
+
+| 风险 | 美股/海外成熟做法 | A 股对应做法 |
+| --- | --- | --- |
+| 财报什么时候可用 | SEC filed/accepted time、PIT fundamentals | CNINFO/SSE/SZSE/BSE 公告发布时间、财报公告日期、Tushare/Wind/Choice 披露字段 |
+| 股票是否当时存在 | CRSP/QuantConnect security master | A 股上市日期、退市日期、暂停上市、摘牌、代码简称变更 |
+| 复权价格是否包含未来分红 | split/dividend events、factor files | A 股分红送转、配股、除权除息、复权因子按观察时间保存 |
+| 宏观数据是否修订 | FRED/ALFRED vintage | 中国宏观指标每次采集都保存一个版本；有官方发布时间则用官方发布时间 |
+| 行业/概念是否未来才形成 | PIT classification / daily constituents | 每日采集行业/概念成分 snapshot；历史没有版本就不用来做严格回测 |
+
+换句话说，海外资料只是证明“这些处理方法是成熟方案”。本项目真正执行时，仍然围绕 A 股公开源、交易所、CNINFO、AkShare、BaoStock、Tushare 或后续付费源来做。
+
+### 11.1 这些方案不是本项目自创
+
+行业里已有成熟做法，本项目只是把这些做法落到本地采集湖。
+
+| 现有做法 | 代表资料 | 对本项目的启发 |
+| --- | --- | --- |
+| 经济数据 vintage / real-time period | FRED/ALFRED API 支持 `realtime_start`、`realtime_end`、`vintage_dates`，ALFRED 定位就是保存历史特定日期的数据版本 | 宏观数据不能只存 observation date，要存 data vintage |
+| PIT fundamentals | LSEG Fundamentals Point in Time 提供带时间戳的财务数据，说明其用途是知道某天市场可见的数据；S&P/Compustat 也提供 point-in-time historical record | 财务数据要区分原始披露、重述、修订和可用时间 |
+| 原始值不覆盖、原始版和重述版并存 | LSEG 说明 PIT fundamentals 中 original data 不覆盖，并提供 original/restated values | 本项目 raw append-only 和 raw_item_version 是正确方向 |
+| 公司行为事件化 | QuantConnect/LEAN 对 split、dividend、symbol change、delisting 作为事件处理，并用 factor files / map files | 不要直接存一条“当前 qfq 历史价格”当事实，要存公司行为和因子版本 |
+| security master / 无幸存者偏差 universe | QuantConnect US Equity Security Master 覆盖 split、dividend、delisting、merger、ticker change；CRSP survivor-bias-free 数据保留 active 和 delisted 对象以消除幸存者偏差 | A 股需要 instrument lifecycle、上市退市、代码变更、交易状态 |
+| 披露时间字段 | Tushare 财务指标接口有 `ann_date` 和 `end_date`；Tushare 股票基础信息有 `list_status`、`list_date`、`delist_date`；SEC EDGAR 有 acceptance datetime 和 filed date 的概念 | 本项目要把 report date、announcement date、published_at、market_available_at 分开 |
+
+参考链接：
+
+- FRED series observations API：`https://fred.stlouisfed.org/docs/api/fred/series_observations.html`
+- FRED real-time periods：`https://fred.stlouisfed.org/docs/api/fred/realtime_period.html`
+- ALFRED：`https://alfred.stlouisfed.org/`
+- LSEG Point in Time Fundamentals：`https://www.lseg.com/en/data-analytics/financial-data/company-data/fundamentals-data/point-in-time-fundamentals`
+- S&P Global fundamental data：`https://www.spglobal.com/marketintelligence/en/solutions/fundamental-data`
+- QuantConnect corporate actions：`https://www.quantconnect.com/docs/v2/writing-algorithms/securities/asset-classes/us-equity/corporate-actions`
+- QuantConnect US Equity Security Master：`https://www.quantconnect.com/docs/v2/writing-algorithms/datasets/quantconnect/us-equity-security-master`
+- CRSP survivor-bias-free database：`https://www.crsp.org/research/crsp-survivor-bias-free-us-mutual-funds/`
+- Tushare 财务指标：`https://tushare.pro/document/2?doc_id=79`
+- Tushare 股票基础信息：`https://tushare.pro/document/2?doc_id=25`
+- SEC EDGAR API：`https://www.sec.gov/edgar/sec-api-documentation`
+- SEC EDGAR timestamp FAQ：`https://www.sec.gov/about/webmaster-frequently-asked-questions`
+
+### 11.2 本项目最小可实现方案
+
+本项目不需要一次性做成 Wind/CRSP/Compustat 级别的 vendor 数据库，但可以分阶段实现可用的 PIT 治理。
+
+第一阶段，所有 connector 都应统一补足或保留这些字段：
+
+```text
+first_seen_at            本系统第一次看到 raw 或 item 的时间，已经存在
+stored_at                本系统落盘时间，已经存在
+ingestion_mode           live_observation / historical_backfill / vendor_snapshot_import
+provider_observation_at  provider 记录自身对应的日期，例如 trading_date、report_date、announcement_date
+published_at             provider 或官方页面显示的发布时间，可为空
+market_available_at      研究层最早允许使用的时间，可由规则推导
+source_version           provider 版本或 AkShare 版本
+provider_function        AkShare 函数名，例如 stock_zh_a_hist
+provider_params          请求参数摘要
+vintage_at               这批数据代表哪个观察版本；没有 vendor vintage 时等于 first_seen_at
+```
+
+第二阶段，增加几个治理型 logical_dataset：
+
+```text
+instrument_lifecycle     上市、退市、暂停上市、代码变更、简称变更、市场板块
+corporate_action         分红、送转、配股、拆并股、除权除息、复权因子版本
+disclosure_event         公告、财报、业绩预告、业绩快报、更正公告、披露时间
+security_status_daily    ST、停牌、复牌、退市整理、涨跌幅规则适用状态
+dataset_vintage_manifest 每次全量历史 backfill 或 vendor snapshot 的版本清单
+```
+
+第三阶段，所有研究层查询只通过 as-of 视图访问：
+
+```sql
+select *
+from raw_item_version
+where first_seen_at <= :cutoff_time
+  and coalesce(json_extract(observed_payload, '$.market_available_at'), first_seen_at) <= :cutoff_time
+```
+
+如果同一个 `source_item_key` 有多个版本，则研究层取 `cutoff_time` 之前最后一次看到的版本，而不是取最新版本。
+
+### 11.3 历史 backfill 的分级使用
+
+历史 backfill 不应该一刀切禁止，而应给每批数据打使用等级。
+
+| 等级 | 条件 | 可以做什么 | 不能做什么 |
+| --- | --- | --- | --- |
+| `pit_ready` | 有可靠 `first_seen_at`，有 `market_available_at`，且关键字段有官方或 vendor 对账 | 严格 PIT 回测 | 仍不能跳过质量检查 |
+| `approximate_pit` | 有历史 backfill，能补公告日/上市退市/公司行为等关键约束，但缺少完整旧版本 | 近似 PIT 研究、稳健性测试 | 不能宣传为严格无未来函数 |
+| `research_backfill` | 只有当前历史表，缺少披露时间、版本和可用时间 | 探索性训练、数据覆盖验证 | 不能用于严肃回测结论 |
+| `metadata_only` | 只保存链接、标题、摘要或聚合指标 | 事件候选、监控、后续人工/模型处理 | 不能当作已经验证的事件标签 |
+
+### 11.4 各类风险的具体解决方案
+
+| 风险 | 能否解决 | 已有方案对应 | 本项目可实现方案 |
+| --- | --- | --- | --- |
+| 前复权/后复权未来函数 | 可以解决 | QuantConnect 用 raw/adjusted normalization、factor files、split/dividend events | `market_daily_ohlcv` 只存不复权主行情；新增 `corporate_action` 和版本化 `adjustment_factor`；研究层按 `as_of_time` 动态复权 |
+| 财务报告期提前使用 | 可以解决可用时间；历史旧版本需 vendor/官方支持 | LSEG/S&P PIT fundamentals；Tushare `ann_date`/`end_date`；SEC acceptance datetime | `financial_indicator` 增加 `report_date`、`published_at`、`market_available_at`；用公告源补披露时间；没有披露时间时降级为 `research_backfill` |
+| 财务重述和修订 | 部分解决；没有旧版本时不能完全恢复 | PIT fundamentals 保存 original/restated；vendor 不覆盖原始版 | 每次采集保存 raw 和 content_hash；同一报告期出现新 hash 就新增版本；重要标的用官方公告或付费源对账 |
+| 当前股票池导致幸存者偏差 | 可以解决 | CRSP survivor-bias-free；QuantConnect security master；Tushare `list_status`/`list_date`/`delist_date` | 新增 `instrument_lifecycle`；历史回测 universe 按 `list_date <= date < delist_date` 和交易状态过滤 |
+| 代码变更/简称变更 | 可以解决 | QuantConnect map files / symbol change events | `instrument_lifecycle` 里保留永久 `instrument_id` 和历史 symbol/name 映射；不要只用当前 6 位代码做长期身份 |
+| 当前概念/行业回填历史 | 只能通过历史快照或 vendor PIT 分类解决 | 行业/指数成分数据通常按生效日期或每日快照使用 | 从今天起每日采集成分 snapshot；历史 backfill 不反推有效区间；没有历史版本时标记 `research_backfill` |
+| ST、停复牌、涨跌停规则 | 可以大部分解决 | security master + corporate action/status events | 新增 `security_status_daily`；接 `trade_status`、ST 列表、上市天数、板块规则；`price_limit` 只用当日状态推算并与官方字段对账 |
+| 公告日期不等于可用时间 | 可以解决 | SEC acceptance datetime；交易所/官方公告详情页发布时间 | `announcement_index` 保存 `announcement_date`、`published_at`；按 A 股交易日历生成 `market_available_at`，盘后公告最早下一交易日可用 |
+| 公告/新闻/研报列表变化 | 部分解决；旧网页未保存则无法恢复 | EDGAR index、官方公告归档、raw 快照 | 从今天起多频抓取列表并保存 raw；历史补采只作为索引；重要公告保存详情页/附件 hash |
+| 宏观修订 | 可以解决，如果有 vintage 源；AkShare 单源不能完全解决 | ALFRED/FRED `realtime_start`、`realtime_end`、`vintage_dates` | 每次采集宏观全历史序列都保存为新 raw vintage；若接 ALFRED 类源，使用 provider vintage；没有 vintage 时标记 approximate |
+| 基金持仓披露滞后 | 可以解决可用时间；完整持仓需官方披露 | 财报/基金报告通常按披露日可用 | `fund_holding` 区分 `report_date` 和 `published_at`；只在披露后使用；不从重仓股推断完整持仓 |
+| 资金流/热度/评论算法变化 | 不能从单源历史完全恢复，只能降低误用 | vendor 算法型指标通常需要 daily snapshot 或 PIT feed | 从今天起保存每日 snapshot；历史 backfill 只作为当前算法重算结果；字段保留在 `metric_payload`，不命名成稳定事实 |
+| 不复权日线纠错 | 可以大部分解决 | 多源对账、版本化 raw、quality checks | AkShare + BaoStock/交易所/Tushare shadow 对账；同一日期同一股票出现新 hash 时保留版本并生成 reconciliation report |
+| 高频分钟/tick 完整性 | AkShare 不能解决生产级需求 | replay-grade vendor feed、交易所授权行情 | P2 保持样例；生产级高频单独设计存储、授权、回放和容量，不混入日频 V0 |
+
+### 11.4.1 A 股逐项落地方案和样例
+
+下面按最容易误用的数据类型解释：具体怎么处理，处理后能用到什么程度。
+
+#### A. 日线 OHLCV
+
+目标：
+
+```text
+保存每只股票每天的不复权开高低收、成交量、成交额。
+```
+
+解决方案：
+
+1. AkShare 历史补采可以用，但默认只采 `adjust=""` 的不复权行情。
+2. 每条记录写入 `trading_date` 和真实 `first_seen_at`。
+3. 历史补采统一标记 `ingestion_mode=historical_backfill`。
+4. 从今天开始每天真实采集的数据标记 `ingestion_mode=live_observation`。
+5. 后续用 BaoStock、交易所、Tushare 或其他源对同一股票同一天的 OHLCV 做对账。
+
+例子：
+
+```text
+2026-04-26 下载 600000 在 2018-01-02 的不复权日线。
+trading_date = 2018-01-02
+first_seen_at = 2026-04-26T实际采集时间
+ingestion_mode = historical_backfill
+```
+
+能不能用：
+
+- 做历史覆盖、模型预训练、非严格 PIT 研究：可以。
+- 做严格 PIT 回测：历史补采部分只能算 approximate；从 2026-04-26 以后持续采到的数据更接近严格 PIT。
+
+#### B. 前复权/后复权价格
+
+目标：
+
+```text
+不要把今天算出来的前复权历史价格，当成历史当天市场看到的价格。
+```
+
+解决方案：
+
+1. 主行情表只存不复权价格。
+2. 分红、送转、配股、除权除息单独存到 `corporate_action`。
+3. 复权因子单独存到 `adjustment_factor`，并记录这个因子版本是什么时候采到的。
+4. 回测时按照 `as_of_time` 动态生成当时允许使用的复权价格。
+
+例子：
+
+```text
+某股票 2021-06-01 分红。
+你在 2020-01-02 做回测时，不能使用包含 2021 分红影响的 qfq 价格。
+正确做法是：2020-01-02 的研究视图只使用 2020-01-02 之前已知的公司行为。
+```
+
+能不能用：
+
+- AkShare qfq/hfq 可以用于对照和探索。
+- 严格 PIT 不应直接用今天下载的整段 qfq/hfq 序列。
+
+#### C. 财务指标
+
+目标：
+
+```text
+财务指标不能按报告期使用，要按披露后使用。
+```
+
+解决方案：
+
+1. `report_date` 表示财报覆盖期，例如 2023-12-31。
+2. `published_at` 表示公告实际披露时间，例如 2024-04-25 20:30。
+3. `market_available_at` 表示研究系统最早可以使用的时间，例如 2024-04-26 09:30。
+4. 如果 AkShare 财务指标没有披露时间，就用公告源 CNINFO/SSE/SZSE/BSE 去补。
+5. 如果补不到披露时间，这批财务数据只能标记为 `research_backfill` 或 `approximate_pit`。
+
+例子：
+
+```text
+浦发银行 2023 年年报：
+report_date = 2023-12-31
+published_at = 2024-04-25 盘后
+market_available_at = 2024-04-26 开盘前
+```
+
+错误用法：
+
+```text
+在 2024-01-02 的模型里使用 2023 年年报净利润。
+```
+
+正确用法：
+
+```text
+2024-04-26 之后的模型才能使用这份年报指标。
+```
+
+能不能用：
+
+- 补到披露时间并做对账：可以做较严格 PIT。
+- 只有 AkShare 当前历史财务表：只能做非严格或近似 PIT。
+
+#### D. 股票池和退市股票
+
+目标：
+
+```text
+回测 2018 年时，只使用 2018 年当时已经上市且可交易的股票。
+```
+
+解决方案：
+
+1. 建立 `instrument_lifecycle`。
+2. 每只股票保留 `list_date`、`delist_date`、`list_status`、交易所、代码变更、简称变更。
+3. 每个回测日先生成当天 universe，再取行情和特征。
+
+例子：
+
+```text
+某股票 2020-05-10 上市。
+回测 2019-12-31 时不能把它放进股票池。
+
+某股票 2022-08-01 退市。
+回测 2023-01-01 时不能把它当成可交易股票，但历史样本里不能删除它。
+```
+
+能不能用：
+
+- 有上市退市和状态数据：可以解决幸存者偏差的大部分问题。
+- 只用当前股票列表：不适合做严肃历史回测。
+
+#### E. 行业和概念成分
+
+目标：
+
+```text
+不要把今天的“机器人概念”“AI 概念”成分倒回 2020 年。
+```
+
+解决方案：
+
+1. 从今天开始每日采集行业/概念成分 snapshot。
+2. 每条成分记录保存 `snapshot_date` 和 `first_seen_at`。
+3. 只有在某个回测日之前已经采集到的 snapshot，才能用于该回测日。
+4. 历史没有 snapshot 的日期，不强行用当前成分回填。
+
+例子：
+
+```text
+2026-04-26 采到“机器人概念”包含股票 A。
+这只能证明 2026-04-26 这一天 AkShare/东财这样展示。
+不能证明股票 A 在 2020 年就属于机器人概念。
+```
+
+能不能用：
+
+- 从今天开始积累的 snapshot：未来可做 PIT。
+- 今天下载的当前成分去回测多年历史：不能用于严格 PIT。
+
+#### F. ST、停牌、涨跌停
+
+目标：
+
+```text
+涨跌停和交易状态必须按当日状态判断，不能用当前状态回填历史。
+```
+
+解决方案：
+
+1. 建立 `security_status_daily`。
+2. 保存每天是否 ST、是否停牌、是否退市整理、适用哪个涨跌幅规则。
+3. `price_limit` 只用当日状态推算。
+4. 对特殊情况用交易所或行情源字段对账。
+
+例子：
+
+```text
+某股票 2022 年不是 ST，涨跌幅 10%。
+2024 年变成 ST，涨跌幅 5%。
+回测 2022 年时必须用 10% 规则，不能因为今天看到它是 ST 就用 5%。
+```
+
+能不能用：
+
+- 有当日状态数据：大部分可解决。
+- 没有当日状态，只靠当前简称判断：高风险。
+
+#### G. 公告和新闻
+
+目标：
+
+```text
+公告不是看到公告日期就能用，要看发布时间和交易时间。
+```
+
+解决方案：
+
+1. 公告索引保存 `announcement_date`。
+2. 官方详情页或接口补 `published_at`。
+3. 按交易日历推导 `market_available_at`。
+4. 盘后公告通常下一交易日才可用于日频调仓。
+
+例子：
+
+```text
+公告日期 = 2024-04-25
+发布时间 = 2024-04-25 20:10
+如果策略在 2024-04-25 收盘前决策，不能用。
+如果策略在 2024-04-26 开盘前决策，可以用。
+```
+
+能不能用：
+
+- 有官方发布时间：可以解决大部分可用时间问题。
+- 只有公告日期，没有时间：只能保守设为下一交易日或降级使用。
+
+#### H. 宏观数据
+
+目标：
+
+```text
+宏观指标要区分“指标所属月份”和“公布/修订版本”。
+```
+
+解决方案：
+
+1. `period` 表示指标属于哪个月，例如 2024-03。
+2. `published_at` 表示什么时候公布。
+3. 每次重新采集完整历史序列，都保存成一个新 `vintage_at`。
+4. 如果历史值后来修订，旧版本和新版本都保留。
+
+例子：
+
+```text
+2024-04-12 公布 2024-03 社融。
+2026-04-26 下载历史社融序列。
+
+period = 2024-03
+first_seen_at = 2026-04-26
+如果知道官方 release time，则 published_at = 2024-04-12
+如果不知道，则不能假装 2024-04-12 就拿到了完全相同版本。
+```
+
+能不能用：
+
+- 有官方发布时间和 vintage：可以严格处理。
+- 只有 AkShare 当前历史序列：可做研究 backfill，但不要声称严格 PIT。
+
+#### I. 基金持仓
+
+目标：
+
+```text
+基金持仓按披露后使用，不按报告期末使用。
+```
+
+解决方案：
+
+1. `report_date` 是基金报告期末。
+2. `published_at` 是基金季报/半年报/年报披露时间。
+3. `market_available_at` 是披露后可用于研究的时间。
+4. 不用重仓股推断完整持仓。
+
+例子：
+
+```text
+基金 2023Q4 持仓日期 = 2023-12-31。
+季报披露日期 = 2024-01-22。
+回测 2024-01-02 不能使用这份持仓。
+```
+
+能不能用：
+
+- 补到披露时间：可以近似或严格使用。
+- 只有报告期末持仓：不能用于严格 PIT。
+
+#### J. 资金流、热度、评论
+
+目标：
+
+```text
+这类指标通常是平台算法指标，只能当作 provider 当时展示的快照。
+```
+
+解决方案：
+
+1. 从今天开始定时采集 snapshot。
+2. 只解释为 `attention proxy` 或 provider 指标。
+3. 不把今天下载的历史热度/资金流当作当年平台原算法结果。
+
+例子：
+
+```text
+2026 年下载到 2022 年某股票“主力资金流”。
+如果平台 2024 年改过算法，这个值可能不是 2022 年当时网页显示的值。
+```
+
+能不能用：
+
+- 从今天开始保存的每日 snapshot：以后可用。
+- 历史回填的算法指标：只能探索，不适合严格 PIT。
+
+### 11.5 `market_available_at` 推导规则
+
+`market_available_at` 是研究层防未来函数的核心字段。建议规则如下：
+
+| 数据类型 | 推导规则 |
+| --- | --- |
+| 收盘后日线行情 | 当日收盘后、数据源稳定更新后可用；保守可设为下一交易日开盘前 |
+| 盘后公告 | 下一交易日开盘前可用 |
+| 盘中公告 | 公告发布时间之后可用；日频模型可保守设为下一交易日 |
+| 年报/季报财务指标 | 正式公告 `published_at` 之后可用；若盘后发布，则下一交易日 |
+| 宏观数据 | 官方 release time 之后可用；没有 release time 时使用 `first_seen_at` |
+| 基金持仓 | 基金报告披露后可用，不是报告期末可用 |
+| 行业/概念成分 | 本系统采集到该 snapshot 后可用，不反推历史 |
+| 当前算法型指标 | 本系统采集到 snapshot 后可用，不用历史 backfill 冒充旧算法版本 |
+
+保守策略：如果缺少精确 `published_at`，就不要把 `market_available_at` 推到历史更早时间；最多设为 `first_seen_at` 或标记为 unknown。
+
+### 11.6 最小实现顺序
+
+建议按以下顺序做，都是在当前项目架构内可实现的小步增量：
+
+1. 给 AkShare 历史 backfill connector 增加 `ingestion_mode=historical_backfill` 和 `vintage_at=first_seen_at`。
+2. 在 dataset contract 的 optional fields 中逐步加入 `published_at`、`market_available_at`、`ingestion_mode`、`vintage_at`。
+3. 新增 `instrument_lifecycle` contract，先用免费源或 Tushare/BaoStock 候选字段补 `list_date`、`delist_date`、`list_status`。
+4. 新增 `corporate_action` contract，先覆盖分红送转、除权除息、复权因子版本；现有 `adjustment_factor` 暂时标记为 inferred。
+5. 公告源接 CNINFO/SSE/SZSE/BSE 详情页，提取或保留官方发布时间和附件 hash。
+6. 新增 `asof` 查询工具，默认强制 `first_seen_at <= cutoff_time` 和 `market_available_at <= cutoff_time`。
+7. 对 `market_daily_ohlcv` 开发 BaoStock/Tushare/交易所 shadow source，生成跨源 reconciliation report。
+8. 对财务、基金、宏观类数据，建立 `pit_ready` / `approximate_pit` / `research_backfill` 标签。
+
+### 11.7 哪些情况仍然不能完全解决
+
+以下情况不能靠后处理完全修复：
+
+- 2026-04-26 才下载到的历史概念成分，无法证明 2018 年也这样分类。
+- 2026-04-26 下载的 qfq 历史价格，无法还原每个历史日期当时可见的 qfq 序列，除非有当时的因子 vintage。
+- 上游平台 2024 年改了资金流算法，AkShare 只返回当前算法重算后的 2022 年历史值，无法从单源恢复旧算法值。
+- 历史新闻/公告列表曾经显示但后来被删除、撤回或换链接，如果当时没有 raw 快照，就无法证明旧页面内容。
+- 财务指标如果只拿到当前最新版，且没有原公告、修订公告或 PIT vendor，则不能还原首次披露值。
+
+这类数据不是完全不能用，而是不能用于“严格 PIT”结论。正确做法是降级用途：
+
+```text
+严格 PIT 回测：不用。
+近似 PIT 稳健性实验：可谨慎使用，并标注限制。
+模型预训练或覆盖探索：可使用。
+采集框架验证：可使用。
+```
+
+### 11.8 最终工程原则
+
+解决方案可以概括为：
+
+```text
+能从今天开始观察的，就用 live observation 积累真 PIT；
+能找到官方披露时间的，就补 published_at 和 market_available_at；
+能找到历史生命周期的，就做 as-of universe；
+能找到公司行为的，就不要依赖当前复权价；
+能找到 vendor vintage 的，就接入 vintage；
+找不到历史版本的，就诚实标记为 backfill，不冒充 PIT。
+```
+
+## 12. 最终判断
 
 AkShare 值得继续作为本项目的核心 bootstrap 来源。它能显著降低早期建设成本，也能提供足够多的历史数据用于补齐样本和验证采集流程。
 

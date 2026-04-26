@@ -70,7 +70,7 @@ pitlake quality-report --date 2026-04-26
 | GDELT | 免费公开 API，无凭据 | 全球新闻/事件文章元数据摘要 | 已启用，metadata only，不做事件抽取 |
 | Open-Meteo | 免费公开 API，无凭据 | 地点级日频天气观测 | 已启用 |
 | BaoStock | 免费开源库，无凭据 | A 股日线 shadow/fallback | 已实现 connector，但默认不启用；可手动 `run-source` 做 AkShare 日线对账 |
-| CNINFO / SSE / SZSE / BSE | 免费公开网站/交易所 | 公告官方/补充源 | 已登记但未启用，当前没有可运行 connector |
+| CNINFO / SSE / SZSE / BSE | 免费公开网站/交易所 | 公告官方/补充源 | CNINFO、SSE、SZSE、BSE 公告索引 connector 已实现但默认不启用；PDF/detail 下载仍未开发 |
 | CSRC / gov.cn / PBC | 免费公开监管/政府网站 | 政策监管官方源 | 已登记但未启用，当前没有可运行 connector |
 | SHFE / DCE / CZCE / GFEX | 免费公开交易所网站 | 国内商品期货官方结算/日频源 | 已登记但未启用，当前没有可运行 connector |
 | Stooq / Yahoo Finance | 免费公开网站/API | 全球市场日频 shadow/supplemental 候选 | 已登记但未启用，当前没有可运行 connector |
@@ -93,7 +93,7 @@ pitlake quality-report --date 2026-04-26
 | 源类别 | 暂不启用原因 |
 | --- | --- |
 | BaoStock | 已实现 A 股日线 shadow connector，但默认不随 `run-enabled` 运行；原因是先保持 AkShare bootstrap 主流程稳定，再用 `run-source` 单独观察 BaoStock 的可用性、字段口径和重复采集表现。 |
-| CNINFO / SSE / SZSE / BSE | 这些是公告官方/补充源，很重要，但需要分别处理列表页、详情页、PDF/附件、分页、限频和字段变化；当前 AkShare 先覆盖公告索引 bootstrap。 |
+| CNINFO / SSE / SZSE / BSE | CNINFO、SSE、SZSE、BSE 公告索引 connector 已实现，可手动采列表元数据和 PDF URL；默认不随 `run-enabled` 运行，原因是还需要连续观察限频、分页、字段变化和重复采集表现。PDF 下载、附件下载和详情页解析仍未开发。 |
 | CSRC / gov.cn / PBC | 这些是政策监管权威源，应后续补。当前 AkShare CCTV 只是 bootstrap 代理源；官方网站需要单独解析栏目、HTML、附件和发布时间。 |
 | SHFE / DCE / CZCE / GFEX | 商品交易所官方结算源值得接，但各交易所下载路径、文件格式、字段口径和交易日发布时间不同；当前 AkShare 先覆盖商品日频样例。 |
 | Stooq / Yahoo Finance | 适合作全球市场 shadow/supplemental 候选，但还没写 connector；Yahoo Finance 的 raw 存储和使用条款需要谨慎确认。 |
@@ -105,7 +105,7 @@ AkShare 现在的定位是 bootstrap 主源：先把采集框架、raw append-on
 
 “当前 AkShare 先覆盖某类数据”表示已经有一个最小可运行采集入口，不表示该类数据已经完整、权威或生产级。例如：
 
-- 公告索引：`akshare_announcement_index` 已能通过 `akshare.stock_notice_report` 保存公告列表/索引元数据，包括标题、股票、公告日期、类别和链接等字段；但还没有直接采 CNINFO/SSE/SZSE/BSE 官方源，也没有下载 PDF、附件或解析完整详情页。
+- 公告索引：`akshare_announcement_index` 已能通过 `akshare.stock_notice_report` 保存公告列表/索引元数据，包括标题、股票、公告日期、类别和链接等字段；CNINFO/SSE/SZSE/BSE 官方公告索引源也已可手动采列表元数据和 PDF URL，但还没有下载 PDF、附件或解析完整详情页。
 - 商品日频：`akshare_commodity_daily` 已能通过 `akshare.futures_zh_daily_sina` 保存商品期货日频样例，默认样本是 `RB0`；但还没有接 SHFE/DCE/CZCE/GFEX 官方结算文件，也没有覆盖全品种全合约、夜盘、结算价、持仓量等完整交易所口径。
 
 ### P0 数据集覆盖
@@ -117,7 +117,7 @@ AkShare 现在的定位是 bootstrap 主源：先把采集框架、raw append-on
 | `trading_calendar` | A 股交易日历 | `ashare_trading_calendar` / AkShare / 免费 | 1 / 1 | 无 | Bootstrap 已完成；当前主要记录 AkShare 返回的交易日 |
 | `trade_status` | 停复牌/交易状态 | `ashare_trade_status` / AkShare / 免费 | 1 / 1 | 无 | Bootstrap 已完成；当前记录停复牌行，不是全市场正常交易快照 |
 | `price_limit` | 涨跌停价格 | `ashare_price_limit` / AkShare / 免费 | 1 / 1 | 无 | Bootstrap 已完成；当前用前收盘价和板块规则推算，特殊规则需后续补 |
-| `announcement_index` | 公告索引 | `akshare_announcement_index` / AkShare / 免费 | 1 / 5 | CNINFO、SSE、SZSE、BSE | Bootstrap 已完成；官方公告源和 PDF/detail 下载仍未开发 |
+| `announcement_index` | 公告索引 | `akshare_announcement_index` 默认启用；`cninfo_announcement_list`、`sse_announcement_list`、`szse_announcement_list`、`bse_announcement_list` 可手动运行 / 免费 | 5 / 5，默认启用 1 个 | CNINFO/SSE/SZSE/BSE 默认不随 `run-enabled` 运行 | Bootstrap 已完成；官方索引源已可手动对账，PDF/detail 下载仍未开发 |
 | `policy_regulatory_doc` | 政策/监管文档或新闻 | `akshare_cctv_policy_news` / AkShare / 免费 | 1 / 4 | CSRC、gov.cn、PBC | Bootstrap 已完成；权威监管网站源仍未开发 |
 | `commodity_daily` | 商品期货日频 | `akshare_commodity_daily` / AkShare / 免费 | 1 / 5 | SHFE、DCE、CZCE、GFEX | Bootstrap 已完成；交易所官方结算源仍未开发 |
 | `global_market_daily` | 全球市场日频 | `akshare_global_market_daily` / AkShare / 免费 | 1 / 3 | Stooq、Yahoo Finance | Bootstrap 已完成；shadow/supplemental 源仍未开发 |
@@ -179,7 +179,7 @@ AkShare 现在的定位是 bootstrap 主源：先把采集框架、raw append-on
 
 未完成事项主要集中在“生产级数据可靠性”和“高成本 P2 数据”，不是采集框架骨架本身：
 
-- 官方/影子源：BaoStock 日线 shadow connector 已实现但默认不启用；CNINFO/SSE/SZSE/BSE、CSRC/gov.cn/PBC、SHFE/DCE/CZCE/GFEX、Stooq/Yahoo 仍未开发 connector。
+- 官方/影子源：BaoStock 日线 shadow connector、CNINFO/SSE/SZSE/BSE 公告索引 connector 已实现但默认不启用；CSRC/gov.cn/PBC、SHFE/DCE/CZCE/GFEX、Stooq/Yahoo 仍未开发 connector。
 - 跨源对账：P0 高风险数据集还缺真实 counterparty source，当前只能报告 `missing_counterparty_source`，不能完成字段级差异对账。
 - 覆盖范围：许多 bootstrap connector 默认只采样少量 symbol、少量 board 或少量 item，尚未扩大到全市场稳定采集。
 - PIT 口径：财务、基金持仓、公告、研报和新闻的真实披露时间、修订版本和回溯修正还需要官方源或付费源验证。
@@ -194,6 +194,10 @@ AkShare 现在的定位是 bootstrap 主源：先把采集框架、raw append-on
 ```powershell
 pitlake run-source --source-id akshare_market_daily_ohlcv --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
 pitlake run-source --source-id baostock_market_daily_shadow --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
+pitlake run-source --source-id cninfo_announcement_list --start-date 20260424 --end-date 20260424 --manifest-date 2026-04-26
+pitlake run-source --source-id sse_announcement_list --start-date 20260424 --end-date 20260424 --manifest-date 2026-04-26
+pitlake run-source --source-id szse_announcement_list --start-date 20260424 --end-date 20260424 --manifest-date 2026-04-26
+pitlake run-source --source-id bse_announcement_list --start-date 20260424 --end-date 20260424 --manifest-date 2026-04-26
 pitlake run-enabled --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
 pitlake quality-report --date 2026-04-26
 pitlake reconcile --date 2026-04-26

@@ -86,12 +86,19 @@ sources:
     credential_ref: ""
     priority: P0
     enabled: false
-    implementation_status: planned
+    implementation_status: active_shadow
     adapter_class: pitlake.connectors.announcements.cninfo.CninfoAnnouncementConnector
     allowed_frequency: "1h on trading days, lower if source requires"
     storage_permission: raw_allowed
     redistribution_policy: internal_only
-    notes: "Save list response, detail page, PDF and attachments when allowed."
+    default_options:
+      start_date: "20260424"
+      end_date: "20260424"
+      column: szse
+      page_size: 30
+      max_pages: 1
+      timeout_seconds: 20
+    notes: "Implemented CNINFO official announcement index source using hisAnnouncement/query. It stores list metadata and PDF URLs only; PDF/detail downloads remain disabled until request policy and storage scope are confirmed."
 
   - source_id: akshare_announcement_index
     provider_id: akshare
@@ -124,12 +131,19 @@ sources:
     credential_ref: ""
     priority: P0
     enabled: false
-    implementation_status: planned_supplemental
+    implementation_status: active_shadow
     adapter_class: pitlake.connectors.announcements.sse.SseAnnouncementConnector
     allowed_frequency: "1h on trading days, lower if source requires"
     storage_permission: raw_allowed
     redistribution_policy: internal_only
-    notes: "Official SSE supplemental announcement source."
+    default_options:
+      start_date: "20260424"
+      end_date: "20260424"
+      report_type: ALL
+      page_size: 25
+      max_pages: 1
+      timeout_seconds: 20
+    notes: "Implemented SSE official announcement index source using queryCompanyBulletin.do. It stores list metadata and PDF URLs only; PDF/detail downloads remain disabled until request policy and storage scope are confirmed."
 
   - source_id: szse_announcement_list
     provider_id: szse
@@ -141,12 +155,19 @@ sources:
     credential_ref: ""
     priority: P0
     enabled: false
-    implementation_status: planned_supplemental
+    implementation_status: active_shadow
     adapter_class: pitlake.connectors.announcements.szse.SzseAnnouncementConnector
     allowed_frequency: "1h on trading days, lower if source requires"
     storage_permission: raw_allowed
     redistribution_policy: internal_only
-    notes: "Official SZSE supplemental announcement source."
+    default_options:
+      start_date: "20260424"
+      end_date: "20260424"
+      channel_code: listedNotice_disc
+      page_size: 30
+      max_pages: 1
+      timeout_seconds: 20
+    notes: "Implemented SZSE official announcement index source using announcement/annList. It stores list metadata and PDF URLs only; PDF/detail downloads remain disabled until request policy and storage scope are confirmed."
 
   - source_id: bse_announcement_list
     provider_id: bse
@@ -158,12 +179,19 @@ sources:
     credential_ref: ""
     priority: P0
     enabled: false
-    implementation_status: planned_supplemental
+    implementation_status: active_shadow
     adapter_class: pitlake.connectors.announcements.bse.BseAnnouncementConnector
     allowed_frequency: "1h on trading days, lower if source requires"
     storage_permission: raw_allowed
     redistribution_policy: internal_only
-    notes: "Official BSE supplemental announcement source."
+    default_options:
+      start_date: "20260424"
+      end_date: "20260424"
+      disclosure_type: "5"
+      market_layer: "2"
+      max_pages: 1
+      timeout_seconds: 20
+    notes: "Implemented BSE official announcement index source using companyAnnouncement.do JSONP. It stores list metadata and PDF URLs only; PDF/detail downloads remain disabled until request policy and storage scope are confirmed."
 
   - source_id: csrc_policy_news
     provider_id: csrc
