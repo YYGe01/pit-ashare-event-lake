@@ -5,9 +5,9 @@
 当前同步版本：
 
 - 项目阶段：`v0_p0_daily`
-- 当前已跑通真实链路：A 股日线 `market_daily_ohlcv`
-- 当前启用 source：`akshare_market_daily_ohlcv`
-- 当前真实函数：`akshare.stock_zh_a_daily`
+- 当前已跑通真实链路：A 股日线 `market_daily_ohlcv`、交易日历 `trading_calendar`
+- 当前启用 source：`akshare_market_daily_ohlcv`、`ashare_trading_calendar`
+- 当前真实函数：`akshare.stock_zh_a_daily`、`akshare.tool_trade_date_hist_sina`
 - 当前贯穿样例：`600000` 在 `2026-04-24` 的日线
 - 文档最后同步日期：`2026-04-26`
 
@@ -17,7 +17,7 @@
 配置文件决定采什么
   -> CLI 命令触发采集
   -> ConnectorRunner 装配 source、contract、store
-  -> AkshareMarketDailyConnector 调 AkShare
+  -> 对应 AkShare Connector 调 AkShare
   -> RawStore 保存原始响应
   -> MetadataStore 写 SQLite 账本
   -> QualityRunner 做质量检查
@@ -55,6 +55,7 @@
 | `src/pitlake/connectors/runner.py` | 源码 | 装配并运行 connector |
 | `src/pitlake/connectors/base.py` | 源码 | 所有 connector 的基类 |
 | `src/pitlake/connectors/market/akshare_daily.py` | 源码 | 当前真实 A 股日线 connector |
+| `src/pitlake/connectors/market/akshare_calendar.py` | 源码 | 当前真实 A 股交易日历 connector |
 | `src/pitlake/storage/raw_store.py` | 源码 | 保存 raw 文件和 `.meta.json` |
 | `src/pitlake/storage/metadata_store.py` | 源码 | SQLite 表结构和写入逻辑 |
 | `src/pitlake/storage/manifest_store.py` | 源码 | 生成每日 manifest |
@@ -380,9 +381,9 @@ class = AkshareMarketDailyConnector
 | source_id | logical_dataset | enabled | implementation_status | 当前作用 |
 | --- | --- | --- | --- | --- |
 | `akshare_market_daily_ohlcv` | `market_daily_ohlcv` | `true` | `active_v0` | 已跑通真实 A 股日线 |
+| `ashare_trading_calendar` | `trading_calendar` | `true` | `active_v0` | 已跑通真实 A 股交易日历 |
 | `akshare_adjustment_factor` | `adjustment_factor` | `false` | `planned` | 计划接复权因子 |
 | `baostock_market_daily_shadow` | `market_daily_ohlcv` | `false` | `planned_shadow` | 计划做日线交叉验证 |
-| `ashare_trading_calendar` | `trading_calendar` | `false` | `planned` | 计划接交易日历 |
 | `ashare_trade_status` | `trade_status` | `false` | `planned` | 计划接停复牌/交易状态 |
 | `ashare_price_limit` | `price_limit` | `false` | `planned` | 计划接涨跌停 |
 | 公告、政策、商品、全球市场 source | 多个 P0 dataset | `false` | `planned` | 后续逐步接入 |

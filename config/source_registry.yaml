@@ -187,13 +187,17 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
-    implementation_status: planned
+    enabled: true
+    implementation_status: active_v0
     adapter_class: pitlake.connectors.market.akshare_calendar.AkshareTradingCalendarConnector
     allowed_frequency: "daily pre-market and post-market"
     storage_permission: raw_allowed
     redistribution_policy: internal_only
-    notes: "Trading calendar source; should later be cross-checked with exchange sources."
+    default_options:
+      start_date: "20260424"
+      end_date: "20260424"
+      calendar_id: cn_ashare
+    notes: "Bootstrap A-share trading calendar source using akshare.tool_trade_date_hist_sina. The function currently returns trading days; non-trading days should later be completed or cross-checked with exchange sources."
 
   - source_id: ashare_trade_status
     provider_id: akshare

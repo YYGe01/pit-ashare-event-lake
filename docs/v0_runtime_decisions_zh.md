@@ -201,3 +201,53 @@ AkShare 的 stock_zh_a_hist / Eastmoney 历史接口在当前本地网络下会�
 ```text
 config source -> connector runner -> AkShare request -> raw append-only store -> SQLite metadata -> quality checks -> raw_item_version -> daily manifest
 ```
+
+## 9. 2026-04-26 交易日历连接器
+
+已落地第二个真实 P0 source：
+
+```text
+source_id: ashare_trading_calendar
+logical_dataset: trading_calendar
+provider_id: akshare
+connector: pitlake.connectors.market.akshare_calendar.AkshareTradingCalendarConnector
+akshare function: tool_trade_date_hist_sina
+default calendar_id: cn_ashare
+default date window: 20260424 - 20260424
+```
+
+说明：
+
+```text
+AkShare 的 tool_trade_date_hist_sina 当前返回交易日列表；
+V0 先把返回日期标准化为 trading_calendar item，并将 is_trading_day 固定为 true；
+非交易日补全和交易所官方日历对账后续再做，不在当前 bootstrap source 中硬推断。
+```
+
+当前 enabled P0 source 已变为：
+
+```text
+akshare_market_daily_ohlcv
+ashare_trading_calendar
+```
+
+本地验证结果：
+
+```text
+command: pitlake run-enabled --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
+status: success
+source_count: 2
+akshare_market_daily_ohlcv: request_count=3, success_count=3, error_count=0
+ashare_trading_calendar: request_count=1, success_count=1, error_count=0, new_item_count=1
+manifest generated: yes
+```
+
+后续默认顺序更新为：
+
+```text
+1. 实现 trade_status；
+2. 实现 price_limit；
+3. 让 market_daily_ohlcv、trading_calendar、trade_status、price_limit 通过 run-enabled 一起稳定运行；
+4. 生成每日质量报告；
+5. 简单市场约束数据稳定后，再接公告采集。
+```

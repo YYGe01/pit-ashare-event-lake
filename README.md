@@ -38,16 +38,21 @@ pitlake smoke-run
 
 `smoke-run` 不访问外网，只验证本地 raw 写入、SQLite 元数据账本、质量检查和每日 manifest 生成。
 
-## V0 首个真实采集
+## V0 真实采集
 
-当前已启用 `akshare_market_daily_ohlcv`，用于跑通 A 股日线采集闭环。第一次本地测试建议限制 symbol 数量：
+当前已启用两个 AkShare P0 source：
+
+- `akshare_market_daily_ohlcv`：A 股日线 OHLCV，使用 `akshare.stock_zh_a_daily`。
+- `ashare_trading_calendar`：A 股交易日历，使用 `akshare.tool_trade_date_hist_sina`。
+
+第一次本地测试建议限制 symbol 数量：
 
 ```powershell
 pitlake run-source --source-id akshare_market_daily_ohlcv --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
 pitlake run-enabled --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
 ```
 
-当前连接器使用 AkShare 的 `stock_zh_a_daily`，默认采样 `000001`、`600000`、`300750`。同一天重复运行时，框架会保留 raw 采集事实，并在 `raw_item_version` 层识别已存在的 item version。
+日线连接器默认采样 `000001`、`600000`、`300750`。交易日历连接器默认采集 `20260424` 的 `cn_ashare` 交易日记录。同一天重复运行时，框架会保留 raw 采集事实，并在 `raw_item_version` 层识别已存在的 item version。
 
 ## 范围
 
