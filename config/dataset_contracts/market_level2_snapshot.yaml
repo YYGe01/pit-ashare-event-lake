@@ -1,0 +1,35 @@
+logical_dataset: market_level2_snapshot
+contract_version: 1
+description: Planned licensed Level-2 order book snapshots; disabled until entitlement, storage budget, and replay requirements are confirmed.
+primary_key_fields:
+  - provider_id
+  - venue
+  - instrument
+  - snapshot_time
+required_fields:
+  - provider_id
+  - source_id
+  - venue
+  - instrument
+  - exchange
+  - snapshot_time
+  - bid_price_levels
+  - ask_price_levels
+  - bid_size_levels
+  - ask_size_levels
+  - storage_permission
+  - license_ref
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - source_item_key
+  - quality_status
+quality_rules:
+  hard:
+    - entitlement_confirmed
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+  soft:
+    - depth_levels_consistent

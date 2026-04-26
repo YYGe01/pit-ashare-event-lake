@@ -1,4 +1,4 @@
-# V0/P1 运行决策记录
+# V0/P1/P2 运行决策记录
 
 > 更新时间：2026-04-26  
 > 目的：只记录会影响后续维护和运行的长期决策、边界和口径。具体代码改动、验证流水和下一步事项写入 `docs/agent_journal/`；直接运行命令写入 `README.md`。
@@ -59,6 +59,10 @@ P0 的长期生产级完成条件仍是：
 
 部分 P0 source 仍是 bootstrap 或推算口径，例如 `adjustment_factor`、`price_limit`、`announcement_index`、`policy_regulatory_doc`。这些数据可用于采集框架验证，但进入严肃研究前必须补官方源或付费源对账。
 
+“AkShare 已覆盖某类数据”只表示当前有最小可运行采集入口，不表示完整、权威或生产级覆盖。例如 `akshare_announcement_index` 只保存公告列表/索引元数据，不等同于 CNINFO/交易所公告全文、PDF 和附件归档；`akshare_commodity_daily` 只保存商品期货日频样例，不等同于 SHFE/DCE/CZCE/GFEX 官方结算文件和全品种全合约覆盖。
+
+`baostock_market_daily_shadow` 已实现为 `market_daily_ohlcv` 的免费 shadow/fallback connector，但默认仍保持 `enabled: false`。使用者可通过 `pitlake run-source --source-id baostock_market_daily_shadow ...` 手动观察稳定性和字段口径；在连续运行和对账结果稳定前，不纳入默认 `run-enabled` 主流程。
+
 ## P1 交付边界
 
 P1 bootstrap 已可交付，当前覆盖：
@@ -99,17 +103,42 @@ P1 生产级继续需要：
 明确每类 provider 字段的长期 schema 映射。
 ```
 
+## P2 交付边界
+
+P2 bootstrap 已启用的低成本公开样例源：
+
+```text
+market_minute_bar：akshare_ashare_minute_bar，默认 600000 的最近 240 条 1 分钟 bar；
+research_report_index：akshare_stock_research_report_index，只保存研报元数据和链接；
+social_media_aggregate：akshare_stock_comment_aggregate，只保存公开评论/关注度聚合指标。
+```
+
+P2 不等于生产级高频或全文数据湖。以下类别当前只保留 dataset contract 和 disabled planned source：
+
+```text
+Level-2 order book；
+tick / 逐笔成交；
+新闻全文、研报全文和电话会纪要；
+供应链/客户供应商数据库；
+卫星、遥感和其他另类数据；
+专业新闻事件库。
+```
+
+这些 planned source 只有在授权、预算、容量、频率限制、备份策略、alpha 假设和研究层消费方式都明确后才能启用。尤其是全文、研报、电话会纪要、社媒正文和付费事件库，不得在没有合同或明确许可时保存 raw 正文。
+
 ## 免费源和付费源策略
 
-当前没有 Tushare、券商 API、Wind、Choice、iFinD 等账号或 Token。
+当前没有 Tushare、券商 API、Wind、Choice、iFinD、RavenPack、NASA FIRMS 等账号或 Token。
 
 ```text
 优先免费/公开数据源；
 不启用需要账号的 provider；
 不绕过登录、验证码、付费墙或反爬机制；
-为 Tushare/Wind/Choice 等预留 provider 和 credential_ref；
+为 Tushare/Wind/Choice/RavenPack/NASA FIRMS 等预留 provider 和 credential_ref；
 免费源跑稳后，再决定是否开通付费源用于对账、补全或稳定性提升。
 ```
+
+AkShare 的长期定位详见 `docs/akshare_data_risk_assessment_zh.md`：它适合作为 bootstrap、低成本历史 backfill 和 shadow/fallback 来源，但不能单独视为严格 PIT vendor；历史补采必须保留真实 `first_seen_at`，并显式区分 backfill 与每日 live observation。
 
 真实密钥不写入 git、Markdown、测试 fixture 或聊天记录。后续如开通账号，只在配置里使用 `credential_ref`，例如 `TUSHARE_TOKEN`。
 
@@ -119,7 +148,7 @@ P1 生产级继续需要：
 
 ```text
 阶段一：本地电脑开发和验证；
-阶段二：P0/P1 连续稳定后迁移到低功耗小主机、NAS、家用服务器或低成本云服务器。
+阶段二：P0/P1/P2 bootstrap 连续稳定后迁移到低功耗小主机、NAS、家用服务器或低成本云服务器。
 ```
 
 本地运行期间需要保证采集窗口内电脑不休眠、网络可访问目标源，并定期检查 C 盘空间。长期不建议只依赖经常关机或休眠的个人电脑。
@@ -144,7 +173,7 @@ manifest：data_lake/collection/published_manifests/
 备份策略：
 
 ```text
-V0/P1 当前：本地 metadata、manifest、quality report、reconciliation report 备份；
+V0/P1/P2 bootstrap 当前：本地 metadata、manifest、quality report、reconciliation report 备份；
 真实连续运行后：metadata/manifest 每日备份，raw 每周备份；
 长期目标：至少一份不在 C 盘/本机单点上的备份。
 ```
@@ -156,3 +185,19 @@ raw 数据只追加不覆盖；不得修改历史 raw 文件或伪造更早的 `
 当前告警默认写本地 JSONL；如需外部通知，使用环境变量或命令参数传入 webhook，不写入 git。
 
 对账当前先覆盖高风险 P0 数据集。只有单一 bootstrap source 时，报告会标记缺少 counterparty；启用 shadow/official source 后，再按同一 observation identity 比较关键字段。
+
+## 当前未完成事项
+
+采集层框架当前已经具备本地 bootstrap 闭环：source registry、dataset contract、raw append-only 存储、SQLite metadata、quality result、manifest、quality report、reconciliation、alert 和 backup 入口均已实现。
+
+生产级数据湖仍未完成，主要缺口是：
+
+```text
+免费 shadow/official source connector：BaoStock 日线 shadow 已实现但默认不启用；CNINFO/SSE/SZSE/BSE、CSRC/gov.cn/PBC、SHFE/DCE/CZCE/GFEX、Stooq/Yahoo 仍未开发；
+高风险 P0 数据集的真实跨源对账；
+默认采样范围从少量 symbol/board/item 扩大到稳定全市场或明确覆盖范围；
+财务、基金、公告、新闻、研报等数据的真实披露时间和修订版本验证；
+字段漂移、覆盖率、缺口、异常值和连续运行 SLO 的质量规则增强；
+外部告警、非本机备份、定时调度、失败重试和运行看板；
+Level-2、tick、授权全文、供应链、遥感、专业事件库等 P2 高成本数据的授权、预算、容量和 alpha 假设确认。
+```

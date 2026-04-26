@@ -1,0 +1,41 @@
+logical_dataset: market_minute_bar
+contract_version: 1
+description: A-share intraday minute bar observations for selected P2 bootstrap symbols.
+primary_key_fields:
+  - provider_id
+  - instrument
+  - bar_period
+  - snapshot_time
+required_fields:
+  - provider_id
+  - source_id
+  - instrument
+  - exchange
+  - bar_period
+  - snapshot_time
+  - trading_date
+  - open
+  - high
+  - low
+  - close
+  - volume
+  - amount
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - source_item_key
+  - metric_payload
+  - source_timestamp
+  - quality_status
+quality_rules:
+  hard:
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+    - instrument_format_valid
+    - snapshot_time_not_null
+  soft:
+    - price_fields_non_negative
+    - high_greater_equal_low
+    - row_count_near_recent_median

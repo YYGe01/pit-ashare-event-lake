@@ -1,0 +1,37 @@
+logical_dataset: research_report_index
+contract_version: 1
+description: Licensed-or-public research report metadata index; report full text is not stored without explicit entitlement.
+primary_key_fields:
+  - provider_id
+  - report_key
+required_fields:
+  - provider_id
+  - source_id
+  - report_key
+  - instrument
+  - exchange
+  - publish_date
+  - title
+  - institution
+  - source_url
+  - storage_permission
+  - metric_payload
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - source_item_key
+  - rating
+  - author
+  - quality_status
+quality_rules:
+  hard:
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+    - title_not_empty
+    - source_url_not_empty
+    - storage_permission_not_null
+  soft:
+    - publish_date_not_in_future_over_10m
+    - row_count_near_recent_median

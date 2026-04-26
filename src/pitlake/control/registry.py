@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ REQUIRED_SOURCE_FIELDS = {
     "auth_type",
     "priority",
     "enabled",
+    "adapter_class",
 }
 
 
@@ -102,6 +104,21 @@ class SourceRegistry:
             dataset = source.get("logical_dataset")
             if dataset and dataset not in known_contracts:
                 errors.append(f"source {source_id} references unknown logical_dataset: {dataset}")
+            adapter_class = source.get("adapter_class")
+            implementation_status = str(source.get("implementation_status", "")).lower()
+            should_import_adapter = bool(source.get("enabled")) or implementation_status.startswith(
+                "active"
+            )
+            if adapter_class and should_import_adapter:
+                try:
+                    module_name, class_name = str(adapter_class).rsplit(".", 1)
+                    module = importlib.import_module(module_name)
+                    getattr(module, class_name)
+                except Exception as exc:
+                    errors.append(
+                        f"source {source_id} adapter_class is not importable: "
+                        f"{adapter_class} ({type(exc).__name__}: {exc})"
+                    )
         return errors
 
 
@@ -123,4 +140,3 @@ def assert_valid_control_plane(config_dir: str | Path) -> None:
     errors = validate_control_plane(config_dir)
     if errors:
         raise ConfigError("Invalid control-plane config:\n" + "\n".join(f"- {e}" for e in errors))
-

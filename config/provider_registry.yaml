@@ -215,6 +215,30 @@ providers:
     risk_level: low
     notes: "P1 weather daily bootstrap source. Keep weather observations separate from downstream stock impact mapping."
 
+  - provider_id: nasa_firms
+    provider_name: NASA FIRMS
+    provider_type: public_api
+    homepage: https://firms.modaps.eosdis.nasa.gov/
+    auth_method: api_token_or_public_endpoint
+    credential_ref: NASA_FIRMS_MAP_KEY
+    storage_permission: metadata_only
+    redistribution_scope: contract_specific
+    cost_model: free_or_quota_limited
+    risk_level: medium
+    notes: "Reserved P2 alternative data provider. Enable only after alpha hypothesis, quota, and redistribution terms are confirmed."
+
+  - provider_id: ravenpack
+    provider_name: RavenPack
+    provider_type: paid_vendor
+    homepage: https://www.ravenpack.com/
+    auth_method: vendor_client
+    credential_ref: RAVENPACK_CREDENTIAL
+    storage_permission: contract_specific
+    redistribution_scope: contract_specific
+    cost_model: paid
+    risk_level: high
+    notes: "Reserved P2 professional event provider for future vendor-vs-internal event reconciliation."
+
   - provider_id: tushare
     provider_name: Tushare Pro
     provider_type: api_vendor

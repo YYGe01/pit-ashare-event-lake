@@ -1,19 +1,20 @@
 project:
   name: pit-ashare-event-lake
   timezone: Asia/Shanghai
-  phase: v0_p0_daily
+  phase: v0_p2_bootstrap
   scope:
     market: cn_ashare
-    frequency: daily
+    frequency: daily_intraday_metadata_bootstrap
     include_exchanges:
       - SSE
       - SZSE
       - BSE
     exclude:
-      - minute_bar
       - level2
       - tick
       - order_book
+      - fulltext_without_license
+      - private_social_data
 
 paths:
   data_lake_root: data_lake

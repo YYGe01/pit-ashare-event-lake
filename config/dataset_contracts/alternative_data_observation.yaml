@@ -1,0 +1,33 @@
+logical_dataset: alternative_data_observation
+contract_version: 1
+description: Planned satellite, remote-sensing, geospatial, or other alternative observations with explicit alpha hypothesis and license review.
+primary_key_fields:
+  - provider_id
+  - observation_scope
+  - location_id
+  - observation_time
+required_fields:
+  - provider_id
+  - source_id
+  - observation_scope
+  - location_id
+  - observation_time
+  - metric_payload
+  - storage_permission
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - source_item_key
+  - latitude
+  - longitude
+  - license_ref
+  - quality_status
+quality_rules:
+  hard:
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+    - metric_payload_not_empty
+  soft:
+    - observation_time_not_in_future_over_10m

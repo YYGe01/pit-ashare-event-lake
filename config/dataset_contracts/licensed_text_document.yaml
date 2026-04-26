@@ -1,0 +1,35 @@
+logical_dataset: licensed_text_document
+contract_version: 1
+description: Planned full-text news, research, and transcript documents; only enabled when storage rights are explicit.
+primary_key_fields:
+  - provider_id
+  - doc_key
+required_fields:
+  - provider_id
+  - source_id
+  - doc_key
+  - document_type
+  - publish_time
+  - title
+  - source_url
+  - storage_permission
+  - license_ref
+  - first_seen_at
+  - raw_uri
+  - content_hash
+optional_fields:
+  - source_item_key
+  - instrument
+  - exchange
+  - author
+  - metric_payload
+  - quality_status
+quality_rules:
+  hard:
+    - entitlement_confirmed
+    - first_seen_at_not_null
+    - raw_uri_exists
+    - content_hash_not_null
+    - title_not_empty
+  soft:
+    - publish_time_not_in_future_over_10m

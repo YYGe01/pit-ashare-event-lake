@@ -60,12 +60,21 @@ sources:
     credential_ref: ""
     priority: P0
     enabled: false
-    implementation_status: planned_shadow
+    implementation_status: active_shadow
     adapter_class: pitlake.connectors.market.baostock_daily.BaoStockMarketDailyConnector
     allowed_frequency: "daily post-market, max 3 runs/day"
     storage_permission: raw_allowed
     redistribution_policy: internal_only
-    notes: "Shadow/fallback source for market daily cross-checks."
+    default_options:
+      start_date: "20260424"
+      end_date: "20260424"
+      adjustflag: "3"
+      symbols:
+        - "000001"
+        - "600000"
+        - "300750"
+      limit_symbols: 3
+    notes: "Implemented shadow/fallback source for market daily cross-checks using BaoStock query_history_k_data_plus. It is disabled by default so run-enabled remains on the AkShare bootstrap path until shadow stability is observed."
 
   - source_id: cninfo_announcement_list
     provider_id: cninfo
@@ -755,3 +764,170 @@ sources:
           latitude: 22.5431
           longitude: 114.0579
     notes: "P1 bootstrap daily weather source using Open-Meteo archive API. It records location observations only; downstream stock/industry impact mapping is out of collection scope."
+
+  - source_id: akshare_ashare_minute_bar
+    provider_id: akshare
+    logical_dataset: market_minute_bar
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P2
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p2_bootstrap.AkshareAshareMinuteBarConnector
+    allowed_frequency: "selected symbols only, intraday or post-market sample, max 3 runs/day"
+    storage_permission: raw_allowed
+    redistribution_policy: internal_only
+    default_options:
+      symbols:
+        - "600000"
+      limit_symbols: 1
+      period: "1"
+      adjust: ""
+      limit_rows: 240
+    notes: "P2 bootstrap minute-bar sample using akshare.stock_zh_a_minute. This is not a full intraday archive or replay-grade market data feed."
+
+  - source_id: akshare_stock_research_report_index
+    provider_id: akshare
+    logical_dataset: research_report_index
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P2
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p2_bootstrap.AkshareStockResearchReportIndexConnector
+    allowed_frequency: "daily or weekly metadata refresh for selected symbols"
+    storage_permission: metadata_only
+    redistribution_policy: internal_only
+    default_options:
+      symbols:
+        - "000001"
+      limit_symbols: 1
+      limit_items: 50
+    notes: "P2 bootstrap research-report metadata index using akshare.stock_research_report_em. Report PDFs/full text are not downloaded without explicit entitlement."
+
+  - source_id: akshare_stock_comment_aggregate
+    provider_id: akshare
+    logical_dataset: social_media_aggregate
+    source_type: python_api
+    access_method: open_source_lib
+    base_url: https://akshare.akfamily.xyz/
+    auth_type: none
+    credential_ref: ""
+    priority: P2
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: pitlake.connectors.p2_bootstrap.AkshareStockCommentAggregateConnector
+    allowed_frequency: "daily or selected low-frequency snapshots, max 2 runs/day"
+    storage_permission: metadata_only
+    redistribution_policy: internal_only
+    default_options:
+      limit_items: 200
+    notes: "P2 bootstrap public comment/attention aggregate using akshare.stock_comment_em. It stores aggregate metrics only, not individual post bodies or private user data."
+
+  - source_id: wind_level2_snapshot_planned
+    provider_id: wind
+    logical_dataset: market_level2_snapshot
+    source_type: vendor_client
+    access_method: paid_vendor
+    base_url: https://www.wind.com.cn/
+    auth_type: vendor_client
+    credential_ref: WIND_CREDENTIAL
+    priority: P2
+    enabled: false
+    implementation_status: planned_entitlement_required
+    adapter_class: pitlake.connectors.vendor.wind.WindLevel2SnapshotConnector
+    allowed_frequency: "contract specific; disabled until entitlement and storage budget are confirmed"
+    storage_permission: contract_specific
+    redistribution_policy: contract_specific
+    notes: "Reserved P2 Level-2 snapshot source. Do not enable without paid entitlement, storage sizing, replay requirements, and vendor contract review."
+
+  - source_id: wind_tick_trade_planned
+    provider_id: wind
+    logical_dataset: market_tick_trade
+    source_type: vendor_client
+    access_method: paid_vendor
+    base_url: https://www.wind.com.cn/
+    auth_type: vendor_client
+    credential_ref: WIND_CREDENTIAL
+    priority: P2
+    enabled: false
+    implementation_status: planned_entitlement_required
+    adapter_class: pitlake.connectors.vendor.wind.WindTickTradeConnector
+    allowed_frequency: "contract specific; disabled until entitlement and high-volume storage are confirmed"
+    storage_permission: contract_specific
+    redistribution_policy: contract_specific
+    notes: "Reserved P2 tick/trade-by-trade source. Keep out of default collection until a separate high-volume subsystem is designed."
+
+  - source_id: choice_licensed_text_document_planned
+    provider_id: choice
+    logical_dataset: licensed_text_document
+    source_type: vendor_client
+    access_method: paid_vendor
+    base_url: https://choice.eastmoney.com/
+    auth_type: vendor_client
+    credential_ref: CHOICE_CREDENTIAL
+    priority: P2
+    enabled: false
+    implementation_status: planned_entitlement_required
+    adapter_class: pitlake.connectors.vendor.choice.ChoiceLicensedTextConnector
+    allowed_frequency: "contract specific; disabled until storage rights are confirmed"
+    storage_permission: contract_specific
+    redistribution_policy: contract_specific
+    notes: "Reserved P2 full-text news, research, and transcript source. Metadata is preferred; full text is only allowed with explicit contract rights."
+
+  - source_id: choice_supply_chain_relationship_planned
+    provider_id: choice
+    logical_dataset: supply_chain_relationship
+    source_type: vendor_client
+    access_method: paid_vendor
+    base_url: https://choice.eastmoney.com/
+    auth_type: vendor_client
+    credential_ref: CHOICE_CREDENTIAL
+    priority: P2
+    enabled: false
+    implementation_status: planned_entitlement_required
+    adapter_class: pitlake.connectors.vendor.choice.ChoiceSupplyChainConnector
+    allowed_frequency: "contract specific; disabled until vendor terms and versioning rules are confirmed"
+    storage_permission: contract_specific
+    redistribution_policy: contract_specific
+    notes: "Reserved P2 supply-chain relationship source. Relationship versions must be observed as snapshots, not backfilled with current knowledge."
+
+  - source_id: nasa_firms_alternative_observation_planned
+    provider_id: nasa_firms
+    logical_dataset: alternative_data_observation
+    source_type: public_api
+    access_method: public_web_api
+    base_url: https://firms.modaps.eosdis.nasa.gov/
+    auth_type: api_token_or_public_endpoint
+    credential_ref: NASA_FIRMS_MAP_KEY
+    priority: P2
+    enabled: false
+    implementation_status: planned_alpha_hypothesis_required
+    adapter_class: pitlake.connectors.alternative.nasa_firms.NasaFirmsObservationConnector
+    allowed_frequency: "disabled until geospatial alpha hypothesis, quota, and storage scope are confirmed"
+    storage_permission: metadata_only
+    redistribution_policy: contract_specific
+    notes: "Reserved P2 remote-sensing/alternative observation source. Do not enable before defining geography, symbol mapping, and expected use."
+
+  - source_id: ravenpack_professional_event_feed_planned
+    provider_id: ravenpack
+    logical_dataset: professional_event_feed
+    source_type: vendor_client
+    access_method: paid_vendor
+    base_url: https://www.ravenpack.com/
+    auth_type: vendor_client
+    credential_ref: RAVENPACK_CREDENTIAL
+    priority: P2
+    enabled: false
+    implementation_status: planned_entitlement_required
+    adapter_class: pitlake.connectors.vendor.ravenpack.RavenpackEventFeedConnector
+    allowed_frequency: "contract specific; disabled until paid entitlement and event taxonomy mapping are confirmed"
+    storage_permission: contract_specific
+    redistribution_policy: contract_specific
+    notes: "Reserved P2 professional structured event feed. Use for later reconciliation against internal event extraction, not as a hidden research-layer dependency."
