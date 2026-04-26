@@ -71,6 +71,14 @@ P0 的长期生产级完成条件仍是：
 
 `bse_announcement_list` 已实现为 `announcement_index` 的北交所官方公开索引 connector，但默认仍保持 `enabled: false`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；使用者可通过 `pitlake run-source --source-id bse_announcement_list ...` 手动观察分页、限频、字段漂移和与 AkShare/CNINFO/SSE/SZSE 公告索引的差异。
 
+`csrc_policy_news`、`gov_cn_policy`、`pbc_policy_news` 已实现为 `policy_regulatory_doc` 的官方公开列表 connector，但默认仍保持 `enabled: false`。它们只保存列表页 raw HTML 和索引元数据，不下载详情页、附件或正文；使用者可通过 `pitlake run-source --source-id csrc_policy_news ...`、`pitlake run-source --source-id gov_cn_policy ...`、`pitlake run-source --source-id pbc_policy_news ...` 手动观察栏目结构、发布日期口径、分页和与 AkShare CCTV bootstrap 源的差异。
+
+`shfe_daily_commodity` 已实现为 `commodity_daily` 的上期所官方公开日频 connector，但默认仍保持 `enabled: false`。它使用 SHFE `/data/tradedata/future/dailydata/kxYYYYMMDD.dat` JSON 接口保存交易所 raw JSON 和合约级日频字段；使用者可通过 `pitlake run-source --source-id shfe_daily_commodity --end-date YYYYMMDD ...` 手动观察发布时间、字段口径、非交易日行为和与 AkShare 商品样例源的差异。
+
+`czce_daily_commodity` 已实现为 `commodity_daily` 的郑商所官方公开日频 connector，但默认仍保持 `enabled: false`。它使用 CZCE `/cn/DFSStaticFiles/Future/YYYY/YYYYMMDD/FutureDataDaily.txt` 静态文本文件保存交易所 raw TXT 和合约级日频字段。
+
+`gfex_daily_commodity` 已实现为 `commodity_daily` 的广期所官方公开日频 connector，但默认仍保持 `enabled: false`。它使用 GFEX `/u/interfacesWebTiDayQuotes/loadList` JSON 接口保存交易所 raw JSON 和合约级日频字段。DCE 官方 `publicweb/quotesdata/dayQuotesCh.html` 当前在本环境返回 HTTP 412，先标记为 blocked planned，不绕过来源控制。
+
 ## P1 交付边界
 
 P1 bootstrap 已可交付，当前覆盖：
@@ -201,7 +209,7 @@ raw 数据只追加不覆盖；不得修改历史 raw 文件或伪造更早的 `
 生产级数据湖仍未完成，主要缺口是：
 
 ```text
-免费 shadow/official source connector：BaoStock 日线 shadow、CNINFO/SSE/SZSE/BSE 公告索引已实现但默认不启用；CSRC/gov.cn/PBC、SHFE/DCE/CZCE/GFEX、Stooq/Yahoo 仍未开发；
+免费 shadow/official source connector：BaoStock 日线 shadow、CNINFO/SSE/SZSE/BSE 公告索引、CSRC/gov.cn/PBC 政策监管列表、SHFE/CZCE/GFEX 商品日频已实现但默认不启用；DCE、Stooq/Yahoo 仍未开发；
 高风险 P0 数据集的真实跨源对账；
 默认采样范围从少量 symbol/board/item 扩大到稳定全市场或明确覆盖范围；
 财务、基金、公告、新闻、研报等数据的真实披露时间和修订版本验证；
