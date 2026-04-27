@@ -72,8 +72,8 @@ pitlake quality-report --date 2026-04-26
 | BaoStock | 免费开源库，无凭据 | A 股日线 shadow/fallback | 已实现 connector，但默认不启用；可手动 `run-source` 做 AkShare 日线对账 |
 | CNINFO / SSE / SZSE / BSE | 免费公开网站/交易所 | 公告官方/补充源 | CNINFO、SSE、SZSE、BSE 公告索引 connector 已实现但默认不启用；PDF/detail 下载仍未开发 |
 | CSRC / gov.cn / PBC | 免费公开监管/政府网站 | 政策监管官方源 | 已实现 connector，但默认不启用；可手动 `run-source` 采列表 HTML 和索引元数据 |
-| SHFE / DCE / CZCE / GFEX | 免费公开交易所网站 | 国内商品期货官方结算/日频源 | SHFE、CZCE、GFEX connector 已实现但默认不启用；DCE 当前官方 publicweb 端点返回 HTTP 412，暂未开发 |
-| Stooq / Yahoo Finance | 免费公开网站/API | 全球市场日频 shadow/supplemental 候选 | 已登记但未启用，当前没有可运行 connector；Stooq 当前 CSV 端点要求官方 apikey |
+| SHFE / DCE / CZCE / GFEX | 免费公开交易所网站 | 国内商品期货官方结算/日频源 | SHFE、DCE、CZCE、GFEX connector 已实现但默认不启用；DCE 当前官方 publicweb 端点在本环境返回 HTTP 412 |
+| Stooq / Yahoo Finance | 免费公开网站/API | 全球市场日频 shadow/supplemental 候选 | Yahoo Finance connector 已实现但默认不启用；Stooq 当前 CSV 端点要求官方 apikey |
 | NASA FIRMS | 免费或配额/API key | 遥感/另类观测候选 | 已登记但未启用，需先确认 API key、地理映射和 alpha 假设 |
 | Tushare Pro | 付费或积分/token | 后续 A 股官方化/稳定化补源候选 | 只在 provider registry 预留，当前没有 source |
 | Wind | 付费 vendor | Level-2、tick、后续对账和 fallback | 已登记 P2 planned source，但未启用，需授权和容量评估 |
@@ -95,8 +95,8 @@ pitlake quality-report --date 2026-04-26
 | BaoStock | 已实现 A 股日线 shadow connector，但默认不随 `run-enabled` 运行；原因是先保持 AkShare bootstrap 主流程稳定，再用 `run-source` 单独观察 BaoStock 的可用性、字段口径和重复采集表现。 |
 | CNINFO / SSE / SZSE / BSE | CNINFO、SSE、SZSE、BSE 公告索引 connector 已实现，可手动采列表元数据和 PDF URL；默认不随 `run-enabled` 运行，原因是还需要连续观察限频、分页、字段变化和重复采集表现。PDF 下载、附件下载和详情页解析仍未开发。 |
 | CSRC / gov.cn / PBC | CSRC、gov.cn、PBC 官方列表 connector 已实现，可手动采 raw HTML、标题、URL、发布日期、部门和分类；默认不随 `run-enabled` 运行，原因是还需要连续观察栏目结构、日期口径、分页、详情页和附件下载策略。 |
-| SHFE / DCE / CZCE / GFEX | SHFE、CZCE、GFEX 官方日频 connector 已实现，可手动采交易所 raw JSON/TXT 和合约日频字段；默认不随 `run-enabled` 运行，原因是还需要连续观察发布时间、字段口径、非交易日和与 AkShare 商品样例的差异。DCE 当前 publicweb 日行情端点在本环境返回 HTTP 412，暂不绕过。 |
-| Stooq / Yahoo Finance | 适合作全球市场 shadow/supplemental 候选，但还没写 connector；Stooq 当前 CSV 下载端点要求用户通过官方页面/验证码获取 apikey，不能无凭据启用。Yahoo Finance 的 raw 存储和使用条款需要谨慎确认。 |
+| SHFE / DCE / CZCE / GFEX | SHFE、DCE、CZCE、GFEX 官方日频 connector 已实现，可手动采交易所 raw JSON/TXT/HTML 和合约日频字段；默认不随 `run-enabled` 运行，原因是还需要连续观察发布时间、字段口径、非交易日和与 AkShare 商品样例的差异。DCE 当前 publicweb 日行情端点在本环境返回 HTTP 412，暂不绕过。 |
+| Stooq / Yahoo Finance | Yahoo Finance 全球市场日频 shadow connector 已实现，可手动低量运行；默认不随 `run-enabled` 运行，原因是 Yahoo Finance 的 raw 存储和使用条款需要谨慎确认。Stooq 当前 CSV 下载端点要求用户通过官方页面/验证码获取 apikey，不能无凭据启用。 |
 | NASA FIRMS | 可能免费或配额受限，但属于另类/遥感数据；没有 API key/配额、地理映射、采集范围和 alpha 假设前，启用后会产生暂时无法消费的数据。 |
 | Tushare Pro | 目前没有 token，也没有 source 级配置；后续适合作 A 股稳定化、补全或对账源。 |
 | Wind / Choice / RavenPack | 付费授权源，没有合同、凭据、存储权限和容量评估前不能启用，也不能保存未授权全文或高频 raw。 |
@@ -106,7 +106,7 @@ AkShare 现在的定位是 bootstrap 主源：先把采集框架、raw append-on
 “当前 AkShare 先覆盖某类数据”表示已经有一个最小可运行采集入口，不表示该类数据已经完整、权威或生产级。例如：
 
 - 公告索引：`akshare_announcement_index` 已能通过 `akshare.stock_notice_report` 保存公告列表/索引元数据，包括标题、股票、公告日期、类别和链接等字段；CNINFO/SSE/SZSE/BSE 官方公告索引源也已可手动采列表元数据和 PDF URL，但还没有下载 PDF、附件或解析完整详情页。
-- 商品日频：`akshare_commodity_daily` 已能通过 `akshare.futures_zh_daily_sina` 保存商品期货日频样例，默认样本是 `RB0`；但还没有接 SHFE/DCE/CZCE/GFEX 官方结算文件，也没有覆盖全品种全合约、夜盘、结算价、持仓量等完整交易所口径。
+- 商品日频：`akshare_commodity_daily` 已能通过 `akshare.futures_zh_daily_sina` 保存商品期货日频样例，默认样本是 `RB0`；SHFE/DCE/CZCE/GFEX 官方日频 connector 已有低量 shadow 实现，但 DCE 真实访问仍被 HTTP 412 阻塞，也还没有覆盖全品种全合约、夜盘、结算价、持仓量等完整生产口径。
 
 ### P0 数据集覆盖
 
@@ -119,8 +119,8 @@ AkShare 现在的定位是 bootstrap 主源：先把采集框架、raw append-on
 | `price_limit` | 涨跌停价格 | `ashare_price_limit` / AkShare / 免费 | 1 / 1 | 无 | Bootstrap 已完成；当前用前收盘价和板块规则推算，特殊规则需后续补 |
 | `announcement_index` | 公告索引 | `akshare_announcement_index` 默认启用；`cninfo_announcement_list`、`sse_announcement_list`、`szse_announcement_list`、`bse_announcement_list` 可手动运行 / 免费 | 5 / 5，默认启用 1 个 | CNINFO/SSE/SZSE/BSE 默认不随 `run-enabled` 运行 | Bootstrap 已完成；官方索引源已可手动对账，PDF/detail 下载仍未开发 |
 | `policy_regulatory_doc` | 政策/监管文档或新闻 | `akshare_cctv_policy_news` 默认启用；`csrc_policy_news`、`gov_cn_policy`、`pbc_policy_news` 可手动运行 / 免费 | 4 / 4，默认启用 1 个 | CSRC/gov.cn/PBC 默认不随 `run-enabled` 运行 | Bootstrap 已完成；官方列表源已可手动对账，详情页/附件下载仍未开发 |
-| `commodity_daily` | 商品期货日频 | `akshare_commodity_daily` 默认启用；`shfe_daily_commodity`、`czce_daily_commodity`、`gfex_daily_commodity` 可手动运行 / 免费 | 4 / 5，默认启用 1 个 | SHFE/CZCE/GFEX 默认不随 `run-enabled` 运行；DCE 端点当前 HTTP 412 | Bootstrap 已完成；已开始交易所官方日频源对账 |
-| `global_market_daily` | 全球市场日频 | `akshare_global_market_daily` / AkShare / 免费 | 1 / 3 | Stooq、Yahoo Finance | Bootstrap 已完成；shadow/supplemental 源仍未开发 |
+| `commodity_daily` | 商品期货日频 | `akshare_commodity_daily` 默认启用；`shfe_daily_commodity`、`czce_daily_commodity`、`gfex_daily_commodity` 可手动运行；`dce_daily_commodity` 已有实现但当前访问阻塞 / 免费 | 4 / 5 当前可运行，默认启用 1 个 | SHFE/DCE/CZCE/GFEX 默认不随 `run-enabled` 运行；DCE 端点当前 HTTP 412 | Bootstrap 已完成；已开始交易所官方日频源对账 |
+| `global_market_daily` | 全球市场日频 | `akshare_global_market_daily` 默认启用；`yahoo_finance_global_daily` 可手动低量运行 / 免费公开网站 | 2 / 3，默认启用 1 个 | Stooq 需 apikey；Yahoo Finance 默认不随 `run-enabled` 运行 | Bootstrap 已完成；已开始 shadow/supplemental 对账能力 |
 
 ### P1 数据集覆盖
 
@@ -179,7 +179,7 @@ AkShare 现在的定位是 bootstrap 主源：先把采集框架、raw append-on
 
 未完成事项主要集中在“生产级数据可靠性”和“高成本 P2 数据”，不是采集框架骨架本身：
 
-- 官方/影子源：BaoStock 日线 shadow connector、CNINFO/SSE/SZSE/BSE 公告索引 connector、CSRC/gov.cn/PBC 政策监管列表 connector、SHFE/CZCE/GFEX 商品日频 connector 已实现但默认不启用；DCE、Stooq/Yahoo 仍未开发 connector。
+- 官方/影子源：BaoStock 日线 shadow connector、CNINFO/SSE/SZSE/BSE 公告索引 connector、CSRC/gov.cn/PBC 政策监管列表 connector、SHFE/DCE/CZCE/GFEX 商品日频 connector、Yahoo Finance 全球市场日频 connector 已实现但默认不启用；DCE 真实访问仍被 HTTP 412 阻塞，Stooq 仍需官方 apikey。
 - 跨源对账：P0 高风险数据集还缺真实 counterparty source，当前只能报告 `missing_counterparty_source`，不能完成字段级差异对账。
 - 覆盖范围：许多 bootstrap connector 默认只采样少量 symbol、少量 board 或少量 item，尚未扩大到全市场稳定采集。
 - PIT 口径：财务、基金持仓、公告、研报和新闻的真实披露时间、修订版本和回溯修正还需要官方源或付费源验证。
@@ -204,6 +204,7 @@ pitlake run-source --source-id pbc_policy_news --manifest-date 2026-04-27
 pitlake run-source --source-id shfe_daily_commodity --end-date 20260424 --manifest-date 2026-04-27
 pitlake run-source --source-id czce_daily_commodity --end-date 20260424 --manifest-date 2026-04-27
 pitlake run-source --source-id gfex_daily_commodity --end-date 20260424 --manifest-date 2026-04-27
+pitlake run-source --source-id yahoo_finance_global_daily --end-date 20260424 --limit-symbols 1 --manifest-date 2026-04-27
 pitlake run-enabled --start-date 20260424 --end-date 20260424 --limit-symbols 3 --manifest-date 2026-04-26
 pitlake quality-report --date 2026-04-26
 pitlake reconcile --date 2026-04-26

@@ -77,7 +77,11 @@ P0 的长期生产级完成条件仍是：
 
 `czce_daily_commodity` 已实现为 `commodity_daily` 的郑商所官方公开日频 connector，但默认仍保持 `enabled: false`。它使用 CZCE `/cn/DFSStaticFiles/Future/YYYY/YYYYMMDD/FutureDataDaily.txt` 静态文本文件保存交易所 raw TXT 和合约级日频字段。
 
-`gfex_daily_commodity` 已实现为 `commodity_daily` 的广期所官方公开日频 connector，但默认仍保持 `enabled: false`。它使用 GFEX `/u/interfacesWebTiDayQuotes/loadList` JSON 接口保存交易所 raw JSON 和合约级日频字段。DCE 官方 `publicweb/quotesdata/dayQuotesCh.html` 当前在本环境返回 HTTP 412，先标记为 blocked planned，不绕过来源控制。
+`gfex_daily_commodity` 已实现为 `commodity_daily` 的广期所官方公开日频 connector，但默认仍保持 `enabled: false`。它使用 GFEX `/u/interfacesWebTiDayQuotes/loadList` JSON 接口保存交易所 raw JSON 和合约级日频字段。
+
+`dce_daily_commodity` 已有 DCE `publicweb/quotesdata/dayQuotesCh.html` 公开日行情 connector 实现和解析测试，但当前真实请求在本环境返回 HTTP 412，因此仍保持 `enabled: false` 和 `planned_blocked_source_response`。不绕过来源控制；只有确认官方可访问路径后才进入手动观察或 active shadow。
+
+`yahoo_finance_global_daily` 已实现为 `global_market_daily` 的低量 shadow connector，但默认仍保持 `enabled: false`。它用于补充 `akshare_global_market_daily` 的全球市场日频对账候选；Yahoo Finance 的使用条款和 raw 存储边界需继续谨慎确认，因此不进入默认 `run-enabled`。
 
 ## P1 交付边界
 
@@ -209,7 +213,7 @@ raw 数据只追加不覆盖；不得修改历史 raw 文件或伪造更早的 `
 生产级数据湖仍未完成，主要缺口是：
 
 ```text
-免费 shadow/official source connector：BaoStock 日线 shadow、CNINFO/SSE/SZSE/BSE 公告索引、CSRC/gov.cn/PBC 政策监管列表、SHFE/CZCE/GFEX 商品日频已实现但默认不启用；DCE、Stooq/Yahoo 仍未开发；
+免费 shadow/official source connector：BaoStock 日线 shadow、CNINFO/SSE/SZSE/BSE 公告索引、CSRC/gov.cn/PBC 政策监管列表、SHFE/DCE/CZCE/GFEX 商品日频、Yahoo Finance 全球市场日频已实现但默认不启用；DCE 当前真实访问被 HTTP 412 阻塞，Stooq 仍需官方 apikey；
 高风险 P0 数据集的真实跨源对账；
 默认采样范围从少量 symbol/board/item 扩大到稳定全市场或明确覆盖范围；
 财务、基金、公告、新闻、研报等数据的真实披露时间和修订版本验证；
