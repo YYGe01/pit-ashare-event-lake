@@ -14,10 +14,13 @@ from pitlake.storage.metadata_store import MetadataStore
 from pitlake.utils import compact_timestamp, isoformat, sha256_json, write_json
 
 DEFAULT_RECONCILIATION_DATASETS = [
+    "market_daily_ohlcv",
     "adjustment_factor",
     "price_limit",
     "announcement_index",
     "policy_regulatory_doc",
+    "commodity_daily",
+    "global_market_daily",
 ]
 
 NUMERIC_TOLERANCE = 0.0001
@@ -125,10 +128,7 @@ class ReconciliationReportStore:
         counterpart_sources = sorted(
             source["source_id"]
             for source in configured_sources
-            if not source.get("enabled")
-            and str(source.get("implementation_status", "")).startswith(
-                ("planned", "planned_shadow", "planned_supplemental")
-            )
+            if not source.get("enabled") and self._is_counterparty_candidate(source)
         )
         findings: list[dict[str, Any]] = []
         if len(active_sources) < 2:
@@ -190,10 +190,25 @@ class ReconciliationReportStore:
 
     def _identity_key(self, logical_dataset: str, item: dict[str, Any]) -> str:
         payload = item["observed_payload"]
-        if logical_dataset in {"adjustment_factor", "price_limit"}:
+        if logical_dataset in {"market_daily_ohlcv", "adjustment_factor", "price_limit"}:
             return sha256_json(
                 {
                     "instrument": payload.get("instrument"),
+                    "trading_date": payload.get("trading_date"),
+                }
+            )
+        if logical_dataset == "commodity_daily":
+            return sha256_json(
+                {
+                    "exchange": payload.get("exchange"),
+                    "contract": payload.get("contract"),
+                    "trading_date": payload.get("trading_date"),
+                }
+            )
+        if logical_dataset == "global_market_daily":
+            return sha256_json(
+                {
+                    "symbol": payload.get("symbol"),
                     "trading_date": payload.get("trading_date"),
                 }
             )
@@ -216,10 +231,22 @@ class ReconciliationReportStore:
 
     def _compare_group(self, logical_dataset: str, group: list[dict[str, Any]]) -> list[dict[str, Any]]:
         fields = {
+            "market_daily_ohlcv": ["open", "high", "low", "close", "volume", "amount"],
             "adjustment_factor": ["adj_factor", "factor_type"],
             "price_limit": ["prev_close", "limit_up", "limit_down", "limit_rule"],
-            "announcement_index": ["source_url", "category"],
-            "policy_regulatory_doc": ["source_url", "source_department", "category"],
+            "announcement_index": [],
+            "policy_regulatory_doc": [],
+            "commodity_daily": [
+                "open",
+                "high",
+                "low",
+                "close",
+                "settlement",
+                "prev_settlement",
+                "volume",
+                "open_interest",
+            ],
+            "global_market_daily": ["open", "high", "low", "close", "currency", "timezone"],
         }.get(logical_dataset, [])
         baseline = group[0]["observed_payload"]
         mismatches = []
@@ -248,6 +275,10 @@ class ReconciliationReportStore:
 
     def _normalized_title(self, value: Any) -> str:
         return " ".join(str(value or "").split()).casefold()
+
+    def _is_counterparty_candidate(self, source: dict[str, Any]) -> bool:
+        status = str(source.get("implementation_status", ""))
+        return status.startswith(("active", "planned"))
 
     def _status(self, findings: list[dict[str, Any]]) -> str:
         if any(finding["severity"] == "critical" for finding in findings):

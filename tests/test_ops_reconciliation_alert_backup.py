@@ -34,7 +34,25 @@ sources:
     auth_type: none
     priority: P0
     enabled: false
-    implementation_status: planned_shadow
+    implementation_status: active_shadow
+  - source_id: primary_market_daily
+    provider_id: primary
+    logical_dataset: market_daily_ohlcv
+    source_type: python_api
+    access_method: test
+    auth_type: none
+    priority: P0
+    enabled: true
+    implementation_status: active_v0
+  - source_id: shadow_market_daily
+    provider_id: shadow
+    logical_dataset: market_daily_ohlcv
+    source_type: python_api
+    access_method: test
+    auth_type: none
+    priority: P0
+    enabled: false
+    implementation_status: active_shadow
 """,
         encoding="utf-8",
     )
@@ -87,6 +105,38 @@ def test_reconciliation_reports_missing_counterparty_and_value_mismatch(tmp_path
     assert report["datasets"][0]["compared_group_count"] == 1
     assert report["datasets"][0]["mismatched_group_count"] == 1
     assert (settings.data_lake_root / report["report_path"]).exists()
+
+
+def test_reconciliation_compares_market_daily_ohlcv(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    LakeLayout(settings).create()
+    metadata = MetadataStore(settings)
+    metadata.init_schema()
+    first_raw = _insert_market_daily_item(
+        settings,
+        metadata,
+        source_id="primary_market_daily",
+        provider_id="primary",
+        close=10.2,
+    )
+    _insert_market_daily_item(
+        settings,
+        metadata,
+        source_id="shadow_market_daily",
+        provider_id="shadow",
+        close=10.3,
+    )
+
+    report = ReconciliationReportStore(settings).generate_daily_report(
+        report_date=first_raw.stored_at[:10],
+        metadata_store=metadata,
+        datasets=["market_daily_ohlcv"],
+    )
+
+    assert report["status"] == "fail"
+    assert report["datasets"][0]["compared_group_count"] == 1
+    assert report["datasets"][0]["mismatched_group_count"] == 1
+    assert report["findings"][0]["mismatches"][0]["field"] == "close"
 
 
 def test_alert_and_backup_write_operational_artifacts(tmp_path: Path) -> None:
@@ -168,6 +218,57 @@ def _insert_price_limit_item(
             "limit_up": limit_up,
             "limit_down": limit_down,
             "limit_rule": "main_board_normal_10pct_v0_inferred",
+        },
+    )
+    metadata.finish_run(run_id, status="success", request_count=1, success_count=1)
+    return raw
+
+
+def _insert_market_daily_item(
+    settings: ProjectSettings,
+    metadata: MetadataStore,
+    *,
+    source_id: str,
+    provider_id: str,
+    close: float,
+):
+    run_id = metadata.create_run(
+        source_id=source_id,
+        provider_id=provider_id,
+        logical_dataset="market_daily_ohlcv",
+        connector_name="TestConnector",
+        connector_version="0.1.0",
+        trigger_type="manual",
+    )
+    raw = RawStore(settings).put_json(
+        source_id=source_id,
+        provider_id=provider_id,
+        logical_dataset="market_daily_ohlcv",
+        payload={"source": source_id},
+        run_id=run_id,
+        filename_prefix=source_id,
+    )
+    metadata.insert_raw_object(raw)
+    metadata.insert_raw_item_version(
+        logical_dataset="market_daily_ohlcv",
+        provider_id=provider_id,
+        source_id=source_id,
+        source_item_key=f"{provider_id}:000001:2026-04-24",
+        first_seen_at=raw.first_seen_at,
+        stored_at=raw.stored_at,
+        raw_object_id=raw.raw_object_id,
+        content_hash=raw.content_hash,
+        dedup_hash="000001:2026-04-24",
+        quality_status="pass",
+        observed_payload={
+            "instrument": "000001",
+            "trading_date": "2026-04-24",
+            "open": 10.0,
+            "high": 10.5,
+            "low": 9.8,
+            "close": close,
+            "volume": 1000,
+            "amount": 10200.0,
         },
     )
     metadata.finish_run(run_id, status="success", request_count=1, success_count=1)

@@ -223,7 +223,7 @@ pitlake backup
 - 下游解析、事件抽取、特征、模型和回测不写入采集层。
 ## V0 对账、告警和备份
 
-`pitlake reconcile --date YYYY-MM-DD` 生成每日对账报告，默认覆盖 `adjustment_factor`、`price_limit`、`announcement_index` 和 `policy_regulatory_doc`。当前只有一个已采集 source 时，报告会标记 `missing_counterparty_source`；后续启用 shadow/official source 后，同一命令会比较同一观察项的关键字段差异。
+`pitlake reconcile --date YYYY-MM-DD` 生成每日对账报告，默认覆盖 `market_daily_ohlcv`、`adjustment_factor`、`price_limit`、`announcement_index`、`policy_regulatory_doc`、`commodity_daily` 和 `global_market_daily`。当前只有一个已采集 source 时，报告会标记 `missing_counterparty_source`；后续启用 shadow/official source 后，同一命令会比较同一观察项的关键字段差异。
 
 ```powershell
 pitlake reconcile --date 2026-04-26

@@ -200,7 +200,7 @@ raw 数据只追加不覆盖；不得修改历史 raw 文件或伪造更早的 `
 
 当前告警默认写本地 JSONL；如需外部通知，使用环境变量或命令参数传入 webhook，不写入 git。
 
-对账当前先覆盖高风险 P0 数据集。只有单一 bootstrap source 时，报告会标记缺少 counterparty；启用 shadow/official source 后，再按同一 observation identity 比较关键字段。
+对账当前先覆盖高风险 P0 数据集，包括 `market_daily_ohlcv`、`adjustment_factor`、`price_limit`、`announcement_index`、`policy_regulatory_doc`、`commodity_daily` 和 `global_market_daily`。只有单一 bootstrap source 时，报告会标记缺少 counterparty；启用 shadow/official source 后，再按同一 observation identity 比较关键字段。disabled 的 `active_shadow` source 会作为候选对账源显示，但仍不自动进入 `run-enabled`。
 
 ## 当前未完成事项
 
