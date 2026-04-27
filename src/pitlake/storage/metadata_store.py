@@ -376,6 +376,34 @@ class MetadataStore:
                 ],
             )
 
+    def insert_source_health(self, results: list[Any]) -> None:
+        if not results:
+            return
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                insert into source_health (
+                  health_id, source_id, check_time, status, freshness_minutes,
+                  last_success_time, last_error_time, success_rate_24h, new_items_24h, notes
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        str(uuid4()),
+                        result.source_id,
+                        result.check_time,
+                        result.status,
+                        result.freshness_minutes,
+                        result.last_success_time,
+                        result.last_error_time,
+                        result.success_rate_24h,
+                        result.new_items_24h,
+                        result.notes,
+                    )
+                    for result in results
+                ],
+            )
+
     def insert_manifest(self, manifest: dict[str, Any]) -> None:
         with self.connect() as conn:
             conn.execute(

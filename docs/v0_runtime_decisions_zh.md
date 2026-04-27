@@ -206,9 +206,24 @@ raw 数据只追加不覆盖；不得修改历史 raw 文件或伪造更早的 `
 
 对账当前先覆盖高风险 P0 数据集，包括 `market_daily_ohlcv`、`adjustment_factor`、`price_limit`、`announcement_index`、`policy_regulatory_doc`、`commodity_daily` 和 `global_market_daily`。只有单一 bootstrap source 时，报告会标记缺少 counterparty；启用 shadow/official source 后，再按同一 observation identity 比较关键字段。disabled 的 `active_shadow` source 会作为候选对账源显示，但仍不自动进入 `run-enabled`。
 
+## 质量、健康和重试
+
+`quality-report` 当前除了汇总 `quality_check_result`，还会从 `raw_item_version.observed_payload_json` 生成本地 bootstrap finding：
+
+```text
+dataset contract 必填字段缺口；
+observed payload 未声明字段，作为 schema drift warning；
+OHLC high < low、涨跌停上限不大于下限、应非负字段为负等基础异常值；
+可选 `--strict-coverage`：按 enabled source 和 freshness SLO 检查当天采集覆盖。
+```
+
+`health-report` 当前按 `schedule_policy.yaml` 的 `freshness_slo_minutes` 评估 enabled source 最近成功时间、24 小时成功率和新增 item 数，并把结果写入 SQLite `source_health` 表。它是本地 SLO 入口，不等同于外部运行看板。
+
+`run-source` 和 `run-enabled` 支持 `--max-attempts`、`--retry-backoff-seconds`。当前只重试 connector 未捕获异常；connector 内部已经转成 `RunStats.error_count` 和 source quality result 的错误不会被重复重试。
+
 ## 当前未完成事项
 
-采集层框架当前已经具备本地 bootstrap 闭环：source registry、dataset contract、raw append-only 存储、SQLite metadata、quality result、manifest、quality report、reconciliation、alert 和 backup 入口均已实现。
+采集层框架当前已经具备本地 bootstrap 闭环：source registry、dataset contract、raw append-only 存储、SQLite metadata、quality result、manifest、quality report、source health/SLO、reconciliation、alert、backup 和轻量 retry 入口均已实现。
 
 生产级数据湖仍未完成，主要缺口是：
 
@@ -217,7 +232,7 @@ raw 数据只追加不覆盖；不得修改历史 raw 文件或伪造更早的 `
 高风险 P0 数据集的真实跨源对账；
 默认采样范围从少量 symbol/board/item 扩大到稳定全市场或明确覆盖范围；
 财务、基金、公告、新闻、研报等数据的真实披露时间和修订版本验证；
-字段漂移、覆盖率、缺口、异常值和连续运行 SLO 的质量规则增强；
-外部告警、非本机备份、定时调度、失败重试和运行看板；
+质量规则已具备本地 bootstrap 增强；生产级仍要用 7-30 天连续运行校准覆盖率基线、异常阈值和跨源差异规则；
+外部告警、非本机备份、定时调度和运行看板；
 Level-2、tick、授权全文、供应链、遥感、专业事件库等 P2 高成本数据的授权、预算、容量和 alpha 假设确认。
 ```

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +24,7 @@ class SourceRunResult:
     stats: RunStats
     manifest: dict[str, Any] | None
     error_message: str | None = None
+    attempts: int = 1
 
 
 def load_connector_class(adapter_class: str) -> type[BaseConnector]:
@@ -51,6 +53,8 @@ class ConnectorRunner:
         trigger_type: str = "manual",
         options: dict[str, Any] | None = None,
         generate_manifest: bool = True,
+        max_attempts: int = 1,
+        retry_backoff_seconds: float = 0,
     ) -> SourceRunResult:
         source_config = self.sources.by_id()[source_id]
         contract = self.contracts.by_dataset()[source_config["logical_dataset"]]
@@ -73,14 +77,25 @@ class ConnectorRunner:
             trigger_type=trigger_type,
         )
 
-        try:
-            stats = connector.collect(run_id=run_id, options=options or {})
-            status = "success" if stats.error_count == 0 else "partial"
-            error_message = None
-        except Exception as exc:
-            stats = RunStats(error_count=1)
-            status = "failed"
-            error_message = str(exc)
+        attempts = max(1, int(max_attempts))
+        attempted_count = 0
+        error_messages = []
+        for attempt in range(1, attempts + 1):
+            attempted_count = attempt
+            try:
+                stats = connector.collect(run_id=run_id, options=options or {})
+                status = "success" if stats.error_count == 0 else "partial"
+                error_message = None
+                break
+            except Exception as exc:
+                error_messages.append(f"attempt {attempt}: {exc}")
+                if attempt < attempts:
+                    if retry_backoff_seconds > 0:
+                        time.sleep(float(retry_backoff_seconds))
+                    continue
+                stats = RunStats(error_count=1)
+                status = "failed"
+                error_message = "; ".join(error_messages)
 
         self.metadata_store.finish_run(
             run_id,
@@ -115,5 +130,5 @@ class ConnectorRunner:
             stats=stats,
             manifest=manifest,
             error_message=error_message,
+            attempts=attempted_count,
         )
-

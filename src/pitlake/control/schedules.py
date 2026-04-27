@@ -25,3 +25,5 @@ class SchedulePolicy:
             path=path,
         )
 
+    def by_dataset(self) -> dict[str, dict[str, Any]]:
+        return {str(policy["logical_dataset"]): policy for policy in self.policies}

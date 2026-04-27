@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from pitlake.connectors.runner import ConnectorRunner
 from pitlake.control.registry import SourceRegistry, assert_valid_control_plane, validate_control_plane
 from pitlake.ops.alerts import dispatch_alert
 from pitlake.ops.backup import backup_collection_state
+from pitlake.ops.health import SourceHealthReportStore
 from pitlake.quality.reconciliation import ReconciliationReportStore
 from pitlake.settings import ProjectSettings
 from pitlake.storage.layout import LakeLayout
@@ -80,9 +82,10 @@ def cmd_quality_report(args: argparse.Namespace) -> int:
     report = QualityReportStore(settings).generate_daily_report(
         report_date=args.date,
         metadata_store=metadata,
+        strict_coverage=args.strict_coverage,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0 if report["status"] in {"pass", "fail"} else 1
+    return 0 if report["status"] in {"pass", "warn", "fail"} else 1
 
 
 def cmd_reconcile(args: argparse.Namespace) -> int:
@@ -100,6 +103,22 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["status"] in {"pass", "warn", "fail"} else 1
+
+
+def cmd_health_report(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    LakeLayout(settings).create()
+    metadata = MetadataStore(settings)
+    metadata.init_schema()
+    as_of = datetime.fromisoformat(args.as_of) if args.as_of else None
+    report = SourceHealthReportStore(settings).generate_report(
+        metadata_store=metadata,
+        as_of=as_of,
+        include_disabled=args.include_disabled,
+        write_ledger=not args.no_ledger,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report["status"] in {"pass", "warn"} else 1
 
 
 def cmd_alert(args: argparse.Namespace) -> int:
@@ -225,6 +244,8 @@ def cmd_run_source(args: argparse.Namespace) -> int:
         trigger_type=args.trigger_type,
         options=options,
         generate_manifest=not args.no_manifest,
+        max_attempts=args.max_attempts,
+        retry_backoff_seconds=args.retry_backoff_seconds,
     )
     print(
         json.dumps(
@@ -232,6 +253,7 @@ def cmd_run_source(args: argparse.Namespace) -> int:
                 "status": result.status,
                 "run_id": result.run_id,
                 "source_id": result.source_id,
+                "attempts": result.attempts,
                 "stats": result.stats.__dict__,
                 "manifest_path": result.manifest.get("manifest_path") if result.manifest else None,
                 "error_message": result.error_message,
@@ -264,12 +286,15 @@ def cmd_run_enabled(args: argparse.Namespace) -> int:
             trigger_type=args.trigger_type,
             options=options,
             generate_manifest=False,
+            max_attempts=args.max_attempts,
+            retry_backoff_seconds=args.retry_backoff_seconds,
         )
         results.append(
             {
                 "status": result.status,
                 "run_id": result.run_id,
                 "source_id": result.source_id,
+                "attempts": result.attempts,
                 "stats": result.stats.__dict__,
                 "error_message": result.error_message,
             }
@@ -311,6 +336,11 @@ def build_parser() -> argparse.ArgumentParser:
         "quality-report", help="Generate a daily local quality report"
     )
     quality_report_parser.add_argument("--date", required=True, help="Report date, e.g. 2026-04-26")
+    quality_report_parser.add_argument(
+        "--strict-coverage",
+        action="store_true",
+        help="Warn/fail when enabled scheduled sources did not collect on the report date",
+    )
     quality_report_parser.set_defaults(func=cmd_quality_report)
 
     reconcile_parser = subparsers.add_parser(
@@ -322,6 +352,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated logical datasets. Defaults to P0 high-risk datasets.",
     )
     reconcile_parser.set_defaults(func=cmd_reconcile)
+
+    health_parser = subparsers.add_parser(
+        "health-report", help="Evaluate local source freshness and success-rate SLOs"
+    )
+    health_parser.add_argument("--as-of", help="ISO timestamp for deterministic checks")
+    health_parser.add_argument("--include-disabled", action="store_true")
+    health_parser.add_argument("--no-ledger", action="store_true")
+    health_parser.set_defaults(func=cmd_health_report)
 
     alert_parser = subparsers.add_parser(
         "alert", help="Write local alert and optionally send webhook notification"
@@ -349,6 +387,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--manifest-date", help="YYYY-MM-DD")
     run_parser.add_argument("--symbols", help="Comma-separated stock symbols")
     run_parser.add_argument("--limit-symbols", type=int)
+    run_parser.add_argument("--max-attempts", type=int, default=1)
+    run_parser.add_argument("--retry-backoff-seconds", type=float, default=0)
     run_parser.add_argument("--no-manifest", action="store_true")
     run_parser.set_defaults(func=cmd_run_source)
 
@@ -360,6 +400,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_enabled_parser.add_argument("--end-date", help="YYYYMMDD or YYYY-MM-DD")
     run_enabled_parser.add_argument("--manifest-date", required=True, help="YYYY-MM-DD")
     run_enabled_parser.add_argument("--limit-symbols", type=int)
+    run_enabled_parser.add_argument("--max-attempts", type=int, default=1)
+    run_enabled_parser.add_argument("--retry-backoff-seconds", type=float, default=0)
     run_enabled_parser.add_argument("--no-manifest", action="store_true")
     run_enabled_parser.set_defaults(func=cmd_run_enabled)
 
