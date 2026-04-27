@@ -221,6 +221,12 @@ OHLC high < low、涨跌停上限不大于下限、应非负字段为负等基�
 
 `run-source` 和 `run-enabled` 支持 `--max-attempts`、`--retry-backoff-seconds`。当前只重试 connector 未捕获异常；connector 内部已经转成 `RunStats.error_count` 和 source quality result 的错误不会被重复重试。
 
+## 本地前端控制台
+
+`pitlake console` / `pitlake ui` 当前提供本地只读 Web 控制台，默认监听 `127.0.0.1:8765`。它直接读取 `pitlake.sqlite`、`source_registry.yaml`、dataset contract、quality report、reconciliation report、manifest 和 raw 文件 metadata，用于查看每日采集健康、dataset/source 状态、运行批次、质量问题、对账问题和 raw 证据链。
+
+控制台属于采集层观测入口，不在本仓库引入研究层、交易逻辑或可写运维操作。第一版不依赖外部前端构建链，使用 Python 标准库 HTTP 服务和静态页面；后续如升级 FastAPI/React，API 语义仍应保持 `source registry -> run ledger -> quality/reconciliation -> raw evidence` 的证据链口径。
+
 ## 当前未完成事项
 
 采集层框架当前已经具备本地 bootstrap 闭环：source registry、dataset contract、raw append-only 存储、SQLite metadata、quality result、manifest、quality report、source health/SLO、reconciliation、alert、backup 和轻量 retry 入口均已实现。
@@ -233,6 +239,6 @@ OHLC high < low、涨跌停上限不大于下限、应非负字段为负等基�
 默认采样范围从少量 symbol/board/item 扩大到稳定全市场或明确覆盖范围；
 财务、基金、公告、新闻、研报等数据的真实披露时间和修订版本验证；
 质量规则已具备本地 bootstrap 增强；生产级仍要用 7-30 天连续运行校准覆盖率基线、异常阈值和跨源差异规则；
-外部告警、非本机备份、定时调度和运行看板；
+外部告警、非本机备份、定时调度和生产级运行看板；
 Level-2、tick、授权全文、供应链、遥感、专业事件库等 P2 高成本数据的授权、预算、容量和 alpha 假设确认。
 ```

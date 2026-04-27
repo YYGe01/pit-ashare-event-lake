@@ -21,6 +21,7 @@ from pitlake.storage.metadata_store import MetadataStore
 from pitlake.storage.raw_store import RawStore
 from pitlake.quality.checks import QualityRunner
 from pitlake.quality.report import QualityReportStore
+from pitlake.ui.server import serve_console
 from pitlake.utils import isoformat, read_json
 
 
@@ -156,6 +157,12 @@ def cmd_backup(args: argparse.Namespace) -> int:
         "skipped": result.skipped,
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_console(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    serve_console(settings, host=args.host, port=args.port)
     return 0
 
 
@@ -375,6 +382,15 @@ def build_parser() -> argparse.ArgumentParser:
     backup_parser.add_argument("--target-dir", help="Backup root; otherwise config/env default")
     backup_parser.add_argument("--include-raw", action="store_true")
     backup_parser.set_defaults(func=cmd_backup)
+
+    console_parser = subparsers.add_parser(
+        "console",
+        aliases=["ui"],
+        help="Serve the local read-only data lake console",
+    )
+    console_parser.add_argument("--host", default="127.0.0.1")
+    console_parser.add_argument("--port", type=int, default=8765)
+    console_parser.set_defaults(func=cmd_console)
 
     smoke_parser = subparsers.add_parser("smoke-run", help="Run a local no-network smoke test")
     smoke_parser.set_defaults(func=cmd_smoke_run)

@@ -36,6 +36,7 @@ pitlake init
 pitlake smoke-run
 pitlake quality-report --date 2026-04-26
 pitlake health-report
+pitlake console
 ```
 
 `smoke-run` 不访问外网，只验证本地 raw 写入、SQLite 元数据账本、质量检查和每日 manifest 生成。
@@ -202,7 +203,7 @@ P2 分两类：低成本 bootstrap source 已启用；高成本或高容量 sour
 | backup | 已完成入口 | 支持备份 metadata、manifest、quality/reconciliation report；外部备份目录和 raw 备份策略需生产运行时确认。 |
 | source health / SLO | 已完成本地入口 | `health-report` 按 `schedule_policy.yaml` 的 freshness SLO 评估 enabled source，并写入 `source_health` 表。 |
 | failure retry | 已完成轻量入口 | `run-source` / `run-enabled` 支持 `--max-attempts` 和 `--retry-backoff-seconds`，用于 connector 未捕获异常重试。 |
-| CLI | 已完成 bootstrap | `validate-config`、`init`、`smoke-run`、`run-source`、`run-enabled`、`quality-report`、`health-report`、`reconcile`、`alert`、`backup` 可用。 |
+| CLI | 已完成 bootstrap | `validate-config`、`init`、`smoke-run`、`run-source`、`run-enabled`、`quality-report`、`health-report`、`reconcile`、`alert`、`backup`、`console`/`ui` 可用。 |
 | 测试 | 已完成 bootstrap | 覆盖核心存储、metadata、manifest、quality、reconciliation、ops 和主要 connector normalization。 |
 
 未完成事项主要集中在“生产级数据可靠性”和“高成本 P2 数据”，不是采集框架骨架本身：
@@ -274,6 +275,13 @@ pitlake quality-report --date 2026-04-26 --strict-coverage
 ```powershell
 pitlake health-report
 pitlake health-report --as-of 2026-04-27T20:00:00+08:00
+```
+
+`pitlake console` 启动本地只读前端控制台，用于查看每日采集健康、dataset/source 状态、运行批次、质量问题、对账结果和 raw 证据链。默认监听 `127.0.0.1:8765`，也可以用别名 `pitlake ui`。
+
+```powershell
+pitlake console
+pitlake console --host 127.0.0.1 --port 8766
 ```
 
 `pitlake reconcile --date YYYY-MM-DD` 生成每日对账报告，默认覆盖 `market_daily_ohlcv`、`adjustment_factor`、`price_limit`、`announcement_index`、`policy_regulatory_doc`、`commodity_daily` 和 `global_market_daily`。当前只有一个已采集 source 时，报告会标记 `missing_counterparty_source`；后续启用 shadow/official source 后，同一命令会比较同一观察项的关键字段差异。

@@ -34,6 +34,9 @@ pitlake = "pitlake.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+pitlake = ["ui/static/*.html", "ui/static/*.css", "ui/static/*.js"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

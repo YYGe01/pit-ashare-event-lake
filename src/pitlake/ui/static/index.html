@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PitLake Console</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>PitLake Console</h1>
+        <p id="subtitle">本地只读数据湖采集控制台</p>
+      </div>
+      <div class="top-actions">
+        <select id="dateSelect" aria-label="选择日期"></select>
+        <button id="refreshBtn" type="button">刷新</button>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="主导航">
+      <button class="tab active" data-view="overview" type="button">今日总览</button>
+      <button class="tab" data-view="datasets" type="button">数据资产</button>
+      <button class="tab" data-view="sources" type="button">Source</button>
+      <button class="tab" data-view="runs" type="button">运行</button>
+      <button class="tab" data-view="quality" type="button">质量</button>
+      <button class="tab" data-view="raw" type="button">Raw</button>
+      <button class="tab" data-view="search" type="button">搜索</button>
+    </nav>
+
+    <main id="app" class="app" tabindex="-1"></main>
+
+    <aside id="drawer" class="drawer" aria-live="polite">
+      <div class="drawer-header">
+        <h2 id="drawerTitle">详情</h2>
+        <button id="drawerClose" type="button" aria-label="关闭详情">关闭</button>
+      </div>
+      <div id="drawerBody" class="drawer-body"></div>
+    </aside>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
