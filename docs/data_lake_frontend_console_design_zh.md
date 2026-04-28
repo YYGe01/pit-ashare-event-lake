@@ -11,8 +11,8 @@
 ```text
 阶段 1 MVP：已完成。
 阶段 2：已完成数据资产目录、dataset 详情、dataset coverage、股票覆盖 drilldown、raw detail、对账中心和 manifest 页面；K 线/复杂图表、watchlist 持久化和全文/PDF viewer 仍未实现。
-阶段 3：已完成只读治理视图第一段，包括 dataset quality score、近 30 天 volume baseline/schema drift 汇总和 source_health 最新状态；issue 状态流转、外部告警入口链接和 UI cache 增量刷新仍未实现。
-阶段 4：仍按后续规划处理，不在当前仓库引入写操作、外部 BI 或研究层逻辑。
+阶段 3：已完成只读治理视图，包括 dataset quality score、近 30 天 volume baseline/schema drift 汇总、source_health 最新状态、只读派生 issue 队列、告警产物位置和 UI cache 状态。可写 issue 状态流转仍因控制台只读边界延后。
+阶段 4：已完成本地只读版本，包括 DuckDB 语义查询提示、Superset/Metabase 连接建议、SQLite LIKE 文档搜索、raw HTML/PDF 元数据预览和 JSON/CSV 导出 API。不在当前仓库启动外部 BI 服务，也不展示未授权全文/PDF 正文。
 ```
 
 当前股票缺失检查只基于 `source_registry.yaml` 的 registry sample symbols 和当天已观测 item。由于还没有统一 security master / stock universe，控制台不能声明全市场股票缺失。
@@ -933,9 +933,9 @@ source_health 写入和展示（已完成基础展示）
 历史基线和 volume anomaly（已完成近 30 天只读基线）
 schema drift 详情页（已完成汇总表，详情页待后续拆分）
 dataset quality score（已完成基础评分）
-issue 状态流转：open / acknowledged / resolved
-外部告警入口链接
-UI cache 增量刷新
+issue 状态流转：已完成只读 open 派生队列；acknowledged / resolved 写入延后
+外部告警入口链接（已显示本地 alerts.jsonl 状态和 webhook 配置口径）
+UI cache 状态展示（已显示直接读取 metadata/report 的当前模式；增量刷新延后）
 ```
 
 验收：
@@ -956,8 +956,8 @@ UI cache 增量刷新
 ```text
 DuckDB semantic views
 Superset/Metabase 连接指南
-SQLite FTS5 文档搜索
-PDF/HTML 文档 viewer
+SQLite LIKE 文档搜索（FTS5 建索引后续再做）
+PDF/HTML 文档 viewer（已做 raw HTML 文本预览和 PDF metadata 预览；嵌入式 PDF viewer 等授权全文后再做）
 导出 CSV/JSON
 ```
 

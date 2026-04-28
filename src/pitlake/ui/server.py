@@ -146,6 +146,18 @@ def _dispatch_api(
         return data.reconciliation(date=date)
     if parts == ["governance"]:
         return data.governance(date=date)
+    if parts == ["phase-status"]:
+        return data.phase_status()
+    if parts == ["tools"]:
+        return data.tools(date=date)
+    if parts == ["export"]:
+        return data.export(
+            kind=_single(query, "kind", "dataset_items") or "dataset_items",
+            output_format=_single(query, "format", "json") or "json",
+            date=date,
+            logical_dataset=_single(query, "logical_dataset"),
+            limit=limit,
+        )
     if parts == ["manifests"]:
         return data.manifests(limit=limit)
     if len(parts) == 2 and parts[0] == "manifests":

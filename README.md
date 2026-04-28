@@ -277,7 +277,7 @@ pitlake health-report
 pitlake health-report --as-of 2026-04-27T20:00:00+08:00
 ```
 
-`pitlake console` 启动本地只读前端控制台，用于查看每日采集健康、source x date 状态矩阵、dataset/source 状态、股票覆盖、运行批次、质量问题、质量治理评分、volume baseline/schema drift、对账结果、manifest 快照和 raw 证据链。默认监听 `127.0.0.1:8765`，也可以用别名 `pitlake ui`。当前股票缺失检查只基于 `source_registry.yaml` 的 registry sample symbols 和当天已观测 item，不声明全市场 universe 缺失。
+`pitlake console` 启动本地只读前端控制台，用于查看每日采集健康、source x date 状态矩阵、dataset/source 状态、股票覆盖、运行批次、质量问题、质量治理评分、只读 issue 队列、volume baseline/schema drift、source health、对账结果、manifest 快照、raw 证据链、阶段状态、BI 连接提示和 JSON/CSV 导出 API。默认监听 `127.0.0.1:8765`，也可以用别名 `pitlake ui`。当前股票缺失检查只基于 `source_registry.yaml` 的 registry sample symbols 和当天已观测 item，不声明全市场 universe 缺失。
 
 ```powershell
 pitlake console

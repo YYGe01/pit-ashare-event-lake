@@ -199,6 +199,29 @@ def test_console_overview_and_drilldown(tmp_path: Path) -> None:
     assert governance["dataset_scores"][0]["logical_dataset"] == "market_daily_ohlcv"
     assert governance["volume_baselines"]
     assert governance["source_health_summary"]["missing_count"] == 1
+    assert governance["phase_status"]["phases"][0]["status"] == "completed"
+    assert governance["issue_summary"]["status_flow"] == "read_only_open_only"
+
+    tools = console.tools(date)
+    assert tools["ui_cache"]["mode"] == "direct_metadata_reads"
+    assert any(target["format"] == "csv" for target in tools["exports"])
+
+    exported_json = console.export(
+        kind="dataset_items",
+        output_format="json",
+        date=date,
+        logical_dataset="market_daily_ohlcv",
+    )
+    assert exported_json["row_count"] == 1
+    assert exported_json["rows"][0]["payload_instrument"] == "000001"
+
+    exported_csv = console.export(
+        kind="dataset_items",
+        output_format="csv",
+        date=date,
+        logical_dataset="market_daily_ohlcv",
+    )
+    assert "payload_instrument" in exported_csv["csv"]
 
 
 def test_console_governance_flags_volume_and_schema_drift(tmp_path: Path) -> None:

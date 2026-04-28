@@ -96,6 +96,7 @@ function switchView(view, options = {}) {
     raw: renderRaw,
     manifests: renderManifests,
     search: renderSearch,
+    tools: renderTools,
   };
   renderers[view]();
 }
@@ -276,6 +277,18 @@ async function renderGovernance() {
         ["run_count", "runs"],
         ["factors", "factors", (row) => listText(row.factors)],
       ])}
+      <h3>Issue 状态</h3>
+      <p class="hint">当前为只读派生状态：open / derived_read_only，不在控制台写入确认或关闭状态。</p>
+      ${table(payload.issues, [
+        ["severity", "severity", (row) => statusBadge(row.severity)],
+        ["status", "status", (row) => statusBadge(row.status)],
+        ["kind", "kind"],
+        ["title", "title"],
+        ["logical_dataset", "logical_dataset", (row) => datasetButton(row.logical_dataset)],
+        ["source_id", "source_id", (row) => sourceMaybe(row.source_id)],
+        ["run_id", "run", (row) => row.run_id ? actionButton("run", row.run_id, "Run") : ""],
+        ["suggested_action", "suggested_action"],
+      ])}
       <h3>Volume Baseline</h3>
       ${table(payload.volume_baselines, [
         ["status", "status", (row) => statusBadge(row.status)],
@@ -307,6 +320,40 @@ async function renderGovernance() {
         ["last_success_time", "last_success"],
         ["notes", "notes"],
       ])}
+    </section>
+  `;
+}
+
+async function renderTools() {
+  const payload = await api(`/api/tools?date=${state.date}`);
+  app.innerHTML = `
+    <section class="section">
+      <div class="toolbar">
+        <h2>阶段状态和工具</h2>
+        <p>本页只展示本地只读能力、导出入口和外部 BI 连接提示。</p>
+      </div>
+      <h3>四阶段状态</h3>
+      ${table(payload.phase_status.phases, [
+        ["phase", "phase"],
+        ["name", "name"],
+        ["status", "status", (row) => statusBadge(row.status)],
+        ["completed_capabilities", "completed", (row) => listText(row.completed_capabilities)],
+        ["remaining_capabilities", "remaining", (row) => listText(row.remaining_capabilities)],
+      ])}
+      <h3>导出 API</h3>
+      ${table(payload.exports, [
+        ["name", "name"],
+        ["format", "format"],
+        ["endpoint", "endpoint", (row) => `<code>${escapeHtml(row.endpoint)}</code>`],
+      ])}
+      <h3>搜索能力</h3>
+      <pre>${escapeHtml(JSON.stringify(payload.search, null, 2))}</pre>
+      <h3>UI Cache</h3>
+      <pre>${escapeHtml(JSON.stringify(payload.ui_cache, null, 2))}</pre>
+      <h3>告警产物</h3>
+      <pre>${escapeHtml(JSON.stringify(payload.alert_artifacts, null, 2))}</pre>
+      <h3>BI 连接提示</h3>
+      <pre>${escapeHtml(JSON.stringify(payload.bi_guide, null, 2))}</pre>
     </section>
   `;
 }

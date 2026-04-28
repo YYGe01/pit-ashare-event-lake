@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from csv import DictWriter
 from collections import defaultdict
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -484,16 +486,29 @@ class PitLakeConsoleData:
         quality_report = self._latest_quality_report(report_date)
         reconciliation_report = self._latest_reconciliation_report(report_date)
         source_health = self._source_health_rows(overview["sources"])
+        issues = self._governance_issue_rows(
+            overview["issues"],
+            quality_report=quality_report,
+            reconciliation_report=reconciliation_report,
+        )
         return {
             "report_date": report_date,
             "available_dates": overview["available_dates"],
             "quality_report": self._report_meta(quality_report),
             "reconciliation_report": self._report_meta(reconciliation_report),
+            "phase_status": self.phase_status(),
             "dataset_scores": self._dataset_quality_scores(
                 overview["datasets"],
                 quality_report=quality_report,
                 reconciliation_report=reconciliation_report,
             ),
+            "issue_summary": {
+                "open_count": len(issues),
+                "critical_count": sum(1 for row in issues if row["severity"] in {"critical", "fail"}),
+                "warning_count": sum(1 for row in issues if row["severity"] in {"warning", "warn"}),
+                "status_flow": "read_only_open_only",
+            },
+            "issues": issues,
             "volume_baselines": self._volume_baselines(report_date),
             "schema_drift": self._schema_drift_rows(report_date, quality_report),
             "source_health_summary": {
@@ -505,6 +520,199 @@ class PitLakeConsoleData:
             },
             "source_health": source_health,
         }
+
+    def phase_status(self) -> dict[str, Any]:
+        """Return the console roadmap status as a machine-readable payload."""
+
+        return {
+            "phases": [
+                {
+                    "phase": 1,
+                    "name": "采集观测 MVP",
+                    "status": "completed",
+                    "completed_capabilities": [
+                        "overview",
+                        "daily_health",
+                        "source_date_matrix",
+                        "dataset_health_matrix",
+                        "run_detail",
+                        "quality_report_view",
+                        "reconciliation_report_view",
+                    ],
+                    "remaining_capabilities": [],
+                },
+                {
+                    "phase": 2,
+                    "name": "数据资产和股票 drilldown",
+                    "status": "completed",
+                    "completed_capabilities": [
+                        "dataset_catalog",
+                        "dataset_detail",
+                        "dataset_coverage",
+                        "symbol_detail",
+                        "document_feed",
+                        "raw_detail",
+                        "manifest_view",
+                    ],
+                    "remaining_capabilities": [],
+                },
+                {
+                    "phase": 3,
+                    "name": "质量治理增强",
+                    "status": "completed_read_only",
+                    "completed_capabilities": [
+                        "source_health_display",
+                        "volume_baseline",
+                        "schema_drift_summary",
+                        "dataset_quality_score",
+                        "read_only_issue_queue",
+                        "alert_artifact_links",
+                        "ui_cache_status",
+                    ],
+                    "remaining_capabilities": [
+                        "writable_issue_status_flow_deferred_by_read_only_console_scope",
+                    ],
+                },
+                {
+                    "phase": 4,
+                    "name": "可选 BI 和全文能力",
+                    "status": "completed_local_read_only",
+                    "completed_capabilities": [
+                        "duckdb_semantic_view_guide",
+                        "superset_metabase_connection_guide",
+                        "sqlite_like_document_search",
+                        "raw_html_text_preview",
+                        "raw_pdf_metadata_preview",
+                        "json_csv_export_api",
+                    ],
+                    "remaining_capabilities": [
+                        "embedded_pdf_viewer_deferred_until_authorized_fulltext_storage",
+                        "external_bi_server_not_started_by_console",
+                    ],
+                },
+            ],
+            "scope_note": (
+                "PitLake Console remains local and read-only; writable issue transitions, "
+                "external BI services, and licensed full-text rendering are intentionally deferred."
+            ),
+        }
+
+    def tools(self, date: str | None = None) -> dict[str, Any]:
+        report_date = date or self.latest_date()
+        export_targets = [
+            {
+                "name": "dataset_items_json",
+                "format": "json",
+                "endpoint": (
+                    "/api/export?kind=dataset_items&format=json"
+                    f"&date={report_date}&logical_dataset=market_daily_ohlcv"
+                ),
+            },
+            {
+                "name": "dataset_items_csv",
+                "format": "csv",
+                "endpoint": (
+                    "/api/export?kind=dataset_items&format=csv"
+                    f"&date={report_date}&logical_dataset=market_daily_ohlcv"
+                ),
+            },
+            {
+                "name": "raw_objects_csv",
+                "format": "csv",
+                "endpoint": f"/api/export?kind=raw_objects&format=csv&date={report_date}",
+            },
+            {
+                "name": "quality_findings_json",
+                "format": "json",
+                "endpoint": f"/api/export?kind=quality_findings&format=json&date={report_date}",
+            },
+        ]
+        db_path = self.settings.metadata_db.as_posix()
+        return {
+            "report_date": report_date,
+            "phase_status": self.phase_status(),
+            "ui_cache": self._ui_cache_status(),
+            "alert_artifacts": self._alert_artifacts(),
+            "search": {
+                "mode": "sqlite_like_document_search",
+                "endpoint": "/api/search?q=关键词",
+                "searched_fields": [
+                    "source registry",
+                    "logical_dataset labels",
+                    "source_item_key",
+                    "title",
+                    "source_url",
+                    "observed_payload_json",
+                    "run_id",
+                    "raw_object_id",
+                    "content_hash",
+                    "manifest_id",
+                ],
+            },
+            "exports": export_targets,
+            "bi_guide": {
+                "duckdb": [
+                    "install sqlite;",
+                    "load sqlite;",
+                    f"attach '{db_path}' as pitlake (type sqlite);",
+                    "select logical_dataset, count(*) as items from pitlake.raw_item_version group by 1;",
+                ],
+                "superset_or_metabase": (
+                    "Use the local SQLite metadata DB as a read-only source for ledger tables. "
+                    "Keep raw file previews and PIT evidence links in PitLake Console."
+                ),
+            },
+        }
+
+    def export(
+        self,
+        *,
+        kind: str,
+        output_format: str = "json",
+        date: str | None = None,
+        logical_dataset: str | None = None,
+        limit: int = 1000,
+    ) -> dict[str, Any]:
+        report_date = date or self.latest_date()
+        if kind == "dataset_items":
+            rows = self._items(
+                logical_dataset=logical_dataset,
+                date=report_date,
+                limit=limit,
+            )
+            rows = [self._flatten_item_for_export(row) for row in rows]
+        elif kind == "raw_objects":
+            rows = self._raw_objects(
+                date=report_date,
+                logical_dataset=logical_dataset,
+                limit=limit,
+            )
+        elif kind == "quality_findings":
+            rows = self.quality_findings(report_date).get("quality_findings", [])
+        else:
+            return {
+                "status": "error",
+                "message": f"unsupported export kind: {kind}",
+                "supported_kinds": ["dataset_items", "raw_objects", "quality_findings"],
+            }
+
+        payload: dict[str, Any] = {
+            "status": "ok",
+            "kind": kind,
+            "format": output_format,
+            "report_date": report_date,
+            "logical_dataset": logical_dataset,
+            "row_count": len(rows),
+            "rows": rows if output_format == "json" else [],
+        }
+        if output_format == "csv":
+            payload["content_type"] = "text/csv"
+            payload["csv"] = self._rows_to_csv(rows)
+        elif output_format != "json":
+            payload["status"] = "error"
+            payload["message"] = f"unsupported export format: {output_format}"
+            payload["supported_formats"] = ["json", "csv"]
+        return payload
 
     def raw_objects(
         self,
@@ -798,6 +1006,133 @@ class PitLakeConsoleData:
                 }
             )
         return {"query": query, "results": results[:limit]}
+
+    def _governance_issue_rows(
+        self,
+        overview_issues: list[dict[str, Any]],
+        *,
+        quality_report: dict[str, Any] | None,
+        reconciliation_report: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        rows = []
+        for index, issue in enumerate(overview_issues, start=1):
+            rows.append(
+                {
+                    "issue_id": f"overview-{index}",
+                    "status": "open",
+                    "status_source": "derived_read_only",
+                    "severity": issue.get("severity") or "warning",
+                    "kind": issue.get("kind"),
+                    "title": issue.get("title") or issue.get("kind"),
+                    "detail": issue.get("detail"),
+                    "logical_dataset": issue.get("logical_dataset"),
+                    "source_id": issue.get("source_id"),
+                    "run_id": issue.get("run_id"),
+                    "suggested_action": self._suggested_issue_action(issue),
+                }
+            )
+        if quality_report is None:
+            rows.append(
+                {
+                    "issue_id": "quality-report-missing",
+                    "status": "open",
+                    "status_source": "derived_read_only",
+                    "severity": "warning",
+                    "kind": "quality_report_missing",
+                    "title": "Quality report missing",
+                    "detail": "Run pitlake quality-report for this date before relying on quality status.",
+                    "logical_dataset": None,
+                    "source_id": None,
+                    "run_id": None,
+                    "suggested_action": "pitlake quality-report --date YYYY-MM-DD",
+                }
+            )
+        if reconciliation_report is None:
+            rows.append(
+                {
+                    "issue_id": "reconciliation-report-missing",
+                    "status": "open",
+                    "status_source": "derived_read_only",
+                    "severity": "warning",
+                    "kind": "reconciliation_report_missing",
+                    "title": "Reconciliation report missing",
+                    "detail": "Run pitlake reconcile for this date to expose counterparty gaps.",
+                    "logical_dataset": None,
+                    "source_id": None,
+                    "run_id": None,
+                    "suggested_action": "pitlake reconcile --date YYYY-MM-DD",
+                }
+            )
+        return sorted(
+            rows,
+            key=lambda row: (
+                ISSUE_SEVERITY_RANK.get(str(row.get("severity")).lower(), 2),
+                row.get("kind") or "",
+            ),
+        )
+
+    def _suggested_issue_action(self, issue: dict[str, Any]) -> str:
+        kind = str(issue.get("kind") or "")
+        if "source" in kind or issue.get("source_id"):
+            return "open source detail and inspect latest run/raw evidence"
+        if "quality" in kind or "field" in kind or "schema" in kind:
+            return "open quality finding and compare observed payload with dataset contract"
+        if "reconciliation" in kind or "counterparty" in kind:
+            return "open reconciliation report and inspect active/planned counterparty sources"
+        if "manifest" in kind:
+            return "generate or inspect daily manifest"
+        return "inspect linked dataset, run, and raw evidence"
+
+    def _ui_cache_status(self) -> dict[str, Any]:
+        cache_path = self.settings.data_lake_root / "collection" / "ui_cache" / "pitlake_ui.sqlite"
+        return {
+            "status": "present" if cache_path.exists() else "not_configured",
+            "path": cache_path.as_posix(),
+            "mode": "direct_metadata_reads",
+            "note": "Console currently reads SQLite metadata and report JSON directly; cache can be added later.",
+        }
+
+    def _alert_artifacts(self) -> dict[str, Any]:
+        alert_log = self.settings.logs_dir / "alerts.jsonl"
+        return {
+            "status": "present" if alert_log.exists() else "missing",
+            "path": alert_log.as_posix(),
+            "webhook_config": "environment_or_cli_only",
+            "note": "No webhook URL is read from git-tracked files or displayed by the console.",
+        }
+
+    def _flatten_item_for_export(self, row: dict[str, Any]) -> dict[str, Any]:
+        payload = row.get("observed_payload") or {}
+        flattened = {
+            key: value
+            for key, value in row.items()
+            if key not in {"observed_payload", "observed_payload_json"}
+        }
+        for key, value in payload.items():
+            export_key = f"payload_{key}"
+            if isinstance(value, (dict, list)):
+                flattened[export_key] = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            else:
+                flattened[export_key] = value
+        return flattened
+
+    def _rows_to_csv(self, rows: list[dict[str, Any]]) -> str:
+        if not rows:
+            return ""
+        fieldnames = sorted({field for row in rows for field in row})
+        handle = StringIO()
+        writer = DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    field: json.dumps(value, ensure_ascii=False, sort_keys=True)
+                    if isinstance(value, (dict, list))
+                    else value
+                    for field, value in row.items()
+                }
+            )
+        return handle.getvalue()
 
     def _symbol_universe(self, date: str, *, limit: int = 500) -> list[dict[str, Any]]:
         registry_symbols: dict[str, set[str]] = defaultdict(set)
