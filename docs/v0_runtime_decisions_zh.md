@@ -1,6 +1,6 @@
 # V0/P1/P2 运行决策记录
 
-> 更新时间：2026-04-26  
+> 更新时间：2026-04-28  
 > 目的：只记录会影响后续维护和运行的长期决策、边界和口径。具体代码改动、验证流水和下一步事项写入 `docs/agent_journal/`；直接运行命令写入 `README.md`。
 
 ## 文档分工
@@ -61,27 +61,27 @@ P0 的长期生产级完成条件仍是：
 
 “AkShare 已覆盖某类数据”只表示当前有最小可运行采集入口，不表示完整、权威或生产级覆盖。例如 `akshare_announcement_index` 只保存公告列表/索引元数据，不等同于 CNINFO/交易所公告全文、PDF 和附件归档；`akshare_commodity_daily` 只保存商品期货日频样例，不等同于 SHFE/DCE/CZCE/GFEX 官方结算文件和全品种全合约覆盖。
 
-`baostock_market_daily_shadow` 已实现为 `market_daily_ohlcv` 的免费 shadow/fallback connector，但默认仍保持 `enabled: false`。使用者可通过 `pitlake run-source --source-id baostock_market_daily_shadow ...` 手动观察稳定性和字段口径；在连续运行和对账结果稳定前，不纳入默认 `run-enabled` 主流程。
+`baostock_market_daily_shadow` 已实现为 `market_daily_ohlcv` 的免费 shadow/fallback connector，并已低量启用进入 `run-enabled`。默认仍只采 registry sample symbols，用于在前端控制台和 reconciliation 中观察与 AkShare 日线的字段差异、空数据和重复采集。
 
-`cninfo_announcement_list` 已实现为 `announcement_index` 的官方公开索引 connector，但默认仍保持 `enabled: false`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；使用者可通过 `pitlake run-source --source-id cninfo_announcement_list ...` 手动观察分页、限频、字段漂移和与 AkShare 公告索引的差异。
+`cninfo_announcement_list` 已实现为 `announcement_index` 的官方公开索引 connector，并已低量启用进入 `run-enabled`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；先通过前端控制台观察分页、限频、字段漂移和与 AkShare 公告索引的差异。
 
-`sse_announcement_list` 已实现为 `announcement_index` 的上交所官方公开索引 connector，但默认仍保持 `enabled: false`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；使用者可通过 `pitlake run-source --source-id sse_announcement_list ...` 手动观察分页、限频、字段漂移和与 AkShare/CNINFO 公告索引的差异。
+`sse_announcement_list` 已实现为 `announcement_index` 的上交所官方公开索引 connector，并已低量启用进入 `run-enabled`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；先观察分页、限频、字段漂移和与 AkShare/CNINFO 公告索引的差异。
 
-`szse_announcement_list` 已实现为 `announcement_index` 的深交所官方公开索引 connector，但默认仍保持 `enabled: false`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；使用者可通过 `pitlake run-source --source-id szse_announcement_list ...` 手动观察分页、限频、字段漂移和与 AkShare/CNINFO/SSE 公告索引的差异。
+`szse_announcement_list` 已实现为 `announcement_index` 的深交所官方公开索引 connector，并已低量启用进入 `run-enabled`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；先观察分页、限频、字段漂移和与 AkShare/CNINFO/SSE 公告索引的差异。
 
-`bse_announcement_list` 已实现为 `announcement_index` 的北交所官方公开索引 connector，但默认仍保持 `enabled: false`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；使用者可通过 `pitlake run-source --source-id bse_announcement_list ...` 手动观察分页、限频、字段漂移和与 AkShare/CNINFO/SSE/SZSE 公告索引的差异。
+`bse_announcement_list` 已实现为 `announcement_index` 的北交所官方公开索引 connector，并已低量启用进入 `run-enabled`。它只保存列表元数据和 PDF URL，不下载 PDF、附件或详情页；先观察分页、限频、字段漂移和与 AkShare/CNINFO/SSE/SZSE 公告索引的差异。
 
-`csrc_policy_news`、`gov_cn_policy`、`pbc_policy_news` 已实现为 `policy_regulatory_doc` 的官方公开列表 connector，但默认仍保持 `enabled: false`。它们只保存列表页 raw HTML 和索引元数据，不下载详情页、附件或正文；使用者可通过 `pitlake run-source --source-id csrc_policy_news ...`、`pitlake run-source --source-id gov_cn_policy ...`、`pitlake run-source --source-id pbc_policy_news ...` 手动观察栏目结构、发布日期口径、分页和与 AkShare CCTV bootstrap 源的差异。
+`csrc_policy_news`、`gov_cn_policy`、`pbc_policy_news` 已实现为 `policy_regulatory_doc` 的官方公开列表 connector，并已低量启用进入 `run-enabled`。它们只保存列表页 raw HTML 和索引元数据，不下载详情页、附件或正文；先观察栏目结构、发布日期口径、分页和与 AkShare CCTV bootstrap 源的差异。
 
-`shfe_daily_commodity` 已实现为 `commodity_daily` 的上期所官方公开日频 connector，但默认仍保持 `enabled: false`。它使用 SHFE `/data/tradedata/future/dailydata/kxYYYYMMDD.dat` JSON 接口保存交易所 raw JSON 和合约级日频字段；使用者可通过 `pitlake run-source --source-id shfe_daily_commodity --end-date YYYYMMDD ...` 手动观察发布时间、字段口径、非交易日行为和与 AkShare 商品样例源的差异。
+`shfe_daily_commodity` 已实现为 `commodity_daily` 的上期所官方公开日频 connector，并已低量启用进入 `run-enabled`。它使用 SHFE `/data/tradedata/future/dailydata/kxYYYYMMDD.dat` JSON 接口保存交易所 raw JSON 和合约级日频字段；先观察发布时间、字段口径、非交易日行为和与 AkShare 商品样例源的差异。
 
-`czce_daily_commodity` 已实现为 `commodity_daily` 的郑商所官方公开日频 connector，但默认仍保持 `enabled: false`。它使用 CZCE `/cn/DFSStaticFiles/Future/YYYY/YYYYMMDD/FutureDataDaily.txt` 静态文本文件保存交易所 raw TXT 和合约级日频字段。
+`czce_daily_commodity` 已实现为 `commodity_daily` 的郑商所官方公开日频 connector，并已低量启用进入 `run-enabled`。它使用 CZCE `/cn/DFSStaticFiles/Future/YYYY/YYYYMMDD/FutureDataDaily.txt` 静态文本文件保存交易所 raw TXT 和合约级日频字段。
 
-`gfex_daily_commodity` 已实现为 `commodity_daily` 的广期所官方公开日频 connector，但默认仍保持 `enabled: false`。它使用 GFEX `/u/interfacesWebTiDayQuotes/loadList` JSON 接口保存交易所 raw JSON 和合约级日频字段。
+`gfex_daily_commodity` 已实现为 `commodity_daily` 的广期所官方公开日频 connector，并已低量启用进入 `run-enabled`。它使用 GFEX `/u/interfacesWebTiDayQuotes/loadList` JSON 接口保存交易所 raw JSON 和合约级日频字段。
 
 `dce_daily_commodity` 已有 DCE `publicweb/quotesdata/dayQuotesCh.html` 公开日行情 connector 实现和解析测试，但当前真实请求在本环境返回 HTTP 412，因此仍保持 `enabled: false` 和 `planned_blocked_source_response`。不绕过来源控制；只有确认官方可访问路径后才进入手动观察或 active shadow。
 
-`yahoo_finance_global_daily` 已实现为 `global_market_daily` 的低量 shadow connector，但默认仍保持 `enabled: false`。它用于补充 `akshare_global_market_daily` 的全球市场日频对账候选；Yahoo Finance 的使用条款和 raw 存储边界需继续谨慎确认，因此不进入默认 `run-enabled`。
+`yahoo_finance_global_daily` 已实现为 `global_market_daily` 的低量 shadow connector，并已低量启用进入 `run-enabled`。它用于补充 `akshare_global_market_daily` 的全球市场日频对账候选；Yahoo Finance 的使用条款和 raw 存储边界需继续谨慎确认，因此默认样本保持极小，不做大规模 raw 保存。
 
 ## P1 交付边界
 
@@ -204,7 +204,7 @@ raw 数据只追加不覆盖；不得修改历史 raw 文件或伪造更早的 `
 
 当前告警默认写本地 JSONL；如需外部通知，使用环境变量或命令参数传入 webhook，不写入 git。
 
-对账当前先覆盖高风险 P0 数据集，包括 `market_daily_ohlcv`、`adjustment_factor`、`price_limit`、`announcement_index`、`policy_regulatory_doc`、`commodity_daily` 和 `global_market_daily`。只有单一 bootstrap source 时，报告会标记缺少 counterparty；启用 shadow/official source 后，再按同一 observation identity 比较关键字段。disabled 的 `active_shadow` source 会作为候选对账源显示，但仍不自动进入 `run-enabled`。
+对账当前先覆盖高风险 P0 数据集，包括 `market_daily_ohlcv`、`adjustment_factor`、`price_limit`、`announcement_index`、`policy_regulatory_doc`、`commodity_daily` 和 `global_market_daily`。低量 shadow/official source 已进入 `run-enabled`；同一天多个 source 采到同一观察项时，报告会按 observation identity 比较关键字段。仍缺可对账样本或缺独立 counterparty 的数据集会继续标记 `missing_counterparty_source`。
 
 ## 质量、健康和重试
 
@@ -236,8 +236,8 @@ OHLC high < low、涨跌停上限不大于下限、应非负字段为负等基�
 生产级数据湖仍未完成，主要缺口是：
 
 ```text
-免费 shadow/official source connector：BaoStock 日线 shadow、CNINFO/SSE/SZSE/BSE 公告索引、CSRC/gov.cn/PBC 政策监管列表、SHFE/DCE/CZCE/GFEX 商品日频、Yahoo Finance 全球市场日频已实现但默认不启用；DCE 当前真实访问被 HTTP 412 阻塞，Stooq 仍需官方 apikey；
-高风险 P0 数据集的真实跨源对账；
+免费 shadow/official source connector：BaoStock 日线 shadow、CNINFO/SSE/SZSE/BSE 公告索引、CSRC/gov.cn/PBC 政策监管列表、SHFE/CZCE/GFEX 商品日频、Yahoo Finance 全球市场日频已低量启用；DCE 当前真实访问被 HTTP 412 阻塞，Stooq 仍需官方 apikey；
+高风险 P0 数据集的连续真实跨源对账、字段映射校准和差异阈值；
 默认采样范围从少量 symbol/board/item 扩大到稳定全市场或明确覆盖范围；
 财务、基金、公告、新闻、研报等数据的真实披露时间和修订版本验证；
 质量规则已具备本地 bootstrap 增强；生产级仍要用 7-30 天连续运行校准覆盖率基线、异常阈值和跨源差异规则；

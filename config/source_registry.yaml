@@ -59,7 +59,7 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
+    enabled: true
     implementation_status: active_shadow
     adapter_class: pitlake.connectors.market.baostock_daily.BaoStockMarketDailyConnector
     allowed_frequency: "daily post-market, max 3 runs/day"
@@ -74,7 +74,7 @@ sources:
         - "600000"
         - "300750"
       limit_symbols: 3
-    notes: "Implemented shadow/fallback source for market daily cross-checks using BaoStock query_history_k_data_plus. It is disabled by default so run-enabled remains on the AkShare bootstrap path until shadow stability is observed."
+    notes: "Enabled low-volume shadow/fallback source for market daily cross-checks using BaoStock query_history_k_data_plus. Keep default symbols small until stability and field differences are observed in the console."
 
   - source_id: cninfo_announcement_list
     provider_id: cninfo
@@ -85,7 +85,7 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
+    enabled: true
     implementation_status: active_shadow
     adapter_class: pitlake.connectors.announcements.cninfo.CninfoAnnouncementConnector
     allowed_frequency: "1h on trading days, lower if source requires"
@@ -98,7 +98,7 @@ sources:
       page_size: 30
       max_pages: 1
       timeout_seconds: 20
-    notes: "Implemented CNINFO official announcement index source using hisAnnouncement/query. It stores list metadata and PDF URLs only; PDF/detail downloads remain disabled until request policy and storage scope are confirmed."
+    notes: "Enabled low-volume CNINFO official announcement index source using hisAnnouncement/query. It stores list metadata and PDF URLs only; PDF/detail downloads remain disabled until request policy and storage scope are confirmed."
 
   - source_id: akshare_announcement_index
     provider_id: akshare
@@ -130,7 +130,7 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
+    enabled: true
     implementation_status: active_shadow
     adapter_class: pitlake.connectors.announcements.sse.SseAnnouncementConnector
     allowed_frequency: "1h on trading days, lower if source requires"
@@ -143,7 +143,7 @@ sources:
       page_size: 25
       max_pages: 1
       timeout_seconds: 20
-    notes: "Implemented SSE official announcement index source using queryCompanyBulletin.do. It stores list metadata and PDF URLs only; PDF/detail downloads remain disabled until request policy and storage scope are confirmed."
+    notes: "Enabled low-volume SSE official announcement index source using queryCompanyBulletin.do. It stores list metadata and PDF URLs only; PDF/detail downloads remain disabled until request policy and storage scope are confirmed."
 
   - source_id: szse_announcement_list
     provider_id: szse
@@ -154,7 +154,7 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
+    enabled: true
     implementation_status: active_shadow
     adapter_class: pitlake.connectors.announcements.szse.SzseAnnouncementConnector
     allowed_frequency: "1h on trading days, lower if source requires"
@@ -167,7 +167,7 @@ sources:
       page_size: 30
       max_pages: 1
       timeout_seconds: 20
-    notes: "Implemented SZSE official announcement index source using announcement/annList. It stores list metadata and PDF URLs only; PDF/detail downloads remain disabled until request policy and storage scope are confirmed."
+    notes: "Enabled low-volume SZSE official announcement index source using announcement/annList. It stores list metadata and PDF URLs only; PDF/detail downloads remain disabled until request policy and storage scope are confirmed."
 
   - source_id: bse_announcement_list
     provider_id: bse
@@ -178,7 +178,7 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
+    enabled: true
     implementation_status: active_shadow
     adapter_class: pitlake.connectors.announcements.bse.BseAnnouncementConnector
     allowed_frequency: "1h on trading days, lower if source requires"
@@ -191,7 +191,7 @@ sources:
       market_layer: "2"
       max_pages: 1
       timeout_seconds: 20
-    notes: "Implemented BSE official announcement index source using companyAnnouncement.do JSONP. It stores list metadata and PDF URLs only; PDF/detail downloads remain disabled until request policy and storage scope are confirmed."
+    notes: "Enabled low-volume BSE official announcement index source using companyAnnouncement.do JSONP. It stores list metadata and PDF URLs only; PDF/detail downloads remain disabled until request policy and storage scope are confirmed."
 
   - source_id: csrc_policy_news
     provider_id: csrc
@@ -202,7 +202,7 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
+    enabled: true
     implementation_status: active_shadow
     adapter_class: pitlake.connectors.policy.csrc.CsrcPolicyConnector
     allowed_frequency: "2-4 runs/day"
@@ -215,7 +215,7 @@ sources:
       category: csrc_news_policy_regulatory
       limit_items: 20
       timeout_seconds: 20
-    notes: "Implemented CSRC official policy/regulatory index source. It stores raw list HTML and index metadata only; detail page and attachment downloads remain disabled until parsing scope and request policy are confirmed."
+    notes: "Enabled low-volume CSRC official policy/regulatory index source. It stores raw list HTML and index metadata only; detail page and attachment downloads remain disabled until parsing scope and request policy are confirmed."
 
   - source_id: akshare_cctv_policy_news
     provider_id: akshare
@@ -246,7 +246,7 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
+    enabled: true
     implementation_status: active_shadow
     adapter_class: pitlake.connectors.policy.gov_cn.GovCnPolicyConnector
     allowed_frequency: "1-4 runs/day"
@@ -259,7 +259,7 @@ sources:
       category: central_policy
       limit_items: 20
       timeout_seconds: 20
-    notes: "Implemented central policy index source. It stores raw list HTML and index metadata only; detail page and attachment downloads remain disabled until parsing scope and request policy are confirmed."
+    notes: "Enabled low-volume central policy index source. It stores raw list HTML and index metadata only; detail page and attachment downloads remain disabled until parsing scope and request policy are confirmed."
 
   - source_id: pbc_policy_news
     provider_id: pbc
@@ -270,7 +270,7 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
+    enabled: true
     implementation_status: active_shadow
     adapter_class: pitlake.connectors.policy.pbc.PbcPolicyConnector
     allowed_frequency: "1-4 runs/day"
@@ -283,7 +283,7 @@ sources:
       category: monetary_policy_news
       limit_items: 20
       timeout_seconds: 20
-    notes: "Implemented PBC official policy/news index source. It stores raw list HTML and index metadata only; detail page and attachment downloads remain disabled until parsing scope and request policy are confirmed."
+    notes: "Enabled low-volume PBC official policy/news index source. It stores raw list HTML and index metadata only; detail page and attachment downloads remain disabled until parsing scope and request policy are confirmed."
 
   - source_id: ashare_trading_calendar
     provider_id: akshare
@@ -362,7 +362,7 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
+    enabled: true
     implementation_status: active_shadow
     adapter_class: pitlake.connectors.commodities.shfe.ShfeDailyConnector
     allowed_frequency: "post-settlement and next-day fallback"
@@ -371,7 +371,7 @@ sources:
     default_options:
       end_date: "20260424"
       timeout_seconds: 20
-    notes: "Implemented SHFE official daily quotation source using /data/tradedata/future/dailydata/kxYYYYMMDD.dat. It stores exchange JSON and normalized contract-level daily rows; DCE/CZCE/GFEX official sources remain planned."
+    notes: "Enabled low-volume SHFE official daily quotation source using /data/tradedata/future/dailydata/kxYYYYMMDD.dat. It stores exchange JSON and normalized contract-level daily rows for console observation and reconciliation."
 
   - source_id: akshare_commodity_daily
     provider_id: akshare
@@ -426,7 +426,7 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
+    enabled: true
     implementation_status: active_shadow
     adapter_class: pitlake.connectors.commodities.czce.CzceDailyConnector
     allowed_frequency: "post-settlement and next-day fallback"
@@ -435,7 +435,7 @@ sources:
     default_options:
       end_date: "20260424"
       timeout_seconds: 20
-    notes: "Implemented CZCE official daily futures source using /cn/DFSStaticFiles/Future/YYYY/YYYYMMDD/FutureDataDaily.txt. It stores exchange text and normalized contract-level daily rows; DCE/GFEX official sources remain planned."
+    notes: "Enabled low-volume CZCE official daily futures source using /cn/DFSStaticFiles/Future/YYYY/YYYYMMDD/FutureDataDaily.txt. It stores exchange text and normalized contract-level daily rows for console observation and reconciliation."
 
   - source_id: gfex_daily_commodity
     provider_id: gfex
@@ -446,7 +446,7 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
+    enabled: true
     implementation_status: active_shadow
     adapter_class: pitlake.connectors.commodities.gfex.GfexDailyConnector
     allowed_frequency: "post-settlement and next-day fallback"
@@ -457,7 +457,7 @@ sources:
       trade_type: "0"
       variety: ""
       timeout_seconds: 20
-    notes: "Implemented GFEX official daily quotation source using /u/interfacesWebTiDayQuotes/loadList. It stores exchange JSON and normalized contract-level daily rows; DCE official source remains planned/blocked by current 412 response."
+    notes: "Enabled low-volume GFEX official daily quotation source using /u/interfacesWebTiDayQuotes/loadList. It stores exchange JSON and normalized contract-level daily rows; DCE official source remains blocked by current 412 response."
 
   - source_id: stooq_global_daily
     provider_id: stooq
@@ -496,7 +496,7 @@ sources:
       symbols:
         - AAPL
       limit_symbols: 1
-    notes: "Bootstrap global market daily source using akshare.stock_us_daily for selected US symbols. Yahoo is implemented as a disabled shadow source; Stooq remains credential-planned."
+    notes: "Bootstrap global market daily source using akshare.stock_us_daily for selected US symbols. Yahoo is enabled as a low-volume shadow source; Stooq remains credential-planned."
 
   - source_id: yahoo_finance_global_daily
     provider_id: yahoo_finance
@@ -507,7 +507,7 @@ sources:
     auth_type: none
     credential_ref: ""
     priority: P0
-    enabled: false
+    enabled: true
     implementation_status: active_shadow
     adapter_class: pitlake.connectors.global_markets.yahoo.YahooFinanceGlobalDailyConnector
     allowed_frequency: "daily after overseas close and morning fallback"
@@ -519,7 +519,7 @@ sources:
         - AAPL
       limit_symbols: 1
       timeout_seconds: 20
-    notes: "Implemented low-volume Yahoo Finance chart metadata shadow source for global_market_daily. Keep disabled by default and use cautiously; confirm terms before storing raw at scale."
+    notes: "Enabled low-volume Yahoo Finance chart metadata shadow source for global_market_daily. Use cautiously and keep raw scope small; confirm terms before storing raw at scale."
 
   - source_id: akshare_financial_indicator
     provider_id: akshare

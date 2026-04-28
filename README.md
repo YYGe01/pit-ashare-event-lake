@@ -43,23 +43,35 @@ pitlake console
 
 ## V0 真实采集
 
-当前已启用九个 P0 bootstrap source：
+当前已启用 21 个 P0 source；`run-enabled` 会同时运行 bootstrap 主源和低量 shadow/official 观测源，前端控制台可直接按 source/date 查看运行、质量和对账状态：
 
 - `akshare_market_daily_ohlcv`：A 股日线 OHLCV，使用 `akshare.stock_zh_a_daily`。
+- `baostock_market_daily_shadow`：A 股日线 OHLCV shadow/fallback，使用 BaoStock `query_history_k_data_plus`。
 - `akshare_adjustment_factor`：A 股复权因子，使用不复权 close 与前复权 close 比值做 V0 推算。
 - `akshare_announcement_index`：A 股公告索引，使用 `akshare.stock_notice_report`。
+- `cninfo_announcement_list`：巨潮资讯公告索引，只保存列表元数据和 PDF URL。
+- `sse_announcement_list`：上交所公告索引，只保存列表元数据和 PDF URL。
+- `szse_announcement_list`：深交所公告索引，只保存列表元数据和 PDF URL。
+- `bse_announcement_list`：北交所公告索引，只保存列表元数据和 PDF URL。
 - `akshare_cctv_policy_news`：政策/宏观新闻，使用 `akshare.news_cctv`。
+- `csrc_policy_news`：证监会官方列表页索引，保存 raw HTML 和索引元数据。
+- `gov_cn_policy`：中国政府网政策列表索引，保存 raw HTML 和索引元数据。
+- `pbc_policy_news`：央行沟通交流列表索引，保存 raw HTML 和索引元数据。
 - `ashare_trading_calendar`：A 股交易日历，使用 `akshare.tool_trade_date_hist_sina`。
 - `ashare_trade_status`：A 股停复牌/交易状态，使用 `akshare.stock_tfp_em`。
 - `ashare_price_limit`：A 股涨跌停价格，使用 `akshare.stock_zh_a_daily` 的前收盘价和板块规则做 V0 推算。
 - `akshare_commodity_daily`：商品期货日频，使用 `akshare.futures_zh_daily_sina`。
+- `shfe_daily_commodity`：上期所官方日行情，保存交易所 JSON 和合约级日频字段。
+- `czce_daily_commodity`：郑商所官方日行情，保存交易所 TXT 和合约级日频字段。
+- `gfex_daily_commodity`：广期所官方日行情，保存交易所 JSON 和合约级日频字段。
 - `akshare_global_market_daily`：全球市场日频样例，使用 `akshare.stock_us_daily`。
+- `yahoo_finance_global_daily`：Yahoo Finance 低量全球市场日频 shadow 源。
 
 ## 数据源覆盖汇总
 
-口径截至 2026-04-26，并与 `config/source_registry.yaml`、`config/provider_registry.yaml` 和 `docs/v0_runtime_decisions_zh.md` 对齐。
+口径截至 2026-04-28，并与 `config/source_registry.yaml`、`config/provider_registry.yaml` 和 `docs/v0_runtime_decisions_zh.md` 对齐。
 
-- 已登记 source 共 47 个：26 个 `enabled: true`，21 个 disabled/planned。
+- 已登记 source 共 47 个：38 个 `enabled: true`，9 个 disabled/planned。
 - 当前 enabled source 全部来自免费、公开或开源数据源，不需要账号或付费凭据。
 - `run-enabled` 只运行 enabled source；disabled/planned source 是后续对账、官方补源或付费授权占位，不代表当前已有可运行爬取方法。
 - 下表“支持源数”格式为“当前可运行 / 已登记总数”。
@@ -71,18 +83,18 @@ pitlake console
 | AkShare | 免费开源库，无凭据 | P0/P1/P2 bootstrap 主力源，覆盖 A 股日线、复权推算、公告索引、政策新闻、商品、全球市场、财务、资金、板块、基金、新闻、热度、分钟线、研报索引和评论聚合 | 已启用，适合作 bootstrap；严肃研究前需要官方源或付费源对账 |
 | GDELT | 免费公开 API，无凭据 | 全球新闻/事件文章元数据摘要 | 已启用，metadata only，不做事件抽取 |
 | Open-Meteo | 免费公开 API，无凭据 | 地点级日频天气观测 | 已启用 |
-| BaoStock | 免费开源库，无凭据 | A 股日线 shadow/fallback | 已实现 connector，但默认不启用；可手动 `run-source` 做 AkShare 日线对账 |
-| CNINFO / SSE / SZSE / BSE | 免费公开网站/交易所 | 公告官方/补充源 | CNINFO、SSE、SZSE、BSE 公告索引 connector 已实现但默认不启用；PDF/detail 下载仍未开发 |
-| CSRC / gov.cn / PBC | 免费公开监管/政府网站 | 政策监管官方源 | 已实现 connector，但默认不启用；可手动 `run-source` 采列表 HTML 和索引元数据 |
-| SHFE / DCE / CZCE / GFEX | 免费公开交易所网站 | 国内商品期货官方结算/日频源 | SHFE、DCE、CZCE、GFEX connector 已实现但默认不启用；DCE 当前官方 publicweb 端点在本环境返回 HTTP 412 |
-| Stooq / Yahoo Finance | 免费公开网站/API | 全球市场日频 shadow/supplemental 候选 | Yahoo Finance connector 已实现但默认不启用；Stooq 当前 CSV 端点要求官方 apikey |
+| BaoStock | 免费开源库，无凭据 | A 股日线 shadow/fallback | 已启用低量 shadow，用于前端观测和 AkShare 日线对账 |
+| CNINFO / SSE / SZSE / BSE | 免费公开网站/交易所 | 公告官方/补充源 | 已启用低量公告索引；PDF/detail/附件下载仍未开发 |
+| CSRC / gov.cn / PBC | 免费公开监管/政府网站 | 政策监管官方源 | 已启用低量官方列表索引，保存 raw HTML 和索引元数据 |
+| SHFE / DCE / CZCE / GFEX | 免费公开交易所网站 | 国内商品期货官方结算/日频源 | SHFE、CZCE、GFEX 已启用低量官方源；DCE 当前官方 publicweb 端点在本环境返回 HTTP 412，保持禁用 |
+| Stooq / Yahoo Finance | 免费公开网站/API | 全球市场日频 shadow/supplemental 候选 | Yahoo Finance 已启用低量 shadow；Stooq 当前 CSV 端点要求官方 apikey |
 | NASA FIRMS | 免费或配额/API key | 遥感/另类观测候选 | 已登记但未启用，需先确认 API key、地理映射和 alpha 假设 |
 | Tushare Pro | 付费或积分/token | 后续 A 股官方化/稳定化补源候选 | 只在 provider registry 预留，当前没有 source |
 | Wind | 付费 vendor | Level-2、tick、后续对账和 fallback | 已登记 P2 planned source，但未启用，需授权和容量评估 |
 | Choice | 付费 vendor | 授权全文、研报/新闻/电话会、供应链关系 | 已登记 P2 planned source，但未启用，需合同确认 |
 | RavenPack | 付费 vendor | 专业结构化事件 feed | 已登记 P2 planned source，但未启用，需授权 |
 
-### “已登记但未启用”的含义
+### Source 状态和低量启用口径
 
 `source_registry.yaml` 里的 source 分三种状态：
 
@@ -90,15 +102,15 @@ pitlake console
 - 已登记但未启用：已经写入 `source_registry.yaml` 作为后续补源、对账或授权占位，但 `enabled: false`，`run-enabled` 不会运行；多数这类 source 当前还没有可运行 connector。
 - 只预留 provider：例如 Tushare Pro，目前只在 `provider_registry.yaml` 里预留厂商和凭据引用，还没有具体 source 配置。
 
-免费源没有直接启用，主要是因为“免费”不等于“已经可稳定采集”。每个 source 启用前都需要明确字段映射、限频、异常处理、raw 保存口径、contract 校验和最小测试；网页类 source 还要处理分页、附件、HTML 结构变化和条款风险。
+本轮已把有 connector、低量默认参数和基础测试的 `active_shadow` 免费/公开源切换为 `enabled: true`，用于 `run-enabled` 后在前端控制台直接观察。默认仍保持小样本、小页数和 metadata-only/raw-index 口径；需要凭据、授权、上游阻塞或 alpha 假设不清的 source 继续保持 disabled。
 
-| 源类别 | 暂不启用原因 |
+| 源类别 | 当前处理口径 |
 | --- | --- |
-| BaoStock | 已实现 A 股日线 shadow connector，但默认不随 `run-enabled` 运行；原因是先保持 AkShare bootstrap 主流程稳定，再用 `run-source` 单独观察 BaoStock 的可用性、字段口径和重复采集表现。 |
-| CNINFO / SSE / SZSE / BSE | CNINFO、SSE、SZSE、BSE 公告索引 connector 已实现，可手动采列表元数据和 PDF URL；默认不随 `run-enabled` 运行，原因是还需要连续观察限频、分页、字段变化和重复采集表现。PDF 下载、附件下载和详情页解析仍未开发。 |
-| CSRC / gov.cn / PBC | CSRC、gov.cn、PBC 官方列表 connector 已实现，可手动采 raw HTML、标题、URL、发布日期、部门和分类；默认不随 `run-enabled` 运行，原因是还需要连续观察栏目结构、日期口径、分页、详情页和附件下载策略。 |
-| SHFE / DCE / CZCE / GFEX | SHFE、DCE、CZCE、GFEX 官方日频 connector 已实现，可手动采交易所 raw JSON/TXT/HTML 和合约日频字段；默认不随 `run-enabled` 运行，原因是还需要连续观察发布时间、字段口径、非交易日和与 AkShare 商品样例的差异。DCE 当前 publicweb 日行情端点在本环境返回 HTTP 412，暂不绕过。 |
-| Stooq / Yahoo Finance | Yahoo Finance 全球市场日频 shadow connector 已实现，可手动低量运行；默认不随 `run-enabled` 运行，原因是 Yahoo Finance 的 raw 存储和使用条款需要谨慎确认。Stooq 当前 CSV 下载端点要求用户通过官方页面/验证码获取 apikey，不能无凭据启用。 |
+| BaoStock | 已启用低量 A 股日线 shadow connector；先通过前端 source matrix、quality 和 reconciliation 连续观察字段口径、空数据和重复采集。 |
+| CNINFO / SSE / SZSE / BSE | 已启用低量公告索引 connector；只保存列表元数据和 PDF URL。PDF 下载、附件下载和详情页解析仍未开发。 |
+| CSRC / gov.cn / PBC | 已启用低量官方列表 connector；只保存列表页 raw HTML、标题、URL、发布日期、部门和分类。详情页、正文和附件下载仍未开发。 |
+| SHFE / DCE / CZCE / GFEX | SHFE、CZCE、GFEX 已启用低量官方日频 connector；DCE 当前 publicweb 日行情端点在本环境返回 HTTP 412，继续禁用且不绕过来源控制。 |
+| Stooq / Yahoo Finance | Yahoo Finance 已启用低量 shadow connector；Stooq 当前 CSV 下载端点要求用户通过官方页面/验证码获取 apikey，不能无凭据启用。 |
 | NASA FIRMS | 可能免费或配额受限，但属于另类/遥感数据；没有 API key/配额、地理映射、采集范围和 alpha 假设前，启用后会产生暂时无法消费的数据。 |
 | Tushare Pro | 目前没有 token，也没有 source 级配置；后续适合作 A 股稳定化、补全或对账源。 |
 | Wind / Choice / RavenPack | 付费授权源，没有合同、凭据、存储权限和容量评估前不能启用，也不能保存未授权全文或高频 raw。 |
@@ -107,8 +119,8 @@ AkShare 现在的定位是 bootstrap 主源：先把采集框架、raw append-on
 
 “当前 AkShare 先覆盖某类数据”表示已经有一个最小可运行采集入口，不表示该类数据已经完整、权威或生产级。例如：
 
-- 公告索引：`akshare_announcement_index` 已能通过 `akshare.stock_notice_report` 保存公告列表/索引元数据，包括标题、股票、公告日期、类别和链接等字段；CNINFO/SSE/SZSE/BSE 官方公告索引源也已可手动采列表元数据和 PDF URL，但还没有下载 PDF、附件或解析完整详情页。
-- 商品日频：`akshare_commodity_daily` 已能通过 `akshare.futures_zh_daily_sina` 保存商品期货日频样例，默认样本是 `RB0`；SHFE/DCE/CZCE/GFEX 官方日频 connector 已有低量 shadow 实现，但 DCE 真实访问仍被 HTTP 412 阻塞，也还没有覆盖全品种全合约、夜盘、结算价、持仓量等完整生产口径。
+- 公告索引：`akshare_announcement_index` 已能通过 `akshare.stock_notice_report` 保存公告列表/索引元数据，包括标题、股票、公告日期、类别和链接等字段；CNINFO/SSE/SZSE/BSE 官方公告索引源已低量启用并保存列表元数据和 PDF URL，但还没有下载 PDF、附件或解析完整详情页。
+- 商品日频：`akshare_commodity_daily` 已能通过 `akshare.futures_zh_daily_sina` 保存商品期货日频样例，默认样本是 `RB0`；SHFE/CZCE/GFEX 官方日频 connector 已低量启用，DCE 真实访问仍被 HTTP 412 阻塞，也还没有覆盖全品种全合约、夜盘、结算价、持仓量等完整生产口径。
 
 ### P0 数据集覆盖明细
 
@@ -116,28 +128,28 @@ AkShare 现在的定位是 bootstrap 主源：先把采集框架、raw append-on
 
 | logical_dataset | 中文名称 | 数据源/费用 | 已启用 | 未启用原因/缺口 | 对账状态 |
 | --- | --- | --- | --- | --- | --- |
-| `market_daily_ohlcv` | A 股日线 OHLCV | AkShare `stock_zh_a_daily`，免费开源库，无凭据 | 是 | 无；当前 P0 bootstrap 主源 | 已有 BaoStock shadow 源可手动运行；默认流程仍是单主源 |
-| `market_daily_ohlcv` | A 股日线 OHLCV | BaoStock `query_history_k_data_plus`，免费开源库，无凭据 | 否 | 已实现；先观察稳定性、字段口径和重复采集表现，暂不进入 `run-enabled` | 用于与 AkShare 日线做 shadow/fallback 对账 |
+| `market_daily_ohlcv` | A 股日线 OHLCV | AkShare `stock_zh_a_daily`，免费开源库，无凭据 | 是 | 无；当前 P0 bootstrap 主源 | BaoStock shadow 已启用，可在前端和 reconciliation 中观察差异 |
+| `market_daily_ohlcv` | A 股日线 OHLCV | BaoStock `query_history_k_data_plus`，免费开源库，无凭据 | 是 | 低量启用；先观察稳定性、字段口径和重复采集表现 | 用于与 AkShare 日线做 shadow/fallback 对账 |
 | `adjustment_factor` | A 股复权因子 | AkShare 日线前复权/未复权价格推算，免费开源库，无凭据 | 是 | 无；但当前是未复权 close 与前复权 close 比值的 V0 推算口径 | 暂无独立官方/付费因子源，对账会标记缺少 counterparty |
 | `trading_calendar` | A 股交易日历 | AkShare `tool_trade_date_hist_sina`，免费开源库，无凭据 | 是 | 无；当前主要记录 AkShare 返回的交易日，非交易日补全待后续做 | 暂未纳入默认 reconciliation；后续应补交易所日历对账 |
 | `trade_status` | A 股停复牌/交易状态 | AkShare `stock_tfp_em`，免费开源库，无凭据 | 是 | 无；当前记录停复牌返回行，不是全市场正常交易快照 | 暂未纳入默认 reconciliation；后续应补交易所/官方停复牌源 |
 | `price_limit` | A 股涨跌停价格 | AkShare 日线前收盘价 + 板块规则推算，免费开源库，无凭据 | 是 | 无；但当前用前收盘价和板块规则推算，特殊规则仍需补全 | 暂无独立官方价格源，对账会标记缺少 counterparty |
-| `announcement_index` | A 股公告索引 | AkShare `stock_notice_report`，免费开源库，无凭据 | 是 | 无；只保存公告索引、标题、分类、链接等元数据 | 有 CNINFO/SSE/SZSE/BSE 官方索引 shadow 源可手动对账；默认仍单源 |
-| `announcement_index` | A 股公告索引 | CNINFO 巨潮资讯公告列表，免费公开网站，无凭据 | 否 | 已实现列表元数据和 PDF URL；还缺连续限频观察、PDF/detail/附件下载策略 | 官方索引 shadow 源，可与 AkShare 公告索引做覆盖差异检查 |
-| `announcement_index` | A 股公告索引 | 上交所公告列表，免费公开网站，无凭据 | 否 | 已实现列表元数据和 PDF URL；还缺连续限频观察、PDF/detail/附件下载策略 | 官方索引 shadow 源，可与 AkShare/CNINFO 交叉检查 |
-| `announcement_index` | A 股公告索引 | 深交所公告列表，免费公开网站，无凭据 | 否 | 已实现列表元数据和 PDF URL；还缺连续限频观察、PDF/detail/附件下载策略 | 官方索引 shadow 源，可与 AkShare/CNINFO/SSE 交叉检查 |
-| `announcement_index` | A 股公告索引 | 北交所公告列表，免费公开网站，无凭据 | 否 | 已实现列表元数据和 PDF URL；还缺连续限频观察、PDF/detail/附件下载策略 | 官方索引 shadow 源，可补北交所公告覆盖 |
-| `policy_regulatory_doc` | 政策/监管文档索引 | AkShare `news_cctv`，免费开源库，无凭据 | 是 | 无；但来源是央视新闻/宏观政策新闻，不是监管官方全文 | 有 CSRC/gov.cn/PBC 官方列表 shadow 源可手动对账；默认仍单源 |
-| `policy_regulatory_doc` | 政策/监管文档索引 | 证监会官网列表，免费公开网站，无凭据 | 否 | 已实现列表 HTML 和索引元数据；还缺详情页、附件、正文解析和连续观察 | 官方监管列表 shadow 源，可与 AkShare CCTV bootstrap 源做差异检查 |
-| `policy_regulatory_doc` | 政策/监管文档索引 | 中国政府网政策列表，免费公开网站，无凭据 | 否 | 已实现列表 HTML 和索引元数据；还缺详情页、附件、正文解析和连续观察 | 官方政策列表 shadow 源，可补中央政策覆盖 |
-| `policy_regulatory_doc` | 政策/监管文档索引 | 央行官网沟通交流列表，免费公开网站，无凭据 | 否 | 已实现列表 HTML 和索引元数据；还缺详情页、附件、正文解析和连续观察 | 官方货币政策/央行新闻 shadow 源，可补金融监管覆盖 |
-| `commodity_daily` | 商品期货日频行情 | AkShare `futures_zh_daily_sina`，免费开源库，无凭据 | 是 | 无；默认样本为少量连续合约，不等于全品种全合约官方结算文件 | 有 SHFE/CZCE/GFEX shadow 源可手动对账；DCE 当前阻塞 |
-| `commodity_daily` | 商品期货日频行情 | 上期所官方日行情，免费公开网站，无凭据 | 否 | 已实现官方日行情 JSON；还缺连续观察、全品种口径和与 AkShare 差异处理 | 官方交易所 shadow 源，可与 AkShare 商品样本对账 |
+| `announcement_index` | A 股公告索引 | AkShare `stock_notice_report`，免费开源库，无凭据 | 是 | 无；只保存公告索引、标题、分类、链接等元数据 | CNINFO/SSE/SZSE/BSE 官方索引已低量启用，可观察覆盖差异 |
+| `announcement_index` | A 股公告索引 | CNINFO 巨潮资讯公告列表，免费公开网站，无凭据 | 是 | 低量启用；还缺连续限频观察、PDF/detail/附件下载策略 | 官方索引 shadow 源，可与 AkShare 公告索引做覆盖差异检查 |
+| `announcement_index` | A 股公告索引 | 上交所公告列表，免费公开网站，无凭据 | 是 | 低量启用；还缺连续限频观察、PDF/detail/附件下载策略 | 官方索引 shadow 源，可与 AkShare/CNINFO 交叉检查 |
+| `announcement_index` | A 股公告索引 | 深交所公告列表，免费公开网站，无凭据 | 是 | 低量启用；还缺连续限频观察、PDF/detail/附件下载策略 | 官方索引 shadow 源，可与 AkShare/CNINFO/SSE 交叉检查 |
+| `announcement_index` | A 股公告索引 | 北交所公告列表，免费公开网站，无凭据 | 是 | 低量启用；还缺连续限频观察、PDF/detail/附件下载策略 | 官方索引 shadow 源，可补北交所公告覆盖 |
+| `policy_regulatory_doc` | 政策/监管文档索引 | AkShare `news_cctv`，免费开源库，无凭据 | 是 | 无；但来源是央视新闻/宏观政策新闻，不是监管官方全文 | CSRC/gov.cn/PBC 官方列表已低量启用，可观察覆盖差异 |
+| `policy_regulatory_doc` | 政策/监管文档索引 | 证监会官网列表，免费公开网站，无凭据 | 是 | 低量启用；还缺详情页、附件、正文解析和连续观察 | 官方监管列表 shadow 源，可与 AkShare CCTV bootstrap 源做差异检查 |
+| `policy_regulatory_doc` | 政策/监管文档索引 | 中国政府网政策列表，免费公开网站，无凭据 | 是 | 低量启用；还缺详情页、附件、正文解析和连续观察 | 官方政策列表 shadow 源，可补中央政策覆盖 |
+| `policy_regulatory_doc` | 政策/监管文档索引 | 央行官网沟通交流列表，免费公开网站，无凭据 | 是 | 低量启用；还缺详情页、附件、正文解析和连续观察 | 官方货币政策/央行新闻 shadow 源，可补金融监管覆盖 |
+| `commodity_daily` | 商品期货日频行情 | AkShare `futures_zh_daily_sina`，免费开源库，无凭据 | 是 | 无；默认样本为少量连续合约，不等于全品种全合约官方结算文件 | SHFE/CZCE/GFEX shadow 源已低量启用；DCE 当前阻塞 |
+| `commodity_daily` | 商品期货日频行情 | 上期所官方日行情，免费公开网站，无凭据 | 是 | 低量启用；还缺连续观察、全品种口径和与 AkShare 差异处理 | 官方交易所 shadow 源，可与 AkShare 商品样本对账 |
 | `commodity_daily` | 商品期货日频行情 | 大商所官方日行情，免费公开网站，无凭据 | 否 | connector 已实现，但当前环境请求官方 publicweb 端点返回 HTTP 412；不绕过来源控制 | 暂不可稳定对账，需确认官方可访问路径 |
-| `commodity_daily` | 商品期货日频行情 | 郑商所官方日行情，免费公开网站，无凭据 | 否 | 已实现官方 TXT 日行情；还缺连续观察、非交易日行为和字段口径确认 | 官方交易所 shadow 源，可与 AkShare 商品样本对账 |
-| `commodity_daily` | 商品期货日频行情 | 广期所官方日行情，免费公开网站，无凭据 | 否 | 已实现官方 JSON 日行情；还缺连续观察、非交易日行为和字段口径确认 | 官方交易所 shadow 源，可与 AkShare 商品样本对账 |
-| `global_market_daily` | 全球市场日频行情 | AkShare `stock_us_daily`，免费开源库，无凭据 | 是 | 无；当前是少量海外标的样本，不等于完整全球市场库 | 有 Yahoo shadow 源可手动低量对账；Stooq 需凭据 |
-| `global_market_daily` | 全球市场日频行情 | Yahoo Finance chart，免费公开接口/网页，无凭据 | 否 | 已实现低量 metadata shadow；使用条款和 raw 存储边界仍需谨慎确认 | 可作为 AkShare 全球市场日频的低量 shadow 对账源 |
+| `commodity_daily` | 商品期货日频行情 | 郑商所官方日行情，免费公开网站，无凭据 | 是 | 低量启用；还缺连续观察、非交易日行为和字段口径确认 | 官方交易所 shadow 源，可与 AkShare 商品样本对账 |
+| `commodity_daily` | 商品期货日频行情 | 广期所官方日行情，免费公开网站，无凭据 | 是 | 低量启用；还缺连续观察、非交易日行为和字段口径确认 | 官方交易所 shadow 源，可与 AkShare 商品样本对账 |
+| `global_market_daily` | 全球市场日频行情 | AkShare `stock_us_daily`，免费开源库，无凭据 | 是 | 无；当前是少量海外标的样本，不等于完整全球市场库 | Yahoo shadow 源已低量启用；Stooq 需凭据 |
+| `global_market_daily` | 全球市场日频行情 | Yahoo Finance chart，免费公开接口/网页，无凭据 | 是 | 低量启用；使用条款和 raw 存储边界仍需谨慎确认 | 可作为 AkShare 全球市场日频的低量 shadow 对账源 |
 | `global_market_daily` | 全球市场日频行情 | Stooq CSV，公开网站但端点需官方 apikey | 否 | 缺 `STOOQ_API_KEY`，且需确认条款；当前不能无凭据启用 | 暂不能对账；拿到 apikey 后可作为第三方补源 |
 
 ### P1 数据集覆盖明细
@@ -180,7 +192,7 @@ P2 分两类：低成本 bootstrap source 已启用；高成本或高容量 sour
 
 ### 当前完成度结论
 
-- P0：bootstrap 已完成，9 个 P0 logical_dataset 均至少有 1 个 enabled source；高风险数据集的 shadow/official source 多数已实现但默认未启用，真实字段级对账仍在起步阶段。
+- P0：bootstrap 已完成，9 个 P0 logical_dataset 均至少有 1 个 enabled source；12 个低量 shadow/official source 已进入 `run-enabled`，可在前端控制台观察运行状态和对账差异，真实生产级字段校准仍在起步阶段。
 - P1：bootstrap 已完成，10 个 P1 logical_dataset 均有 enabled source；生产级仍缺官方披露时间、交易所/港交所/付费源对账、更稳定 schema 映射和采样范围扩大。
 - P2：低成本 bootstrap 已完成，已启用分钟线样本、研报索引和公开聚合指标；高成本 P2 数据仍是 disabled planned，必须等授权、预算、容量和 alpha 假设明确后再启用。
 - 当前真正“没有可运行爬取方法”的 logical_dataset 是：`market_level2_snapshot`、`market_tick_trade`、`licensed_text_document`、`supply_chain_relationship`、`alternative_data_observation`、`professional_event_feed`。
@@ -208,15 +220,15 @@ P2 分两类：低成本 bootstrap source 已启用；高成本或高容量 sour
 
 未完成事项主要集中在“生产级数据可靠性”和“高成本 P2 数据”，不是采集框架骨架本身：
 
-- 官方/影子源：BaoStock 日线 shadow connector、CNINFO/SSE/SZSE/BSE 公告索引 connector、CSRC/gov.cn/PBC 政策监管列表 connector、SHFE/DCE/CZCE/GFEX 商品日频 connector、Yahoo Finance 全球市场日频 connector 已实现但默认不启用；DCE 真实访问仍被 HTTP 412 阻塞，Stooq 仍需官方 apikey。
-- 跨源对账：P0 高风险数据集还缺真实 counterparty source，当前只能报告 `missing_counterparty_source`，不能完成字段级差异对账。
+- 官方/影子源：BaoStock 日线 shadow、CNINFO/SSE/SZSE/BSE 公告索引、CSRC/gov.cn/PBC 政策监管列表、SHFE/CZCE/GFEX 商品日频、Yahoo Finance 全球市场日频已低量启用；DCE 真实访问仍被 HTTP 412 阻塞，Stooq 仍需官方 apikey。
+- 跨源对账：P0 高风险数据集已有更多 enabled counterparty source，但仍需要连续运行后校准 observation identity、字段映射和差异阈值。
 - 覆盖范围：许多 bootstrap connector 默认只采样少量 symbol、少量 board 或少量 item，尚未扩大到全市场稳定采集。
 - PIT 口径：财务、基金持仓、公告、研报和新闻的真实披露时间、修订版本和回溯修正还需要官方源或付费源验证。
 - 质量规则：本地 bootstrap 已增强字段漂移检测、缺口检测、strict coverage、基础异常值检查和 source freshness SLO；生产级仍需要用 7-30 天连续运行结果校准阈值、覆盖率基线和跨源差异规则。
 - 运维生产化：本地已支持 source health/SLO 报告和轻量失败重试；仍需要外部告警渠道、非本机备份、定时调度、运行看板和 7-30 天连续观察。
 - P2 高成本数据：Level-2、tick、授权全文、供应链、遥感、专业事件库都未启用；必须先有授权、预算、容量设计和明确 alpha 假设。
 
-因此当前结论是：采集框架和 P0/P1/P2 bootstrap 已经可交付；生产级数据湖尚未完成。下一步如果继续开发，优先级应是先补免费 shadow/official source 并做对账，而不是直接扩展研究层逻辑。
+因此当前结论是：采集框架和 P0/P1/P2 bootstrap 已经可交付；免费 shadow/official source 已进入低量 `run-enabled` 观测；生产级数据湖尚未完成。下一步优先级是看前端连续运行结果、质量报告和对账差异，再决定是否扩大覆盖范围。
 
 第一次本地测试建议限制 symbol 数量：
 
@@ -243,7 +255,7 @@ pitlake alert --message "pitlake daily check failed" --payload-json data_lake/co
 pitlake backup
 ```
 
-`run-enabled` 会运行当前所有 `enabled: true` 的 P0/P1/P2 source；只想验证单个 source 时使用 `run-source`。
+`run-enabled` 会运行当前所有 `enabled: true` 的 P0/P1/P2 source，包括低量 shadow/official 观测源；首次真实运行建议保留 `--limit-symbols` 和 retry 参数，然后在 `pitlake console` 查看 source x date、quality、source health 和 reconciliation。
 
 日线和涨跌停连接器默认采样 `000001`、`600000`、`300750`。交易日历连接器默认采集 `20260424` 的 `cn_ashare` 交易日记录。交易状态连接器默认查询 `20260424` 的停复牌记录。同一天重复运行时，框架会保留 raw 采集事实，并在 `raw_item_version` 层识别已存在的 item version。
 
@@ -284,7 +296,7 @@ pitlake console
 pitlake console --host 127.0.0.1 --port 8766
 ```
 
-`pitlake reconcile --date YYYY-MM-DD` 生成每日对账报告，默认覆盖 `market_daily_ohlcv`、`adjustment_factor`、`price_limit`、`announcement_index`、`policy_regulatory_doc`、`commodity_daily` 和 `global_market_daily`。当前只有一个已采集 source 时，报告会标记 `missing_counterparty_source`；后续启用 shadow/official source 后，同一命令会比较同一观察项的关键字段差异。
+`pitlake reconcile --date YYYY-MM-DD` 生成每日对账报告，默认覆盖 `market_daily_ohlcv`、`adjustment_factor`、`price_limit`、`announcement_index`、`policy_regulatory_doc`、`commodity_daily` 和 `global_market_daily`。低量 shadow/official source 已启用；同一天有多个 source 采到同一观察项时，同一命令会比较关键字段差异，仍缺可对账样本时会标记 `missing_counterparty_source`。
 
 ```powershell
 pitlake reconcile --date 2026-04-26
@@ -309,7 +321,7 @@ pitlake backup --target-dir E:\pitlake_backup
 
 ## P1 bootstrap
 
-P0 目前已经达到 bootstrap 闭环：9 个 P0 logical_dataset 都有至少一个 enabled source。严格意义上的 P0 长期稳定完成，还需要继续观察连续运行、shadow/official source 对账、外部告警和外部备份。
+P0 目前已经达到 bootstrap 闭环：9 个 P0 logical_dataset 都有至少一个 enabled source，且可运行的免费 shadow/official source 已低量启用。严格意义上的 P0 长期稳定完成，还需要继续观察连续运行、字段级对账、外部告警和外部备份。
 
 当前已开始 P1 采集层 bootstrap：
 
