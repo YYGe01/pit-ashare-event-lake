@@ -148,6 +148,11 @@ button {
   font-size: 15px;
 }
 
+.section h4 {
+  margin: 12px 0 8px;
+  font-size: 13px;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -212,6 +217,12 @@ button {
   border-radius: 8px;
 }
 
+.matrix-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
 table {
   width: 100%;
   min-width: 820px;
@@ -238,6 +249,15 @@ th {
 
 tr:hover td {
   background: #f8fafc;
+}
+
+.matrix-table {
+  min-width: 980px;
+}
+
+.matrix-table th,
+.matrix-table td {
+  white-space: nowrap;
 }
 
 .link-button {
@@ -274,6 +294,47 @@ tr:hover td {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+.issue-actions {
+  display: flex;
+  gap: 10px;
+  margin: 8px 0 0;
+}
+
+.feed-list {
+  display: grid;
+  gap: 8px;
+}
+
+.feed-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.feed-item h4 {
+  margin: 0 0 6px;
+}
+
+.feed-item p {
+  margin: 3px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.feed-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.feed-actions a {
+  color: var(--accent);
 }
 
 .toolbar {
@@ -355,6 +416,12 @@ pre {
   padding: 16px 0;
 }
 
+.hint {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 @media (max-width: 720px) {
   .topbar {
     align-items: flex-start;
@@ -370,6 +437,10 @@ pre {
   }
 
   .issue {
+    grid-template-columns: 1fr;
+  }
+
+  .feed-item {
     grid-template-columns: 1fr;
   }
 }

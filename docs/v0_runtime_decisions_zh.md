@@ -223,7 +223,9 @@ OHLC high < low、涨跌停上限不大于下限、应非负字段为负等基�
 
 ## 本地前端控制台
 
-`pitlake console` / `pitlake ui` 当前提供本地只读 Web 控制台，默认监听 `127.0.0.1:8765`。它直接读取 `pitlake.sqlite`、`source_registry.yaml`、dataset contract、quality report、reconciliation report、manifest 和 raw 文件 metadata，用于查看每日采集健康、dataset/source 状态、运行批次、质量问题、对账问题和 raw 证据链。
+`pitlake console` / `pitlake ui` 当前提供本地只读 Web 控制台，默认监听 `127.0.0.1:8765`。它直接读取 `pitlake.sqlite`、`source_registry.yaml`、dataset contract、quality report、reconciliation report、manifest 和 raw 文件 metadata，用于查看每日采集健康、source x date 状态矩阵、dataset/source 状态、股票覆盖、运行批次、质量问题、对账问题、manifest 快照和 raw 证据链。
+
+股票覆盖和缺失检查当前只使用 `source_registry.yaml` 里的 registry sample symbols 加当天已观测 item。由于还没有统一 security master / stock universe，控制台不得声称“全市场股票缺失”，只能显示当前检查口径下的 present / missing / observed。
 
 控制台属于采集层观测入口，不在本仓库引入研究层、交易逻辑或可写运维操作。第一版不依赖外部前端构建链，使用 Python 标准库 HTTP 服务和静态页面；后续如升级 FastAPI/React，API 语义仍应保持 `source registry -> run ledger -> quality/reconciliation -> raw evidence` 的证据链口径。
 

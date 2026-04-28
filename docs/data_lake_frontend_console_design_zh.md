@@ -4,6 +4,18 @@
 > 目标：基于现有 `data_lake/`、SQLite metadata、quality report、reconciliation report、manifest 和 raw append-only 文件，设计一个让使用者可以掌握采集状态、发现异常、浏览数据和追溯 raw 证据的前端页面。  
 > 建议产品名：`PitLake Console`
 
+## 0. 当前落地状态
+
+截至 2026-04-28，仓库内已实现本地只读 `PitLake Console`：
+
+```text
+阶段 1 MVP：已完成。
+阶段 2：已完成数据资产目录、dataset 详情、dataset coverage、股票覆盖 drilldown、raw detail、对账中心和 manifest 页面；K 线/复杂图表、watchlist 持久化和全文/PDF viewer 仍未实现。
+阶段 3/4：仍按后续规划处理，不在当前仓库引入写操作、外部 BI 或研究层逻辑。
+```
+
+当前股票缺失检查只基于 `source_registry.yaml` 的 registry sample symbols 和当天已观测 item。由于还没有统一 security master / stock universe，控制台不能声明全市场股票缺失。
+
 ## 1. 设计结论
 
 不要把第一版做成一个“文件浏览器”或“所有 JSON/CSV 都塞进表格”的页面。成熟数据平台的共同做法是：先让用户知道数据是否可信，再允许用户按资产、日期、source、股票和 raw 证据逐层钻取。

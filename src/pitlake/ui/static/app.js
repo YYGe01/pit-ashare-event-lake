@@ -38,6 +38,14 @@ app.addEventListener("click", async (event) => {
     const payload = await api(`/api/raw/${encodeURIComponent(id)}`);
     openDrawer(`Raw：${id}`, renderRawDetail(payload));
   }
+  if (action === "symbol") {
+    const payload = await api(`/api/symbols/${encodeURIComponent(id)}?date=${state.date}`);
+    openDrawer(`股票：${id}`, renderSymbolDetail(payload));
+  }
+  if (action === "manifest") {
+    const payload = await api(`/api/manifests/${encodeURIComponent(id)}`);
+    openDrawer(`Manifest：${id}`, renderManifestDetail(payload));
+  }
 });
 
 dateSelect.addEventListener("change", () => loadOverview(dateSelect.value));
@@ -79,10 +87,13 @@ function switchView(view, options = {}) {
   const renderers = {
     overview: renderOverview,
     datasets: renderDatasets,
+    symbols: renderSymbols,
     sources: renderSources,
     runs: renderRuns,
     quality: renderQuality,
+    reconciliation: renderReconciliation,
     raw: renderRaw,
+    manifests: renderManifests,
     search: renderSearch,
   };
   renderers[view]();
@@ -116,6 +127,10 @@ function renderOverview() {
       ${datasetTable(overview.datasets)}
     </section>
     <section class="section">
+      <h2>Source x 日期状态矩阵</h2>
+      ${sourceMatrix(overview.source_matrix)}
+    </section>
+    <section class="section">
       <h2>Source 采集状态</h2>
       ${sourceTable(overview.sources)}
     </section>
@@ -132,6 +147,43 @@ function renderDatasets() {
       ${datasetTable(state.overview.datasets)}
     </section>
   `;
+}
+
+function renderSymbols() {
+  const symbols = state.overview.symbol_universe?.symbols || [];
+  app.innerHTML = `
+    <section class="section">
+      <div class="toolbar">
+        <h2>股票覆盖</h2>
+        <p>当前口径是 registry sample symbols 加当天已观测 item，不代表全市场 universe。</p>
+      </div>
+      <div class="search-row">
+        <input id="symbolInput" list="symbolOptions" placeholder="输入股票代码，如 600000" />
+        <datalist id="symbolOptions">
+          ${symbols.map((row) => `<option value="${escapeHtml(row.symbol)}"></option>`).join("")}
+        </datalist>
+        <button id="symbolBtn" type="button">查看</button>
+      </div>
+      ${table(symbols, [
+        ["symbol", "symbol", (row) => actionButton("symbol", row.symbol, row.symbol)],
+        ["scope", "scope"],
+        ["registry_datasets", "registry_datasets", (row) => listText(row.registry_datasets)],
+        ["observed_datasets", "observed_datasets", (row) => listText(row.observed_datasets)],
+      ])}
+    </section>
+  `;
+  document.querySelector("#symbolBtn").addEventListener("click", openSymbolFromInput);
+  document.querySelector("#symbolInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") openSymbolFromInput();
+  });
+}
+
+async function openSymbolFromInput() {
+  const input = document.querySelector("#symbolInput");
+  const value = input.value.trim();
+  if (!value) return;
+  const payload = await api(`/api/symbols/${encodeURIComponent(value)}?date=${state.date}`);
+  openDrawer(`股票：${value}`, renderSymbolDetail(payload));
 }
 
 function renderSources() {
@@ -197,12 +249,61 @@ async function renderQuality() {
   `;
 }
 
+async function renderReconciliation() {
+  const payload = await api(`/api/reconciliation?date=${state.date}`);
+  app.innerHTML = `
+    <section class="section">
+      <div class="toolbar">
+        <h2>对账中心</h2>
+        ${statusBadge(payload.report_meta.status)}
+      </div>
+      <h3>Dataset 状态</h3>
+      ${table(payload.datasets, [
+        ["status", "status", (row) => statusBadge(row.status)],
+        ["logical_dataset", "logical_dataset", (row) => datasetButton(row.logical_dataset)],
+        ["active_sources", "active_sources", (row) => listText(row.active_sources)],
+        ["planned_counterparty_sources", "counterparty", (row) => listText(row.planned_counterparty_sources)],
+        ["findings", "findings", (row) => String(row.findings?.length || 0)],
+        ["compared_group_count", "compared"],
+      ])}
+      <h3>Findings</h3>
+      ${table(payload.findings, [
+        ["severity", "severity", (row) => statusBadge(row.severity)],
+        ["logical_dataset", "logical_dataset", (row) => datasetButton(row.logical_dataset)],
+        ["finding_type", "type"],
+        ["message", "message"],
+        ["identity", "identity"],
+      ])}
+    </section>
+  `;
+}
+
 async function renderRaw() {
   const payload = await api(`/api/raw?date=${state.date}&limit=200`);
   app.innerHTML = `
     <section class="section">
       <h2>Raw 文件浏览</h2>
       ${rawTable(payload.raw_objects)}
+    </section>
+  `;
+}
+
+async function renderManifests() {
+  const payload = await api(`/api/manifests?limit=200`);
+  app.innerHTML = `
+    <section class="section">
+      <h2>Manifest 快照</h2>
+      ${table(payload.manifests, [
+        ["status", "status", (row) => statusBadge(row.status)],
+        ["manifest_id", "manifest_id", (row) => actionButton("manifest", row.manifest_id, short(row.manifest_id, 22))],
+        ["manifest_date", "date"],
+        ["manifest_type", "type"],
+        ["run_count", "runs"],
+        ["raw_object_count", "raw"],
+        ["new_item_count", "new_items"],
+        ["error_count", "errors"],
+        ["created_at", "created_at"],
+      ])}
     </section>
   `;
 }
@@ -242,6 +343,10 @@ function renderDatasetDetail(payload) {
       ${metric("Items", payload.summary?.item_version_count || 0)}
       ${metric("Runs", payload.summary?.run_count || 0)}
     </div>
+    <h3>Explore</h3>
+    ${renderExplore(payload)}
+    <h3>Coverage</h3>
+    ${renderCoverage(payload.coverage)}
     <h3>Source</h3>
     ${table(payload.sources, [
       ["source_id", "source_id", (row) => actionButton("source", row.source_id, row.source_id)],
@@ -261,6 +366,8 @@ function renderDatasetDetail(payload) {
     ])}
     <h3>Raw Evidence</h3>
     ${rawTable(payload.raw_objects)}
+    <h3>Reconciliation</h3>
+    <pre>${escapeHtml(JSON.stringify(payload.reconciliation || {}, null, 2))}</pre>
     <h3>Contract</h3>
     <pre>${escapeHtml(JSON.stringify(payload.contract, null, 2))}</pre>
   `;
@@ -325,6 +432,86 @@ function renderRawDetail(payload) {
   `;
 }
 
+function renderSymbolDetail(payload) {
+  return `
+    <div class="metric-grid">
+      ${metric("Symbol", payload.normalized_symbol)}
+      ${metric("Coverage Scope", payload.coverage_scope)}
+      ${metric("Datasets", payload.coverage.length)}
+      ${metric("Items", payload.items.length)}
+    </div>
+    <h3>Dataset Coverage</h3>
+    ${table(payload.coverage, [
+      ["status", "status", (row) => statusBadge(row.status)],
+      ["logical_dataset", "logical_dataset", (row) => datasetButton(row.logical_dataset)],
+      ["label", "中文名称"],
+      ["item_count", "items"],
+      ["expected_source_count", "expected_sources"],
+      ["latest_first_seen_at", "latest_first_seen"],
+    ])}
+    <h3>Items</h3>
+    ${itemsTable(payload.items)}
+    <h3>Quality Checks</h3>
+    ${table(payload.quality_checks, [
+      ["severity", "severity", (row) => statusBadge(row.severity)],
+      ["logical_dataset", "logical_dataset", (row) => datasetButton(row.logical_dataset)],
+      ["source_id", "source_id", (row) => sourceMaybe(row.source_id)],
+      ["check_name", "check"],
+      ["status", "status", (row) => statusBadge(row.status)],
+      ["sample_failed_keys", "sample_keys"],
+    ])}
+    <h3>Raw Evidence</h3>
+    ${rawTable(payload.raw_objects)}
+  `;
+}
+
+function renderManifestDetail(payload) {
+  if (!payload.found) return `<p class="empty">未找到 manifest。</p>`;
+  return `
+    <h3>Manifest Metadata</h3>
+    <pre>${escapeHtml(JSON.stringify(payload.manifest, null, 2))}</pre>
+    <h3>Payload</h3>
+    <pre>${escapeHtml(JSON.stringify(payload.payload || {}, null, 2))}</pre>
+  `;
+}
+
+function renderExplore(payload) {
+  if (payload.view_type === "document_feed") {
+    return documentFeed(payload.items);
+  }
+  if (payload.logical_dataset === "market_daily_ohlcv") {
+    return ohlcvTable(payload.items);
+  }
+  if (payload.logical_dataset === "trading_calendar") {
+    return compactPayloadTable(payload.items, ["calendar_id", "date", "is_trading_day"]);
+  }
+  return compactPayloadTable(payload.items);
+}
+
+function renderCoverage(coverage) {
+  if (!coverage) return `<p class="empty">没有覆盖数据。</p>`;
+  return `
+    <p class="hint">缺失检查口径：${escapeHtml(coverage.coverage_scope)}</p>
+    <h4>按日期</h4>
+    ${table(coverage.date_counts, [
+      ["date", "date"],
+      ["item_count", "items"],
+    ])}
+    <h4>按 Source</h4>
+    ${table(coverage.source_counts, [
+      ["source_id", "source_id", (row) => sourceMaybe(row.source_id)],
+      ["item_count", "items"],
+    ])}
+    <h4>按 Symbol</h4>
+    ${table(coverage.symbol_counts, [
+      ["status", "status", (row) => statusBadge(row.status)],
+      ["symbol", "symbol", (row) => actionButton("symbol", row.symbol, row.symbol)],
+      ["item_count", "items"],
+      ["expected_source_count", "expected_sources"],
+    ])}
+  `;
+}
+
 function datasetTable(rows) {
   return table(rows, [
     ["status", "status", (row) => statusBadge(row.status)],
@@ -377,7 +564,109 @@ function itemsTable(rows) {
     ["source_publish_time", "publish_time"],
     ["first_seen_at", "first_seen"],
     ["quality_status", "quality", (row) => statusBadge(row.quality_status)],
+    ["raw_object_id", "raw", (row) => actionButton("raw", row.raw_object_id, short(row.raw_object_id))],
   ]);
+}
+
+function sourceMatrix(matrix) {
+  if (!matrix?.rows?.length) return `<p class="empty">没有矩阵数据。</p>`;
+  const rows = matrix.rows.filter((row) => row.enabled || row.cells.some((cell) => cell.run_count > 0));
+  if (!rows.length) return `<p class="empty">没有 enabled source 或运行记录。</p>`;
+  return `
+    <div class="matrix-wrap">
+      <table class="matrix-table">
+        <thead>
+          <tr>
+            <th>source_id</th>
+            <th>dataset</th>
+            ${matrix.dates.map((date) => `<th>${escapeHtml(date)}</th>`).join("")}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map(
+              (row) => `
+                <tr>
+                  <td>${sourceMaybe(row.source_id)}</td>
+                  <td>${datasetButton(row.logical_dataset)}</td>
+                  ${row.cells
+                    .map((cell) => {
+                      const firstRun = cell.run_ids?.[0];
+                      const label = `${cell.status || "missing"} / ${cell.run_count}`;
+                      return `<td>${firstRun ? actionButton("run", firstRun, label) : statusBadge(cell.status)}</td>`;
+                    })
+                    .join("")}
+                </tr>
+              `,
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function documentFeed(items) {
+  if (!items || items.length === 0) return `<p class="empty">没有文档数据。</p>`;
+  return `
+    <div class="feed-list">
+      ${items
+        .map((item) => {
+          const payload = item.observed_payload || {};
+          const url = item.source_url || payload.source_url || payload.url || "";
+          return `
+            <article class="feed-item">
+              <div class="feed-main">
+                <h4>${escapeHtml(item.title || payload.title || item.source_item_key)}</h4>
+                <p>${escapeHtml(item.source_publish_time || payload.publish_time || item.first_seen_at || "")}</p>
+                <p>${escapeHtml(item.logical_dataset)} / ${escapeHtml(item.source_id)}</p>
+              </div>
+              <div class="feed-actions">
+                ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">来源</a>` : ""}
+                ${actionButton("raw", item.raw_object_id, "Raw")}
+              </div>
+            </article>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function ohlcvTable(items) {
+  return compactPayloadTable(items, [
+    "instrument",
+    "trading_date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+  ]);
+}
+
+function compactPayloadTable(items, fields) {
+  if (!items || items.length === 0) return `<p class="empty">没有样本数据。</p>`;
+  const inferredFields = fields || inferPayloadFields(items);
+  const columns = inferredFields.map((field) => [
+    field,
+    field,
+    (row) => escapeHtml(row.observed_payload?.[field] ?? row[field] ?? ""),
+  ]);
+  columns.push(["raw_object_id", "raw", (row) => actionButton("raw", row.raw_object_id, "Raw")]);
+  return table(items, columns);
+}
+
+function inferPayloadFields(items) {
+  const fields = [];
+  for (const item of items.slice(0, 20)) {
+    for (const field of Object.keys(item.observed_payload || {})) {
+      if (!fields.includes(field)) fields.push(field);
+      if (fields.length >= 10) return fields;
+    }
+  }
+  return fields.length ? fields : ["source_item_key"];
 }
 
 function table(rows, columns) {
@@ -426,6 +715,11 @@ function renderIssues(issues) {
               <div>
                 <p class="issue-title">${escapeHtml(issue.title || issue.kind)}</p>
                 <p class="issue-detail">${escapeHtml(issue.detail || "")}</p>
+                <p class="issue-actions">
+                  ${issue.logical_dataset ? datasetButton(issue.logical_dataset) : ""}
+                  ${issue.source_id ? sourceMaybe(issue.source_id) : ""}
+                  ${issue.run_id ? actionButton("run", issue.run_id, "Run") : ""}
+                </p>
               </div>
             </div>
           `,
@@ -451,9 +745,10 @@ function statusBadge(status) {
 
 function normalizeStatus(status) {
   const value = String(status || "missing").toLowerCase();
-  if (["pass", "ok", "success", "complete", "stored"].includes(value)) return "pass";
+  if (["pass", "ok", "success", "complete", "stored", "present", "observed"].includes(value)) return "pass";
   if (["fail", "failed", "error", "critical"].includes(value)) return "fail";
   if (["warn", "warning", "partial", "missing"].includes(value)) return "warn";
+  if (["not_expected", "not_applicable", "skipped"].includes(value)) return "neutral";
   return "neutral";
 }
 
@@ -471,6 +766,9 @@ function resultButton(row) {
   if (row.type === "dataset") return datasetButton(row.id);
   if (row.type === "source") return sourceMaybe(row.id);
   if (row.type === "run") return actionButton("run", row.id, row.title);
+  if (row.type === "raw") return actionButton("raw", row.id, short(row.title));
+  if (row.type === "symbol") return actionButton("symbol", row.id, row.title);
+  if (row.type === "manifest") return actionButton("manifest", row.id, short(row.title, 22));
   return escapeHtml(row.title || row.id || "");
 }
 
@@ -478,10 +776,15 @@ function actionButton(action, id, text) {
   return `<button class="link-button" data-action="${escapeHtml(action)}" data-id="${escapeHtml(id)}" type="button">${escapeHtml(text || id)}</button>`;
 }
 
-function short(value) {
+function short(value, length = 12) {
   if (!value) return "";
   const text = String(value);
-  return text.length > 12 ? text.slice(0, 12) : text;
+  return text.length > length ? text.slice(0, length) : text;
+}
+
+function listText(value) {
+  if (!Array.isArray(value)) return escapeHtml(value || "");
+  return escapeHtml(value.join(", "));
 }
 
 function openDrawer(title, body) {

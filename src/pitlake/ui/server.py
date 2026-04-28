@@ -115,10 +115,22 @@ def _dispatch_api(
         return data.datasets(date=date)
     if len(parts) == 2 and parts[0] == "datasets":
         return data.dataset_detail(parts[1], date=date, limit=limit)
+    if len(parts) == 3 and parts[0] == "datasets" and parts[2] == "items":
+        return data.dataset_items(parts[1], date=date, limit=limit)
+    if len(parts) == 3 and parts[0] == "datasets" and parts[2] == "coverage":
+        return data.dataset_coverage(parts[1], date=date, limit=limit)
+    if len(parts) == 3 and parts[0] == "datasets" and parts[2] == "quality":
+        return data.dataset_quality(parts[1], date=date)
+    if len(parts) == 3 and parts[0] == "datasets" and parts[2] == "reconciliation":
+        return data.dataset_reconciliation(parts[1], date=date)
     if parts == ["sources"]:
         return data.sources(date=date)
     if len(parts) == 2 and parts[0] == "sources":
         return data.source_detail(parts[1], date=date)
+    if parts == ["symbols"]:
+        return data.symbols(date=date, limit=limit)
+    if len(parts) == 2 and parts[0] == "symbols":
+        return data.symbol_detail(parts[1], date=date, limit=limit)
     if parts == ["runs"]:
         return data.runs(
             date=date,
@@ -132,6 +144,10 @@ def _dispatch_api(
         return data.quality_findings(date=date)
     if parts == ["reconciliation"]:
         return data.reconciliation(date=date)
+    if parts == ["manifests"]:
+        return data.manifests(limit=limit)
+    if len(parts) == 2 and parts[0] == "manifests":
+        return data.manifest_detail(parts[1])
     if parts == ["raw"]:
         return data.raw_objects(
             date=date,

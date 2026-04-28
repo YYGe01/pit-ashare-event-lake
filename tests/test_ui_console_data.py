@@ -5,6 +5,7 @@ from pathlib import Path
 from pitlake.quality.report import QualityReportStore
 from pitlake.settings import ProjectSettings
 from pitlake.storage.layout import LakeLayout
+from pitlake.storage.manifest_store import ManifestStore
 from pitlake.storage.metadata_store import MetadataStore
 from pitlake.storage.raw_store import RawWriteResult
 from pitlake.ui.console_data import PitLakeConsoleData
@@ -27,6 +28,11 @@ sources:
     enabled: true
     implementation_status: active_v0
     adapter_class: demo.Adapter
+    default_options:
+      symbols:
+        - "000001"
+        - "600000"
+      limit_symbols: 2
 """,
         encoding="utf-8",
     )
@@ -149,20 +155,45 @@ def test_console_overview_and_drilldown(tmp_path: Path) -> None:
         metadata_store=metadata,
         strict_coverage=True,
     )
+    manifest = ManifestStore(settings).generate_daily_manifest(
+        manifest_date=date,
+        metadata_store=metadata,
+    )
 
     console = PitLakeConsoleData(settings)
     overview = console.overview(date)
     assert overview["summary"]["run_count"] == 1
     assert overview["summary"]["item_version_count"] == 1
     assert overview["datasets"][0]["logical_dataset"] == "market_daily_ohlcv"
+    assert overview["source_matrix"]["dates"] == [date]
+    assert any(row["symbol"] == "000001" for row in overview["symbol_universe"]["symbols"])
 
     dataset = console.dataset_detail("market_daily_ohlcv", date=date)
     assert dataset["items"][0]["observed_payload"]["instrument"] == "000001"
+    symbol_status = {row["symbol"]: row["status"] for row in dataset["coverage"]["symbol_counts"]}
+    assert symbol_status["000001"] == "present"
+    assert symbol_status["600000"] == "missing"
 
     raw_detail = console.raw_detail(raw.raw_object_id)
     assert raw_detail["found"] is True
     assert raw_detail["preview"]["status"] == "ok"
     assert raw_detail["preview"]["json"]["rows"] == 1
+
+    symbol = console.symbol_detail("000001", date=date)
+    coverage = {row["logical_dataset"]: row["status"] for row in symbol["coverage"]}
+    assert coverage["market_daily_ohlcv"] == "present"
+
+    missing_symbol = console.symbol_detail("600000", date=date)
+    missing_coverage = {
+        row["logical_dataset"]: row["status"] for row in missing_symbol["coverage"]
+    }
+    assert missing_coverage["market_daily_ohlcv"] == "missing"
+
+    manifests = console.manifests()
+    assert manifests["manifests"][0]["manifest_id"] == manifest["manifest_id"]
+    manifest_detail = console.manifest_detail(manifest["manifest_id"])
+    assert manifest_detail["found"] is True
+    assert manifest_detail["payload"]["manifest_id"] == manifest["manifest_id"]
 
 
 def test_console_search_finds_source_and_items(tmp_path: Path) -> None:
@@ -191,3 +222,5 @@ def test_console_search_finds_source_and_items(tmp_path: Path) -> None:
     assert any(result["type"] == "item" for result in payload["results"])
     payload = console.search("demo_market_daily")
     assert any(result["type"] == "source" for result in payload["results"])
+    payload = console.search(raw.raw_object_id)
+    assert any(result["type"] == "raw" for result in payload["results"])

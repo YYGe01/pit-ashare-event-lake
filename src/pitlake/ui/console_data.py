@@ -14,7 +14,30 @@ from pitlake.settings import ProjectSettings
 from pitlake.storage.layout import LakeLayout
 from pitlake.storage.metadata_store import MetadataStore
 
-STATUS_RANK = {"pass": 0, "ok": 0, "success": 0, "complete": 0, "warn": 1, "partial": 1, "missing": 1, "fail": 2, "failed": 2, "error": 2}
+STATUS_RANK = {
+    "pass": 0,
+    "ok": 0,
+    "success": 0,
+    "complete": 0,
+    "not_expected": 0,
+    "warn": 1,
+    "partial": 1,
+    "missing": 1,
+    "fail": 2,
+    "failed": 2,
+    "error": 2,
+}
+
+ISSUE_SEVERITY_RANK = {
+    "critical": 0,
+    "fail": 0,
+    "error": 0,
+    "warning": 1,
+    "warn": 1,
+    "missing": 1,
+    "info": 2,
+    "pass": 3,
+}
 
 DATASET_LABELS = {
     "market_daily_ohlcv": "A股日线 OHLCV",
@@ -66,6 +89,15 @@ DOCUMENT_DATASETS = {
     "global_event_summary",
     "research_report_index",
 }
+
+SYMBOL_PAYLOAD_FIELDS = (
+    "instrument",
+    "symbol",
+    "stock_code",
+    "security_code",
+    "sec_code",
+    "code",
+)
 
 
 class PitLakeConsoleData:
@@ -150,6 +182,8 @@ class PitLakeConsoleData:
             "issues": issues[:25],
             "datasets": dataset_status,
             "sources": source_status,
+            "source_matrix": self.source_matrix(date=report_date, days=7),
+            "symbol_universe": self.symbols(date=report_date),
             "recent_runs": self._sort_runs_desc(runs)[:20],
         }
 
@@ -199,7 +233,120 @@ class PitLakeConsoleData:
             "quality_checks": quality_rows,
             "quality_findings": quality_findings,
             "reconciliation": reconciliation,
+            "coverage": self.dataset_coverage(logical_dataset, date=report_date, limit=limit),
             "contract": self._contract_payload(logical_dataset),
+        }
+
+    def dataset_items(
+        self,
+        logical_dataset: str,
+        *,
+        date: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        report_date = date or self.latest_date()
+        return {
+            "report_date": report_date,
+            "logical_dataset": logical_dataset,
+            "items": self._items(logical_dataset=logical_dataset, date=report_date, limit=limit),
+        }
+
+    def dataset_coverage(
+        self,
+        logical_dataset: str,
+        *,
+        date: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        report_date = date or self.latest_date()
+        date_counts = self._fetch_all(
+            """
+            select substr(stored_at, 1, 10) as date, count(*) as item_count
+            from raw_item_version
+            where logical_dataset = ?
+            group by substr(stored_at, 1, 10)
+            order by date desc
+            limit 30
+            """,
+            (logical_dataset,),
+        )
+        source_counts = self._fetch_all(
+            """
+            select source_id, count(*) as item_count
+            from raw_item_version
+            where logical_dataset = ?
+              and stored_at like ?
+            group by source_id
+            order by item_count desc, source_id
+            """,
+            (logical_dataset, f"{report_date}%"),
+        )
+        items = self._items(logical_dataset=logical_dataset, date=report_date, limit=limit)
+        symbol_counts: dict[str, int] = defaultdict(int)
+        for item in items:
+            symbol = self._symbol_from_item(item)
+            if symbol:
+                symbol_counts[symbol] += 1
+
+        expected_symbols = self._dataset_expected_symbols(logical_dataset)
+        symbols = sorted(set(symbol_counts) | set(expected_symbols))
+        symbol_rows = []
+        for symbol in symbols:
+            expected_sources = expected_symbols.get(symbol, [])
+            item_count = symbol_counts.get(symbol, 0)
+            if item_count:
+                status = "present"
+            elif expected_sources:
+                status = "missing"
+            else:
+                status = "observed"
+            symbol_rows.append(
+                {
+                    "symbol": symbol,
+                    "status": status,
+                    "item_count": item_count,
+                    "expected_source_count": len(expected_sources),
+                    "expected_sources": expected_sources,
+                }
+            )
+        return {
+            "report_date": report_date,
+            "logical_dataset": logical_dataset,
+            "coverage_scope": "registry_sample_symbols_only",
+            "date_counts": date_counts,
+            "source_counts": source_counts,
+            "symbol_counts": symbol_rows,
+        }
+
+    def dataset_quality(self, logical_dataset: str, *, date: str | None = None) -> dict[str, Any]:
+        report_date = date or self.latest_date()
+        return {
+            "report_date": report_date,
+            "logical_dataset": logical_dataset,
+            "quality_findings": self._quality_findings_for_dataset(logical_dataset, report_date),
+            "quality_checks": self._quality_checks(
+                logical_dataset=logical_dataset,
+                date=report_date,
+            ),
+        }
+
+    def dataset_reconciliation(
+        self,
+        logical_dataset: str,
+        *,
+        date: str | None = None,
+    ) -> dict[str, Any]:
+        report_date = date or self.latest_date()
+        report = self._latest_reconciliation_report(report_date)
+        return {
+            "report_date": report_date,
+            "logical_dataset": logical_dataset,
+            "dataset": self._reconciliation_for_dataset(logical_dataset, report_date),
+            "findings": [
+                finding
+                for finding in (report or {}).get("findings", [])
+                if finding.get("logical_dataset") == logical_dataset
+            ],
         }
 
     def sources(self, date: str | None = None) -> dict[str, Any]:
@@ -313,6 +460,7 @@ class PitLakeConsoleData:
         return {
             "report_date": report_date,
             "report": self._report_meta(report),
+            "report_meta": self._report_meta(report),
             "quality_findings": (report or {}).get("quality_findings", []),
             "failed_quality_samples": (report or {}).get("failed_quality_samples", []),
             "warning_quality_samples": (report or {}).get("warning_quality_samples", []),
@@ -367,6 +515,128 @@ class PitLakeConsoleData:
             "raw_object": raw,
             "items": [self._decode_item(item) for item in items],
             "preview": preview,
+        }
+
+    def symbols(self, *, date: str | None = None, limit: int = 500) -> dict[str, Any]:
+        report_date = date or self.latest_date()
+        symbols = self._symbol_universe(report_date, limit=limit)
+        return {
+            "report_date": report_date,
+            "coverage_scope": "registry_sample_symbols_plus_observed_items",
+            "symbols": symbols,
+        }
+
+    def symbol_detail(
+        self,
+        symbol: str,
+        *,
+        date: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        report_date = date or self.latest_date()
+        normalized_symbol = self._normalize_symbol(symbol)
+        items = self._symbol_items(normalized_symbol, date=report_date, limit=limit)
+        raw_objects = self._raw_objects_by_ids(
+            [str(item["raw_object_id"]) for item in items if item.get("raw_object_id")]
+        )
+        quality_checks = self._quality_for_symbol(normalized_symbol, report_date)
+        return {
+            "report_date": report_date,
+            "symbol": symbol,
+            "normalized_symbol": normalized_symbol,
+            "coverage_scope": "registry_sample_symbols_only",
+            "coverage": self._symbol_coverage(normalized_symbol, report_date, items),
+            "items": items,
+            "raw_objects": raw_objects,
+            "quality_checks": quality_checks,
+        }
+
+    def source_matrix(self, *, date: str | None = None, days: int = 7) -> dict[str, Any]:
+        dates = self.available_dates()
+        report_date = date or (dates[0] if dates else "")
+        if report_date and report_date not in dates:
+            dates.insert(0, report_date)
+        selected_dates = [dt for dt in dates if not report_date or dt <= report_date][:days]
+        if report_date and report_date not in selected_dates:
+            selected_dates = [report_date, *selected_dates][:days]
+        selected_dates = sorted(set(selected_dates), reverse=True)
+
+        if not selected_dates:
+            return {"dates": [], "rows": []}
+        placeholders = ",".join("?" for _ in selected_dates)
+        run_rows = self._fetch_all(
+            f"""
+            select run_id, source_id, logical_dataset, status, start_at, new_item_count, error_count
+            from crawl_run
+            where substr(start_at, 1, 10) in ({placeholders})
+            order by start_at desc
+            """,
+            tuple(selected_dates),
+        )
+        runs_by_source_date: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        for run in run_rows:
+            runs_by_source_date[(run["source_id"], str(run.get("start_at", ""))[:10])].append(run)
+
+        rows = []
+        for source in sorted(self._source_configs(), key=lambda item: item["source_id"]):
+            cells = []
+            for matrix_date in selected_dates:
+                day_runs = runs_by_source_date.get((source["source_id"], matrix_date), [])
+                if day_runs:
+                    status = self._status_from_runs(day_runs)
+                elif source.get("enabled"):
+                    status = "missing"
+                else:
+                    status = "not_expected"
+                cells.append(
+                    {
+                        "date": matrix_date,
+                        "status": status,
+                        "run_count": len(day_runs),
+                        "new_item_count": sum(
+                            int(run.get("new_item_count") or 0) for run in day_runs
+                        ),
+                        "error_count": sum(int(run.get("error_count") or 0) for run in day_runs),
+                        "run_ids": [run["run_id"] for run in day_runs],
+                    }
+                )
+            rows.append(
+                {
+                    "source_id": source["source_id"],
+                    "logical_dataset": source.get("logical_dataset"),
+                    "priority": source.get("priority"),
+                    "enabled": bool(source.get("enabled")),
+                    "implementation_status": source.get("implementation_status"),
+                    "cells": cells,
+                }
+            )
+        return {"dates": selected_dates, "rows": rows}
+
+    def manifests(self, *, limit: int = 100) -> dict[str, Any]:
+        rows = self._fetch_all(
+            """
+            select *
+            from collection_manifest
+            order by created_at desc
+            limit ?
+            """,
+            (limit,),
+        )
+        return {"manifests": rows}
+
+    def manifest_detail(self, manifest_id: str) -> dict[str, Any]:
+        row = self._fetch_one(
+            "select * from collection_manifest where manifest_id = ?",
+            (manifest_id,),
+        )
+        if not row:
+            return {"manifest_id": manifest_id, "found": False}
+        payload = self._manifest_payload(row)
+        return {
+            "manifest_id": manifest_id,
+            "found": True,
+            "manifest": row,
+            "payload": payload,
         }
 
     def search(self, query: str, *, limit: int = 50) -> dict[str, Any]:
@@ -441,7 +711,342 @@ class PitLakeConsoleData:
                     "payload": row,
                 }
             )
+        raw_rows = self._fetch_all(
+            """
+            select raw_object_id, source_id, logical_dataset, content_hash, stored_at
+            from raw_object
+            where raw_object_id like ?
+               or content_hash like ?
+               or source_id like ?
+               or logical_dataset like ?
+            order by stored_at desc
+            limit ?
+            """,
+            (like, like, like, like, limit),
+        )
+        for row in raw_rows:
+            results.append(
+                {
+                    "type": "raw",
+                    "title": row["raw_object_id"],
+                    "subtitle": f"{row['logical_dataset']} / {row['source_id']}",
+                    "id": row["raw_object_id"],
+                    "payload": row,
+                }
+            )
+        manifest_rows = self._fetch_all(
+            """
+            select manifest_id, manifest_date, status, created_at
+            from collection_manifest
+            where manifest_id like ? or manifest_date like ? or manifest_hash like ?
+            order by created_at desc
+            limit ?
+            """,
+            (like, like, like, limit),
+        )
+        for row in manifest_rows:
+            results.append(
+                {
+                    "type": "manifest",
+                    "title": row["manifest_id"],
+                    "subtitle": f"{row['manifest_date']} / {row['status']}",
+                    "id": row["manifest_id"],
+                    "payload": row,
+                }
+            )
+        symbol_rows = [
+            row
+            for row in self._symbol_universe(self.latest_date(), limit=limit)
+            if term.casefold() in row["symbol"].casefold()
+        ]
+        for row in symbol_rows:
+            results.append(
+                {
+                    "type": "symbol",
+                    "title": row["symbol"],
+                    "subtitle": row["scope"],
+                    "id": row["symbol"],
+                    "payload": row,
+                }
+            )
         return {"query": query, "results": results[:limit]}
+
+    def _symbol_universe(self, date: str, *, limit: int = 500) -> list[dict[str, Any]]:
+        registry_symbols: dict[str, set[str]] = defaultdict(set)
+        for source in self._source_configs():
+            default_options = source.get("default_options") or {}
+            for symbol in self._coerce_symbol_list(default_options.get("symbols")):
+                normalized = self._normalize_symbol(symbol)
+                if normalized:
+                    registry_symbols[normalized].add(source.get("logical_dataset", ""))
+
+        observed_symbols: dict[str, set[str]] = defaultdict(set)
+        rows = self._fetch_all(
+            """
+            select logical_dataset, source_item_key, observed_payload_json
+            from raw_item_version
+            where stored_at like ?
+            order by stored_at desc
+            limit ?
+            """,
+            (f"{date}%", max(limit * 20, limit)),
+        )
+        for row in rows:
+            decoded = self._decode_item(row)
+            symbol = self._symbol_from_item(decoded)
+            if symbol:
+                observed_symbols[symbol].add(row.get("logical_dataset", ""))
+
+        symbols = sorted(set(registry_symbols) | set(observed_symbols))
+        result = []
+        for symbol in symbols[:limit]:
+            registry_datasets = sorted(dataset for dataset in registry_symbols.get(symbol, set()) if dataset)
+            observed_datasets = sorted(dataset for dataset in observed_symbols.get(symbol, set()) if dataset)
+            if registry_datasets and observed_datasets:
+                scope = "registry_sample_and_observed"
+            elif registry_datasets:
+                scope = "registry_sample"
+            else:
+                scope = "observed_item"
+            result.append(
+                {
+                    "symbol": symbol,
+                    "scope": scope,
+                    "registry_datasets": registry_datasets,
+                    "observed_datasets": observed_datasets,
+                }
+            )
+        return result
+
+    def _symbol_items(self, symbol: str, *, date: str, limit: int) -> list[dict[str, Any]]:
+        terms = self._symbol_search_terms(symbol)
+        clauses = ["stored_at like ?"]
+        params: list[Any] = [f"{date}%"]
+        search_clauses = []
+        for term in terms:
+            like = f"%{term}%"
+            search_clauses.append(
+                """
+                (
+                  source_item_key like ?
+                  or coalesce(title, '') like ?
+                  or coalesce(source_url, '') like ?
+                  or observed_payload_json like ?
+                )
+                """
+            )
+            params.extend([like, like, like, like])
+        clauses.append(f"({' or '.join(search_clauses)})")
+        rows = self._fetch_all(
+            f"""
+            select *
+            from raw_item_version
+            where {' and '.join(clauses)}
+            order by stored_at desc
+            limit ?
+            """,
+            (*params, limit),
+        )
+        return [self._decode_item(row) for row in rows]
+
+    def _symbol_coverage(
+        self,
+        symbol: str,
+        date: str,
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        expectations = self._symbol_expectations(symbol)
+        observed_by_dataset: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for item in items:
+            dataset = item.get("logical_dataset")
+            if dataset:
+                observed_by_dataset[dataset].append(item)
+        datasets = sorted(set(expectations) | set(observed_by_dataset))
+        rows = []
+        for dataset in datasets:
+            expected_sources = expectations.get(dataset, [])
+            observed_items = observed_by_dataset.get(dataset, [])
+            if observed_items:
+                status = "present"
+            elif expected_sources:
+                status = "missing"
+            else:
+                status = "observed"
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "logical_dataset": dataset,
+                    "label": DATASET_LABELS.get(dataset, dataset),
+                    "status": status,
+                    "item_count": len(observed_items),
+                    "expected_source_count": len(expected_sources),
+                    "expected_sources": expected_sources,
+                    "latest_first_seen_at": max(
+                        (str(item.get("first_seen_at") or "") for item in observed_items),
+                        default=None,
+                    ),
+                    "report_date": date,
+                }
+            )
+        return rows
+
+    def _symbol_expectations(self, symbol: str) -> dict[str, list[dict[str, Any]]]:
+        expectations: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for source in self._source_configs():
+            default_options = source.get("default_options") or {}
+            symbols = [self._normalize_symbol(item) for item in self._coerce_symbol_list(default_options.get("symbols"))]
+            if symbol not in symbols:
+                continue
+            dataset = source.get("logical_dataset")
+            if not dataset:
+                continue
+            expectations[dataset].append(
+                {
+                    "source_id": source.get("source_id"),
+                    "enabled": bool(source.get("enabled")),
+                    "priority": source.get("priority"),
+                    "implementation_status": source.get("implementation_status"),
+                }
+            )
+        return dict(expectations)
+
+    def _dataset_expected_symbols(self, logical_dataset: str) -> dict[str, list[dict[str, Any]]]:
+        expected: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for source in self._source_configs():
+            if source.get("logical_dataset") != logical_dataset:
+                continue
+            default_options = source.get("default_options") or {}
+            for symbol in self._coerce_symbol_list(default_options.get("symbols")):
+                normalized = self._normalize_symbol(symbol)
+                if not normalized:
+                    continue
+                expected[normalized].append(
+                    {
+                        "source_id": source.get("source_id"),
+                        "enabled": bool(source.get("enabled")),
+                        "priority": source.get("priority"),
+                        "implementation_status": source.get("implementation_status"),
+                    }
+                )
+        return dict(expected)
+
+    def _quality_for_symbol(self, symbol: str, date: str) -> list[dict[str, Any]]:
+        terms = self._symbol_search_terms(symbol)
+        clauses = ["created_at like ?"]
+        params: list[Any] = [f"{date}%"]
+        search_clauses = []
+        for term in terms:
+            like = f"%{term}%"
+            search_clauses.append(
+                """
+                (
+                  coalesce(sample_failed_keys, '') like ?
+                  or coalesce(observed_value, '') like ?
+                )
+                """
+            )
+            params.extend([like, like])
+        clauses.append(f"({' or '.join(search_clauses)})")
+        return self._fetch_all(
+            f"""
+            select *
+            from quality_check_result
+            where {' and '.join(clauses)}
+            order by created_at desc
+            limit 200
+            """,
+            tuple(params),
+        )
+
+    def _raw_objects_by_ids(self, raw_object_ids: list[str]) -> list[dict[str, Any]]:
+        ids = sorted(set(raw_object_ids))
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        return self._fetch_all(
+            f"""
+            select *
+            from raw_object
+            where raw_object_id in ({placeholders})
+            order by stored_at desc
+            """,
+            tuple(ids),
+        )
+
+    def _manifest_payload(self, manifest: dict[str, Any]) -> dict[str, Any] | None:
+        path = Path(str(manifest.get("manifest_path") or ""))
+        if not path.is_absolute():
+            path = self.settings.data_lake_root / path
+        try:
+            resolved = path.resolve()
+            data_root = self.settings.data_lake_root.resolve()
+            if not resolved.is_relative_to(data_root) or not resolved.exists():
+                return None
+            return json.loads(resolved.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def _symbol_from_item(self, item: dict[str, Any]) -> str | None:
+        payload = item.get("observed_payload")
+        if not isinstance(payload, dict):
+            payload = {}
+        for field in SYMBOL_PAYLOAD_FIELDS:
+            value = payload.get(field)
+            symbol = self._normalize_symbol(value)
+            if symbol:
+                return symbol
+        key = str(item.get("source_item_key") or "")
+        for part in key.replace("|", ":").split(":"):
+            symbol = self._normalize_key_symbol(part)
+            if symbol:
+                return symbol
+        return None
+
+    def _coerce_symbol_list(self, raw_symbols: Any) -> list[str]:
+        if raw_symbols is None:
+            return []
+        if isinstance(raw_symbols, str):
+            return [item.strip() for item in raw_symbols.split(",") if item.strip()]
+        if isinstance(raw_symbols, list | tuple | set):
+            return [str(item).strip() for item in raw_symbols if str(item).strip()]
+        return [str(raw_symbols).strip()]
+
+    def _symbol_search_terms(self, symbol: str) -> list[str]:
+        terms = {symbol}
+        if len(symbol) == 6 and symbol.isdigit():
+            terms.update({f"sh{symbol}", f"sz{symbol}", f"bj{symbol}"})
+        return sorted(term for term in terms if term)
+
+    def _normalize_symbol(self, value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        clean = text.lower().replace(".", "").replace("_", "")
+        if clean.startswith(("sh", "sz", "bj")) and clean[2:].isdigit():
+            return clean[2:]
+        if clean.isdigit() and 5 <= len(clean) <= 6:
+            return clean.zfill(6)
+        if text.isascii() and any(char.isalpha() for char in text) and len(text) <= 8:
+            return text.upper()
+        return ""
+
+    def _normalize_key_symbol(self, value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        clean = text.lower().replace(".", "").replace("_", "")
+        if clean.startswith(("sh", "sz", "bj")) and clean[2:].isdigit():
+            return clean[2:]
+        if clean.isdigit() and 5 <= len(clean) <= 6:
+            return clean.zfill(6)
+        if (
+            text.isascii()
+            and text == text.upper()
+            and any(char.isalpha() for char in text)
+            and len(text) <= 8
+        ):
+            return text
+        return ""
 
     def available_dates(self) -> list[str]:
         dates: set[str] = set()
@@ -794,7 +1399,10 @@ class PitLakeConsoleData:
             )
         return sorted(
             issues,
-            key=lambda item: (0 if item["severity"] == "critical" else 1, item["title"]),
+            key=lambda item: (
+                ISSUE_SEVERITY_RANK.get(str(item.get("severity") or "").lower(), 2),
+                item["title"],
+            ),
         )
 
     def _overall_status(
@@ -1031,8 +1639,10 @@ class PitLakeConsoleData:
 
     def _normalize_status(self, status: Any) -> str:
         value = str(status or "missing").lower()
-        if value in {"pass", "ok", "success", "complete", "stored"}:
+        if value in {"pass", "ok", "success", "complete", "stored", "present", "observed"}:
             return "pass"
+        if value in {"not_expected", "not_applicable", "skipped"}:
+            return "not_expected"
         if value in {"warn", "warning", "partial", "missing"}:
             return "warn" if value != "missing" else "missing"
         if value in {"fail", "failed", "error"}:
