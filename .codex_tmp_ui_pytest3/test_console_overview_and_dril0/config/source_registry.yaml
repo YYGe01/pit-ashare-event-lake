@@ -1,0 +1,17 @@
+
+sources:
+  - source_id: demo_market_daily
+    provider_id: demo
+    logical_dataset: market_daily_ohlcv
+    source_type: python_api
+    access_method: local
+    auth_type: none
+    priority: P0
+    enabled: true
+    implementation_status: active_v0
+    adapter_class: demo.Adapter
+    default_options:
+      symbols:
+        - "000001"
+        - "600000"
+      limit_symbols: 2

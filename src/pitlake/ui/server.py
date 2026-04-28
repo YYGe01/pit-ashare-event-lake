@@ -144,6 +144,8 @@ def _dispatch_api(
         return data.quality_findings(date=date)
     if parts == ["reconciliation"]:
         return data.reconciliation(date=date)
+    if parts == ["governance"]:
+        return data.governance(date=date)
     if parts == ["manifests"]:
         return data.manifests(limit=limit)
     if len(parts) == 2 and parts[0] == "manifests":

@@ -195,6 +195,107 @@ def test_console_overview_and_drilldown(tmp_path: Path) -> None:
     assert manifest_detail["found"] is True
     assert manifest_detail["payload"]["manifest_id"] == manifest["manifest_id"]
 
+    governance = console.governance(date)
+    assert governance["dataset_scores"][0]["logical_dataset"] == "market_daily_ohlcv"
+    assert governance["volume_baselines"]
+    assert governance["source_health_summary"]["missing_count"] == 1
+
+
+def test_console_governance_flags_volume_and_schema_drift(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    LakeLayout(settings).create()
+    metadata = MetadataStore(settings)
+    metadata.init_schema()
+    report_date = "2026-04-24"
+
+    run_id = metadata.create_run(
+        source_id="demo_market_daily",
+        provider_id="demo",
+        logical_dataset="market_daily_ohlcv",
+        connector_name="DemoConnector",
+        connector_version="0.1",
+        trigger_type="manual",
+    )
+    metadata.finish_run(run_id, status="success", request_count=1, success_count=1, new_item_count=1)
+    with metadata.connect() as conn:
+        conn.execute(
+            """
+            update crawl_run
+            set start_at = ?, end_at = ?, created_at = ?
+            where run_id = ?
+            """,
+            (
+                f"{report_date}T20:00:00+08:00",
+                f"{report_date}T20:01:00+08:00",
+                f"{report_date}T20:00:00+08:00",
+                run_id,
+            ),
+        )
+
+    for day in ["2026-04-21", "2026-04-22", "2026-04-23"]:
+        for index in range(5):
+            metadata.insert_raw_item_version(
+                logical_dataset="market_daily_ohlcv",
+                provider_id="demo",
+                source_id="demo_market_daily",
+                source_item_key=f"000001|{day}|{index}",
+                first_seen_at=f"{day}T20:00:00+08:00",
+                stored_at=f"{day}T20:00:00+08:00",
+                raw_object_id=f"raw-{day}-{index}",
+                content_hash=f"hash-{day}-{index}",
+                quality_status="pass",
+                observed_payload={
+                    "instrument": "000001",
+                    "trading_date": day,
+                    "open": 10,
+                    "high": 11,
+                    "low": 9,
+                    "close": 10.5,
+                },
+            )
+    metadata.insert_raw_item_version(
+        logical_dataset="market_daily_ohlcv",
+        provider_id="demo",
+        source_id="demo_market_daily",
+        source_item_key=f"000001|{report_date}",
+        first_seen_at=f"{report_date}T20:00:00+08:00",
+        stored_at=f"{report_date}T20:00:00+08:00",
+        raw_object_id="raw-current",
+        content_hash="hash-current",
+        quality_status="pass",
+        observed_payload={
+            "instrument": "000001",
+            "trading_date": report_date,
+            "open": 10,
+            "high": 11,
+            "low": 9,
+            "close": 10.5,
+            "unexpected_vendor_field": "new",
+        },
+    )
+    QualityReportStore(settings).generate_daily_report(
+        report_date=report_date,
+        metadata_store=metadata,
+    )
+
+    governance = PitLakeConsoleData(settings).governance(report_date)
+    market_volume = next(
+        row
+        for row in governance["volume_baselines"]
+        if row["logical_dataset"] == "market_daily_ohlcv"
+    )
+    assert market_volume["status"] == "warn"
+    assert market_volume["current_count"] == 1
+    assert market_volume["baseline_average"] == 5
+    assert market_volume["ratio_to_baseline"] == 0.2
+
+    drift = governance["schema_drift"][0]
+    assert drift["logical_dataset"] == "market_daily_ohlcv"
+    assert drift["unknown_fields"] == ["unexpected_vendor_field"]
+    score = governance["dataset_scores"][0]
+    assert score["logical_dataset"] == "market_daily_ohlcv"
+    assert score["quality_score"] < 100
+
 
 def test_console_search_finds_source_and_items(tmp_path: Path) -> None:
     settings = _settings(tmp_path)

@@ -1,0 +1,7 @@
+
+policies:
+  - logical_dataset: market_daily_ohlcv
+    priority: P0
+    cadence: daily
+    windows: []
+    freshness_slo_minutes: 1440

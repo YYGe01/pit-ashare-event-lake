@@ -478,6 +478,34 @@ class PitLakeConsoleData:
             "findings": (report or {}).get("findings", []),
         }
 
+    def governance(self, date: str | None = None) -> dict[str, Any]:
+        report_date = date or self.latest_date()
+        overview = self.overview(report_date)
+        quality_report = self._latest_quality_report(report_date)
+        reconciliation_report = self._latest_reconciliation_report(report_date)
+        source_health = self._source_health_rows(overview["sources"])
+        return {
+            "report_date": report_date,
+            "available_dates": overview["available_dates"],
+            "quality_report": self._report_meta(quality_report),
+            "reconciliation_report": self._report_meta(reconciliation_report),
+            "dataset_scores": self._dataset_quality_scores(
+                overview["datasets"],
+                quality_report=quality_report,
+                reconciliation_report=reconciliation_report,
+            ),
+            "volume_baselines": self._volume_baselines(report_date),
+            "schema_drift": self._schema_drift_rows(report_date, quality_report),
+            "source_health_summary": {
+                "source_count": len(source_health),
+                "pass_count": sum(1 for row in source_health if row["status"] == "pass"),
+                "warn_count": sum(1 for row in source_health if row["status"] == "warn"),
+                "fail_count": sum(1 for row in source_health if row["status"] == "fail"),
+                "missing_count": sum(1 for row in source_health if row["status"] == "missing"),
+            },
+            "source_health": source_health,
+        }
+
     def raw_objects(
         self,
         *,
@@ -1462,6 +1490,222 @@ class PitLakeConsoleData:
             if dataset.get("logical_dataset") == logical_dataset:
                 return dataset
         return None
+
+    def _dataset_quality_scores(
+        self,
+        dataset_rows: list[dict[str, Any]],
+        *,
+        quality_report: dict[str, Any] | None,
+        reconciliation_report: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        quality_missing = quality_report is None
+        reconciliation_missing = reconciliation_report is None
+        rows = []
+        for dataset in dataset_rows:
+            score = 100
+            factors: list[str] = []
+            status_penalty = self._score_penalty(dataset.get("status"), fail=35, warn=18)
+            if status_penalty:
+                score -= status_penalty
+                factors.append(f"dataset_status={dataset.get('status')}")
+            quality_status = dataset.get("quality_status")
+            if quality_missing:
+                score -= 12
+                factors.append("quality_report_missing")
+            else:
+                quality_penalty = self._score_penalty(quality_status, fail=30, warn=15)
+                if quality_penalty:
+                    score -= quality_penalty
+                    factors.append(f"quality_status={quality_status}")
+            reconciliation_status = dataset.get("reconciliation_status")
+            if reconciliation_missing:
+                score -= 8
+                factors.append("reconciliation_report_missing")
+            else:
+                reconciliation_penalty = self._score_penalty(
+                    reconciliation_status,
+                    fail=20,
+                    warn=10,
+                )
+                if reconciliation_penalty:
+                    score -= reconciliation_penalty
+                    factors.append(f"reconciliation_status={reconciliation_status}")
+            if dataset.get("enabled_source_count") and not dataset.get("run_count"):
+                score -= 20
+                factors.append("enabled_without_run")
+            if dataset.get("run_count") and not dataset.get("item_version_count"):
+                score -= 10
+                factors.append("run_without_items")
+
+            score = max(0, min(100, score))
+            if score >= 80:
+                score_status = "pass"
+            elif score >= 60:
+                score_status = "warn"
+            else:
+                score_status = "fail"
+            rows.append(
+                {
+                    "logical_dataset": dataset.get("logical_dataset"),
+                    "label": dataset.get("label"),
+                    "priority": dataset.get("priority"),
+                    "status": score_status,
+                    "quality_score": score,
+                    "dataset_status": dataset.get("status"),
+                    "quality_status": quality_status or ("missing" if quality_missing else "pass"),
+                    "reconciliation_status": reconciliation_status
+                    or ("missing" if reconciliation_missing else "pass"),
+                    "item_version_count": dataset.get("item_version_count", 0),
+                    "run_count": dataset.get("run_count", 0),
+                    "factors": factors or ["clean"],
+                }
+            )
+        return sorted(rows, key=lambda row: (row["quality_score"], row["logical_dataset"] or ""))
+
+    def _score_penalty(self, status: Any, *, fail: int, warn: int) -> int:
+        normalized = self._normalize_status(status)
+        if normalized == "fail":
+            return fail
+        if normalized in {"warn", "missing"}:
+            return warn
+        return 0
+
+    def _volume_baselines(self, report_date: str, *, window_days: int = 30) -> list[dict[str, Any]]:
+        rows = self._fetch_all(
+            """
+            select logical_dataset, substr(stored_at, 1, 10) as dt, count(*) as item_count
+            from raw_item_version
+            where substr(stored_at, 1, 10) <= ?
+            group by logical_dataset, substr(stored_at, 1, 10)
+            order by logical_dataset, dt desc
+            """,
+            (report_date,),
+        )
+        by_dataset: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            by_dataset[row["logical_dataset"]].append(
+                {"date": row["dt"], "item_count": int(row["item_count"] or 0)}
+            )
+
+        datasets = sorted(
+            set(by_dataset)
+            | {str(source.get("logical_dataset")) for source in self._source_configs()}
+        )
+        result = []
+        for dataset in datasets:
+            history = by_dataset.get(dataset, [])[:window_days]
+            current_count = next(
+                (row["item_count"] for row in history if row["date"] == report_date),
+                0,
+            )
+            baseline_counts = [
+                row["item_count"] for row in history if row["date"] < report_date
+            ][: window_days - 1]
+            baseline_average = (
+                round(sum(baseline_counts) / len(baseline_counts), 2)
+                if baseline_counts
+                else None
+            )
+            ratio = (
+                round(current_count / baseline_average, 4)
+                if baseline_average and baseline_average > 0
+                else None
+            )
+            status = "not_enough_history"
+            message = "fewer than 3 prior observation days"
+            if len(baseline_counts) >= 3 and baseline_average is not None:
+                if current_count == 0:
+                    status = "fail"
+                    message = "current day has no observed items against nonzero baseline"
+                elif ratio is not None and (ratio < 0.5 or ratio > 2.0):
+                    status = "warn"
+                    message = "current item count is outside 0.5x-2.0x baseline range"
+                else:
+                    status = "pass"
+                    message = "current item count is within baseline range"
+            result.append(
+                {
+                    "logical_dataset": dataset,
+                    "label": DATASET_LABELS.get(dataset, dataset),
+                    "status": status,
+                    "current_count": current_count,
+                    "baseline_average": baseline_average,
+                    "baseline_days": len(baseline_counts),
+                    "ratio_to_baseline": ratio,
+                    "message": message,
+                    "history": history,
+                }
+            )
+        return sorted(
+            result,
+            key=lambda row: (
+                STATUS_RANK.get(self._normalize_status(row["status"]), 1),
+                row["logical_dataset"],
+            ),
+            reverse=True,
+        )
+
+    def _schema_drift_rows(
+        self,
+        report_date: str,
+        quality_report: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        rows = []
+        for finding in (quality_report or {}).get("quality_findings", []):
+            if finding.get("finding_type") != "schema_drift_unknown_fields":
+                continue
+            observed_value = str(finding.get("observed_value") or "")
+            unknown_fields = [
+                field.strip()
+                for field in observed_value.split(",")
+                if field.strip()
+            ]
+            rows.append(
+                {
+                    "report_date": report_date,
+                    "logical_dataset": finding.get("logical_dataset"),
+                    "source_id": finding.get("source_id"),
+                    "status": self._finding_severity(finding),
+                    "severity": finding.get("severity"),
+                    "unknown_fields": unknown_fields,
+                    "failed_count": finding.get("failed_count", len(unknown_fields)),
+                    "sample_failed_keys": finding.get("sample_failed_keys", []),
+                    "message": finding.get("message"),
+                }
+            )
+        return sorted(rows, key=lambda row: (row["logical_dataset"] or "", row["unknown_fields"]))
+
+    def _source_health_rows(self, source_status_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows = []
+        for source in source_status_rows:
+            health = source.get("health") or {}
+            if not source.get("enabled") and not health:
+                continue
+            health_status = self._normalize_status(health.get("status")) if health else "missing"
+            rows.append(
+                {
+                    "source_id": source.get("source_id"),
+                    "logical_dataset": source.get("logical_dataset"),
+                    "enabled": source.get("enabled"),
+                    "status": health_status,
+                    "freshness_minutes": health.get("freshness_minutes"),
+                    "last_success_time": health.get("last_success_time"),
+                    "last_error_time": health.get("last_error_time"),
+                    "success_rate_24h": health.get("success_rate_24h"),
+                    "new_items_24h": health.get("new_items_24h"),
+                    "notes": health.get("notes") or (
+                        "source_health ledger missing" if not health else ""
+                    ),
+                }
+            )
+        return sorted(
+            rows,
+            key=lambda row: (
+                STATUS_RANK.get(row["status"], 1),
+                row["source_id"] or "",
+            ),
+            reverse=True,
+        )
 
     def _runs(
         self,

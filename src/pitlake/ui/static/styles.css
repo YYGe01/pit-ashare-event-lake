@@ -178,6 +178,31 @@ button {
   font-weight: 700;
 }
 
+.metric-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.mini-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfd;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mini-metric strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
 .status {
   display: inline-flex;
   align-items: center;

@@ -91,6 +91,7 @@ function switchView(view, options = {}) {
     sources: renderSources,
     runs: renderRuns,
     quality: renderQuality,
+    governance: renderGovernance,
     reconciliation: renderReconciliation,
     raw: renderRaw,
     manifests: renderManifests,
@@ -244,6 +245,67 @@ async function renderQuality() {
         ["status", "status", (row) => statusBadge(row.status)],
         ["failed_count", "failed"],
         ["created_at", "created_at"],
+      ])}
+    </section>
+  `;
+}
+
+async function renderGovernance() {
+  const payload = await api(`/api/governance?date=${state.date}`);
+  app.innerHTML = `
+    <section class="section">
+      <div class="toolbar">
+        <h2>质量治理</h2>
+        <div class="metric-inline">
+          ${miniMetric("Health Pass", payload.source_health_summary.pass_count)}
+          ${miniMetric("Health Warn", payload.source_health_summary.warn_count)}
+          ${miniMetric("Health Fail", payload.source_health_summary.fail_count)}
+          ${miniMetric("Health Missing", payload.source_health_summary.missing_count)}
+        </div>
+      </div>
+      <h3>Dataset Quality Score</h3>
+      ${table(payload.dataset_scores, [
+        ["status", "status", (row) => statusBadge(row.status)],
+        ["logical_dataset", "logical_dataset", (row) => datasetButton(row.logical_dataset)],
+        ["label", "中文名称"],
+        ["quality_score", "score"],
+        ["dataset_status", "dataset", (row) => statusBadge(row.dataset_status)],
+        ["quality_status", "quality", (row) => statusBadge(row.quality_status)],
+        ["reconciliation_status", "reconcile", (row) => statusBadge(row.reconciliation_status)],
+        ["item_version_count", "items"],
+        ["run_count", "runs"],
+        ["factors", "factors", (row) => listText(row.factors)],
+      ])}
+      <h3>Volume Baseline</h3>
+      ${table(payload.volume_baselines, [
+        ["status", "status", (row) => statusBadge(row.status)],
+        ["logical_dataset", "logical_dataset", (row) => datasetButton(row.logical_dataset)],
+        ["current_count", "current"],
+        ["baseline_average", "baseline_avg"],
+        ["baseline_days", "days"],
+        ["ratio_to_baseline", "ratio", (row) => formatRatio(row.ratio_to_baseline)],
+        ["history", "recent_history", (row) => historyText(row.history)],
+        ["message", "message"],
+      ])}
+      <h3>Schema Drift</h3>
+      ${table(payload.schema_drift, [
+        ["status", "status", (row) => statusBadge(row.status)],
+        ["logical_dataset", "logical_dataset", (row) => datasetButton(row.logical_dataset)],
+        ["source_id", "source_id", (row) => sourceMaybe(row.source_id)],
+        ["unknown_fields", "unknown_fields", (row) => listText(row.unknown_fields)],
+        ["failed_count", "failed"],
+        ["sample_failed_keys", "samples", (row) => listText(row.sample_failed_keys)],
+      ])}
+      <h3>Source Health</h3>
+      ${table(payload.source_health, [
+        ["status", "status", (row) => statusBadge(row.status)],
+        ["source_id", "source_id", (row) => sourceMaybe(row.source_id)],
+        ["logical_dataset", "logical_dataset", (row) => datasetButton(row.logical_dataset)],
+        ["freshness_minutes", "freshness_min"],
+        ["success_rate_24h", "success_24h", (row) => formatPercent(row.success_rate_24h)],
+        ["new_items_24h", "new_24h"],
+        ["last_success_time", "last_success"],
+        ["notes", "notes"],
       ])}
     </section>
   `;
@@ -738,6 +800,10 @@ function metric(label, value) {
   `;
 }
 
+function miniMetric(label, value) {
+  return `<span class="mini-metric"><strong>${escapeHtml(String(value ?? 0))}</strong>${escapeHtml(label)}</span>`;
+}
+
 function statusBadge(status) {
   const normalized = normalizeStatus(status);
   return `<span class="status ${normalized}">${escapeHtml(status || "missing")}</span>`;
@@ -748,7 +814,7 @@ function normalizeStatus(status) {
   if (["pass", "ok", "success", "complete", "stored", "present", "observed"].includes(value)) return "pass";
   if (["fail", "failed", "error", "critical"].includes(value)) return "fail";
   if (["warn", "warning", "partial", "missing"].includes(value)) return "warn";
-  if (["not_expected", "not_applicable", "skipped"].includes(value)) return "neutral";
+  if (["not_expected", "not_applicable", "skipped", "not_enough_history"].includes(value)) return "neutral";
   return "neutral";
 }
 
@@ -785,6 +851,21 @@ function short(value, length = 12) {
 function listText(value) {
   if (!Array.isArray(value)) return escapeHtml(value || "");
   return escapeHtml(value.join(", "));
+}
+
+function historyText(history) {
+  if (!Array.isArray(history) || history.length === 0) return "";
+  return escapeHtml(history.slice(0, 7).map((row) => `${row.date}:${row.item_count}`).join(" | "));
+}
+
+function formatRatio(value) {
+  if (value === null || value === undefined || value === "") return "";
+  return `${Number(value).toFixed(2)}x`;
+}
+
+function formatPercent(value) {
+  if (value === null || value === undefined || value === "") return "";
+  return `${(Number(value) * 100).toFixed(0)}%`;
 }
 
 function openDrawer(title, body) {

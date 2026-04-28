@@ -1,0 +1,17 @@
+
+logical_dataset: market_daily_ohlcv
+contract_version: 1
+description: Demo market data.
+primary_key_fields:
+  - instrument
+  - trading_date
+required_fields:
+  - instrument
+  - trading_date
+  - open
+  - high
+  - low
+  - close
+optional_fields:
+  - volume
+  - amount
