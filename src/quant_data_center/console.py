@@ -2263,6 +2263,15 @@ def _raw_rows_from_payload(
     object_matches: bool,
     limit: int,
 ) -> tuple[list[dict[str, Any]], list[str]]:
+    if dataset == "adj_factor":
+        return _raw_adj_factor_rows_from_payload(
+            payload,
+            instrument=instrument,
+            start=start,
+            end=end,
+            object_matches=object_matches,
+            limit=limit,
+        )
     rows = []
     columns: list[str] = []
     for record_set, records in _raw_record_sets(payload):
@@ -2287,6 +2296,70 @@ def _raw_rows_from_payload(
             rows.append(public_row)
             if len(rows) >= limit:
                 return rows, columns
+    return rows, columns
+
+
+def _raw_adj_factor_rows_from_payload(
+    payload: dict[str, Any],
+    *,
+    instrument: str,
+    start: str | None,
+    end: str | None,
+    object_matches: bool,
+    limit: int,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    raw_records = payload.get("raw_records")
+    if not isinstance(raw_records, list):
+        raw_records = payload.get("records")
+    if not isinstance(raw_records, list):
+        raw_records = []
+    qfq_records = payload.get("qfq_records")
+    if not isinstance(qfq_records, list):
+        qfq_records = []
+    qfq_by_date = {
+        _raw_record_date(record): record
+        for record in qfq_records
+        if isinstance(record, dict) and _raw_record_date(record)
+    }
+    rows = []
+    columns: list[str] = []
+    for record in raw_records:
+        raw_record = record if isinstance(record, dict) else {"value": record}
+        if not object_matches and not _raw_record_matches_instrument(raw_record, instrument):
+            continue
+        if not _raw_record_matches_date(raw_record, start=start, end=end):
+            continue
+        trade_date = _raw_record_date(raw_record)
+        qfq_record = qfq_by_date.get(trade_date, {})
+        raw_close = _raw_first_value(raw_record, ("close", "收盘", "收盘价", "最新价"))
+        qfq_close = _raw_first_value(qfq_record, ("close", "收盘", "收盘价", "最新价"))
+        raw_close_number = _raw_number(raw_close)
+        qfq_close_number = _raw_number(qfq_close)
+        adj_factor = (
+            round(qfq_close_number / raw_close_number, 10)
+            if raw_close_number not in (None, 0) and qfq_close_number is not None
+            else None
+        )
+        public_row = _drop_empty_values(
+            {
+                "factor_input": RAW_FACTOR_INPUT_PURPOSES["adj_factor"],
+                "trade_date": trade_date,
+                "instrument": _raw_record_instrument(raw_record) or instrument,
+                "symbol": _raw_first_value(raw_record, _raw_symbol_keys()),
+                "adj_factor": adj_factor,
+                "factor_type": "qfq_close_ratio_v0_inferred" if adj_factor is not None else None,
+                "raw_close": raw_close,
+                "qfq_close": qfq_close,
+            }
+        )
+        if not {"adj_factor", "raw_close", "qfq_close"} & set(public_row):
+            continue
+        for column in public_row:
+            if column not in columns:
+                columns.append(column)
+        rows.append(public_row)
+        if len(rows) >= limit:
+            return rows, columns
     return rows, columns
 
 
@@ -2332,6 +2405,15 @@ def _raw_factor_input_row(
             "row_index": row_index,
         }
     public_row = _drop_empty_values(row)
+    if dataset in {"daily_bar", "adj_factor", "price_limit", "trade_status"}:
+        value_fields = {
+            "daily_bar": ("open", "high", "low", "close", "volume", "amount"),
+            "adj_factor": ("adj_factor", "factor_type"),
+            "price_limit": ("limit_up", "limit_down", "prev_close", "limit_rule"),
+            "trade_status": ("trade_status", "halt_reason", "source_update_time"),
+        }[dataset]
+        if not any(field in public_row for field in value_fields):
+            return {}
     useful_keys = set(public_row) - {"factor_input", "instrument", "symbol"}
     return public_row if useful_keys else {}
 
@@ -2347,7 +2429,7 @@ def _raw_daily_input_row(
         "instrument": _raw_record_instrument(record) or instrument,
         "symbol": _raw_first_value(record, _raw_symbol_keys()),
     }
-    if dataset in {"daily_bar", "adj_factor"}:
+    if dataset == "daily_bar":
         row.update(
             {
                 "open": _raw_first_value(record, ("open", "开盘", "开盘价")),
@@ -2356,7 +2438,13 @@ def _raw_daily_input_row(
                 "close": _raw_first_value(record, ("close", "收盘", "收盘价", "最新价")),
                 "volume": _raw_first_value(record, ("volume", "成交量")),
                 "amount": _raw_first_value(record, ("amount", "成交额")),
+            }
+        )
+    if dataset == "adj_factor":
+        row.update(
+            {
                 "adj_factor": _raw_first_value(record, ("adj_factor", "复权因子", "factor")),
+                "factor_type": _raw_first_value(record, ("factor_type", "复权类型")),
             }
         )
     if dataset == "price_limit":
@@ -2447,6 +2535,15 @@ def _raw_public_value(value: Any) -> Any:
     if isinstance(value, str):
         return value.strip()
     return value
+
+
+def _raw_number(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _drop_empty_values(row: dict[str, Any]) -> dict[str, Any]:

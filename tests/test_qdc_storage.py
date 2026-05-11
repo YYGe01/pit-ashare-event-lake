@@ -711,6 +711,35 @@ def test_qdc_console_raw_instrument_preview_reads_raw_records(tmp_path: Path) ->
         content_hash="unit-test",
         size_bytes=raw_path.stat().st_size,
     )
+    adj_raw_path = settings.raw_root / "adj_factor" / "unit_test" / "dt=2026-05-11" / "raw.json"
+    adj_raw_path.parent.mkdir(parents=True)
+    adj_raw_payload = {
+        "function": "stock_zh_a_hist",
+        "params": {"symbol": "600000", "start_date": "2026-05-11"},
+        "raw_records": [
+            {
+                "日期": "2026-05-11",
+                "股票代码": "600000",
+                "收盘": 10.2,
+            }
+        ],
+        "qfq_records": [
+            {
+                "日期": "2026-05-11",
+                "股票代码": "600000",
+                "收盘": 10.71,
+            }
+        ],
+    }
+    adj_raw_path.write_text(json.dumps(adj_raw_payload, ensure_ascii=False), encoding="utf-8")
+    database.insert_source_object(
+        dataset="adj_factor",
+        source_id="unit_test",
+        layer="raw",
+        uri=str(adj_raw_path),
+        content_hash="unit-test-adj",
+        size_bytes=adj_raw_path.stat().st_size,
+    )
 
     preview = QdcConsoleData(settings).raw_instrument_preview(
         instrument="SH600000",
@@ -720,24 +749,29 @@ def test_qdc_console_raw_instrument_preview_reads_raw_records(tmp_path: Path) ->
 
     assert preview["status"] == "ok"
     assert preview["instrument"] == "SH600000"
-    assert preview["summary"]["dataset_count"] == 1
-    assert preview["summary"]["object_count"] == 1
-    assert preview["summary"]["row_count"] == 1
-    section = preview["sections"][0]
-    assert section["dataset"] == "news"
-    assert section["objects"][0]["function"] == "stock_news_em"
-    assert section["objects"][0]["parameter_summary"] == "symbol=600000；start_date=2026-05-11"
-    assert section["objects"][0]["record_count"] == 2
-    assert "params" not in section["objects"][0]
-    assert section["columns"] == ["factor_input", "publish_date", "instrument", "title", "url"]
-    assert "新闻标题" not in section["columns"]
-    assert section["rows"][0] == {
+    assert preview["summary"]["dataset_count"] == 2
+    assert preview["summary"]["object_count"] == 2
+    assert preview["summary"]["row_count"] == 2
+    sections = {section["dataset"]: section for section in preview["sections"]}
+    news_section = sections["news"]
+    assert news_section["objects"][0]["function"] == "stock_news_em"
+    assert news_section["objects"][0]["parameter_summary"] == "symbol=600000；start_date=2026-05-11"
+    assert news_section["objects"][0]["record_count"] == 2
+    assert "params" not in news_section["objects"][0]
+    assert news_section["columns"] == ["factor_input", "publish_date", "instrument", "title", "url"]
+    assert "新闻标题" not in news_section["columns"]
+    assert news_section["rows"][0] == {
         "factor_input": "新闻文本输入，用来生成新闻数量、情绪和事件类型因子",
         "publish_date": "2026-05-11",
         "instrument": "SH600000",
         "title": "浦发银行订单增长",
         "url": "https://example.com/news/1",
     }
+    adj_section = sections["adj_factor"]
+    assert adj_section["rows"][0]["trade_date"] == "2026-05-11"
+    assert adj_section["rows"][0]["raw_close"] == 10.2
+    assert adj_section["rows"][0]["qfq_close"] == 10.71
+    assert adj_section["rows"][0]["adj_factor"] == 1.05
 
 
 def test_qdc_console_instrument_timeline_merges_daily_and_documents(

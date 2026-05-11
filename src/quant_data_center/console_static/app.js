@@ -218,6 +218,8 @@ const fieldLabels = {
   vwap: "成交均价",
   adj_factor: "复权因子",
   factor_type: "因子类型",
+  raw_close: "未复权收盘价",
+  qfq_close: "前复权收盘价",
   limit_up: "涨停价",
   limit_down: "跌停价",
   prev_close: "前收盘价",
@@ -291,8 +293,9 @@ const fieldLabels = {
   universes: "股票池",
   stock_basic_present: "证券主数据",
   universe_constituent_present: "股票池成分",
-  raw_missing_daily_rows: "核心缺失行",
-  core_missing_days: "核心缺失行",
+  raw_missing_daily_rows: "原始日频缺口",
+  core_missing_days: "原始日频缺口",
+  date: "日期",
   trade_status_days: "交易状态天数",
   news_rows: "新闻明细",
   announcement_rows: "公告明细",
@@ -385,19 +388,9 @@ const factorWideColumns = [
   ...factorColumnGroups.flatMap((group) => group.fields),
 ];
 
-const rawWideColumnOrder = [
-  "dataset",
-  "factor_input",
-  "trade_date",
-  "publish_date",
-  "snapshot_date",
+const rawDateColumnOrder = [
+  "date",
   "instrument",
-  "symbol",
-  "name",
-  "exchange",
-  "industry",
-  "list_date",
-  "delist_date",
   "open",
   "high",
   "low",
@@ -405,6 +398,8 @@ const rawWideColumnOrder = [
   "volume",
   "amount",
   "adj_factor",
+  "raw_close",
+  "qfq_close",
   "limit_up",
   "limit_down",
   "prev_close",
@@ -412,10 +407,8 @@ const rawWideColumnOrder = [
   "trade_status",
   "halt_reason",
   "source_update_time",
-  "title",
-  "url",
-  "source",
-  "weight",
+  "news_count",
+  "announcement_count",
 ];
 
 const $ = (id) => document.getElementById(id);
@@ -1267,39 +1260,147 @@ function renderRawInstrumentPreview(payload) {
   $("preview-selected").innerHTML = `<strong>当前标的：</strong>${escapeHtml(payload.instrument)}。筛选日期 ${escapeHtml(payload.start || "-")} 到 ${escapeHtml(payload.end || "-")}。`;
   $("raw-preview-explanation").classList.add("hidden");
   $("raw-preview-summary").classList.add("hidden");
-  $("raw-preview-table").innerHTML = renderRawWideTable(payload.sections || []);
+  $("raw-preview-table").innerHTML = renderRawDateTable(payload.sections || []);
 }
 
-function renderRawWideTable(sections) {
-  const rows = flattenRawRows(sections);
+function renderRawDateTable(sections) {
+  const rows = buildRawDateRows(sections);
   if (!rows.length) {
     return '<div class="empty">当前标的和日期范围没有匹配的 raw 采集记录。</div>';
   }
-  const columns = rawVisibleColumns(rows);
+  const columns = rawDateColumns(rows);
   return table(columns, rows, "当前标的和日期范围没有匹配的 raw 采集记录。", {
     pageSize: Number($("preview-limit").value || CLIENT_TABLE_PAGE_SIZE),
   });
 }
 
-function flattenRawRows(sections) {
-  return sections.flatMap((section) =>
-    (section.rows || []).map((row) => ({
-      dataset: section.dataset,
+function buildRawDateRows(sections) {
+  const rowsByDate = new Map();
+  sections.forEach((section) => {
+    const dataset = section.dataset;
+    (section.rows || []).forEach((rawRow) => {
+      const sourceRow = { dataset, ...rawRow };
+      const date = rawRow.trade_date || rawRow.publish_date || rawRow.snapshot_date;
+      if (!date) {
+        return;
+      }
+      const row = ensureRawDateRow(rowsByDate, date, rawRow.instrument);
+      if (dataset === "news" || dataset === "announcement") {
+        addRawDocument(row, dataset, sourceRow);
+        return;
+      }
+      mergeRawDailyFields(row, dataset, rawRow);
+    });
+  });
+  return [...rowsByDate.values()]
+    .map((row) => ({
       ...row,
-    })),
-  );
+      news_count: row._news_documents.length,
+      announcement_count: row._announcement_documents.length,
+    }))
+    .sort((left, right) => String(right.date).localeCompare(String(left.date)));
 }
 
-function rawVisibleColumns(rows) {
-  const seen = new Set(rows.flatMap((row) => Object.keys(row)));
-  const ordered = rawWideColumnOrder.filter((key) => seen.has(key));
-  const extras = [...seen].filter((key) => !rawWideColumnOrder.includes(key)).sort();
+function ensureRawDateRow(rowsByDate, date, instrument) {
+  if (!rowsByDate.has(date)) {
+    rowsByDate.set(date, {
+      date,
+      instrument: instrument || "",
+      _news_documents: [],
+      _announcement_documents: [],
+    });
+  }
+  const row = rowsByDate.get(date);
+  if (!row.instrument && instrument) {
+    row.instrument = instrument;
+  }
+  return row;
+}
+
+function mergeRawDailyFields(target, dataset, source) {
+  const fieldGroups = {
+    daily_bar: ["open", "high", "low", "close", "volume", "amount"],
+    adj_factor: ["adj_factor", "factor_type", "raw_close", "qfq_close"],
+    price_limit: ["limit_up", "limit_down", "prev_close", "limit_rule"],
+    trade_status: ["trade_status", "halt_reason", "source_update_time"],
+    universe_constituent: ["weight"],
+  };
+  (fieldGroups[dataset] || []).forEach((field) => {
+    if ((target[field] === undefined || target[field] === "") && source[field] !== undefined) {
+      target[field] = source[field];
+    }
+  });
+}
+
+function addRawDocument(row, dataset, document) {
+  const normalized = {
+    ...document,
+    publish_date: document.publish_date || row.date,
+  };
+  if (dataset === "news") {
+    row._news_documents.push(normalized);
+  } else {
+    row._announcement_documents.push(normalized);
+  }
+}
+
+function rawDateColumns(rows) {
+  const visibleKeys = (key) =>
+    !key.startsWith("_") && rows.some((row) => row[key] !== undefined && row[key] !== "");
+  const ordered = rawDateColumnOrder.filter(visibleKeys);
+  const seen = new Set(rows.flatMap((row) => Object.keys(row)).filter(visibleKeys));
+  const extras = [...seen].filter((key) => !rawDateColumnOrder.includes(key)).sort();
   return [...ordered, ...extras].map((key) => ({
     key,
     label: fieldLabel(key),
-    format: key === "dataset" ? datasetLabel : undefined,
-    maxLength: key === "title" ? 180 : 120,
+    html: rawDocumentCellRenderer(key),
+    maxLength: 120,
   }));
+}
+
+function rawDocumentCellRenderer(key) {
+  if (key === "news_count") {
+    return (row) => rawDocumentCountCell(row.news_count, row._news_documents, "新闻");
+  }
+  if (key === "announcement_count") {
+    return (row) => rawDocumentCountCell(row.announcement_count, row._announcement_documents, "公告");
+  }
+  return undefined;
+}
+
+function rawDocumentCountCell(count, documents, label) {
+  const total = Number(count || 0);
+  if (!total) {
+    return "0";
+  }
+  if (!documents.length) {
+    return escapeHtml(number(total));
+  }
+  return `
+    <details class="document-details">
+      <summary>${escapeHtml(number(total))} 条</summary>
+      <div class="document-detail-list">
+        ${documents.map((document) => renderRawDocumentDetail(document, label)).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function renderRawDocumentDetail(document, label) {
+  const title = escapeHtml(document.title || "-");
+  const publishDate = escapeHtml(document.publish_date || "-");
+  const rawSource = document.source || document.source_id;
+  const source = rawSource ? escapeHtml(document.source || sourceLabel(document.source_id)) : "";
+  const url = document.url ? String(document.url) : "";
+  const link = url
+    ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${title}</a>`
+    : title;
+  return `
+    <div class="document-detail-item">
+      <div class="document-detail-title">${link}</div>
+      <div class="document-detail-meta">${escapeHtml(label)} / ${publishDate}${source ? ` / ${source}` : ""}</div>
+    </div>
+  `;
 }
 
 async function loadFactorPreview() {
