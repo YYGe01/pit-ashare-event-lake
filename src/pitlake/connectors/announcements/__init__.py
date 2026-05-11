@@ -1,2 +1,0 @@
-"""Announcement connectors."""
-

@@ -1,2 +1,0 @@
-"""Fundamental data connectors."""
-

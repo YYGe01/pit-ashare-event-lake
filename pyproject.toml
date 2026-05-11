@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pit-ashare-event-lake"
+name = "quant-data-center"
 version = "0.1.0"
-description = "Point-in-time A-share data collection lake."
+description = "Personal quant data center for A-share research and Qlib exports."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -26,16 +26,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
-market = ["akshare", "baostock"]
+market = ["akshare"]
 
 [project.scripts]
-pitlake = "pitlake.cli:main"
+qdc = "quant_data_center.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.package-data]
-pitlake = ["ui/static/*.html", "ui/static/*.css", "ui/static/*.js"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -1,0 +1,30 @@
+project:
+  name: quant_data_center
+  timezone: Asia/Shanghai
+  phase: migration_phase_2
+
+paths:
+  data_root: data/quant_data_center
+  database_path: data/quant_data_center/qdc.duckdb
+  raw_root: data/quant_data_center/raw
+  parquet_root: data/quant_data_center/parquet
+  qlib_root: data/quant_data_center/qlib
+  logs_dir: data/quant_data_center/logs
+
+runtime:
+  database_backend: duckdb
+  file_format: parquet
+
+policy:
+  prefer_free_sources: true
+  paid_providers_enabled: false
+  raw_append_only: true
+  unknown_copyright_policy: metadata_only
+
+universes:
+  csi300:
+    description: "Migration-phase CSI300 sample universe; replace with full constituent snapshots later."
+    symbols:
+      - SH600000
+      - SZ000001
+      - SZ300750

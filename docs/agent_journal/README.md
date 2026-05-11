@@ -20,5 +20,4 @@ docs/agent_journal/YYYY-MM-DD.md
 - 建议下一步：
 ```
 
-这里保持简短。详细架构和长期决策应写入 `docs/v0_runtime_decisions_zh.md` 或主设计文档。
-
+这里保持简短。详细架构、长期决策和下一步计划应写入 `docs/quant_data_center_migration_plan_zh.md`。

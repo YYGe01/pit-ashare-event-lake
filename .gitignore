@@ -16,8 +16,7 @@ tmp_pytest/
 *.env
 .conda/
 
-# Data lake
-data_lake/
+# Local QDC data
 data/
 *.parquet
 *.duckdb
