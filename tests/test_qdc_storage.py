@@ -1222,8 +1222,10 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path) -> None:
     )
     close_bin = (provider_uri / "features" / "sh600000" / "close.day.bin").read_bytes()
     assert struct.unpack("<fff", close_bin) == (0.0, 10.199999809265137, 10.600000381469727)
+    vwap_bin = (provider_uri / "features" / "sh600000" / "vwap.day.bin").read_bytes()
+    assert struct.unpack("<fff", vwap_bin) == (0.0, 10.199999809265137, 10.600000381469727)
     qlib_objects = database.list_source_objects(dataset="qlib_export", layer="qlib")
-    assert len(qlib_objects) == 13
+    assert len(qlib_objects) == 14
 
 
 def test_qdc_verify_qlib_reports_missing_instrument_without_db_side_effect(

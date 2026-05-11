@@ -648,7 +648,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify_qlib_parser.add_argument("--universe", default="csi300")
     verify_qlib_parser.add_argument(
         "--fields",
-        default="$close,$volume,$announcement_count,$news_count",
+        default="$close,$vwap,$volume,$announcement_count,$news_count",
         help="Comma-separated Qlib fields",
     )
     verify_qlib_parser.set_defaults(func=cmd_verify_qlib)

@@ -18,6 +18,7 @@ QLIB_FIELDS = {
     "high": "high",
     "low": "low",
     "close": "close",
+    "vwap": "vwap",
     "volume": "volume",
     "amount": "amount",
     "factor": "adj_factor",
@@ -138,6 +139,7 @@ class QlibExporter:
                   b.high,
                   b.low,
                   b.close,
+                  b.vwap,
                   b.volume,
                   b.amount,
                   a.adj_factor,
@@ -198,7 +200,7 @@ class QlibProviderVerifier:
         root = Path(provider_uri).expanduser() if provider_uri else self.settings.qlib_root / "cn_data"
         if not root.is_absolute():
             root = (self.settings.project_root / root).resolve()
-        qlib_fields = fields or ["$close", "$volume", "$announcement_count", "$news_count"]
+        qlib_fields = fields or ["$close", "$vwap", "$volume", "$announcement_count", "$news_count"]
         result: dict[str, Any] = {
             "status": "ok",
             "provider_uri": str(root),

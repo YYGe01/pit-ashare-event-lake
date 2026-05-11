@@ -72,7 +72,7 @@ data/quant_data_center/             本地运行数据，已 gitignored
 conda run -n ai-trader python -m pip install -e /root/code/qlib -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://mirrors.aliyun.com/pypi/simple
 ```
 
-当前已用本地 `/root/code/qlib` 验证 `D.calendar`、`D.list_instruments` 和 `D.features` 能读取 `qdc export-qlib` 产物。Alpha158 训练需要更长历史区间和更完整 universe，不使用只有 1 个交易日、2 个标的的 smoke provider。
+当前已用本地 `/root/code/qlib` 验证 `D.calendar`、`D.list_instruments` 和 `D.features` 能读取 `qdc export-qlib` 产物。导出字段包含 Alpha158 默认需要的 `$vwap`。Alpha158 训练需要更长历史区间和更完整 universe，不使用只有 1 个交易日、2 个标的的 smoke provider。
 
 ## 验证
 

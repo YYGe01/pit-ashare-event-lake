@@ -481,7 +481,7 @@ qdc quality --dataset daily_bar --start 2015-01-01 --end 2026-05-11
 在 /root/code/qlib 中跑通 LightGBM Alpha158 基线
 ```
 
-基础导出和 Qlib data-layer verify 命令已实现；Alpha158 baseline 需要更长历史区间和更完整 universe，不使用 1 个交易日、2 个标的的 smoke provider：
+基础导出和 Qlib data-layer verify 命令已实现；导出字段已包含 Alpha158 默认需要的 `$vwap`。Alpha158 baseline 需要更长历史区间和更完整 universe，不使用 1 个交易日、2 个标的的 smoke provider：
 
 ```bash
 qdc export-qlib --start 2015-01-01 --end 2026-05-11 --provider-uri data/quant_data_center/qlib/cn_data
@@ -576,7 +576,7 @@ LightGBM Alpha158 + news + announcement
 已实现：qdc build-factors 基础新闻/公告 count 因子
 已实现：silver/gold Parquet 派生同步
 已实现：qdc quality 基础质量命令
-已实现：qdc export-qlib 基础 day provider 导出，包含行情、复权、涨跌停和新闻/公告 count 因子
+已实现：qdc export-qlib 基础 day provider 导出，包含行情、vwap、复权、涨跌停和新闻/公告 count 因子
 已实现：qdc verify-qlib 通过本地 Qlib 校验 provider，可发现缺失 instrument / 空 feature，并输出严格 JSON
 待实现：Qlib Alpha158 baseline 外部联调
 已验证：真实 AkShare 小样本 smoke，覆盖 csi300 成分快照、stock_basic、daily、公告、基础因子、Parquet、quality 和 Qlib 导出
@@ -612,8 +612,8 @@ trade_status: 850 rows
 announcement: 852 rows
 daily_announcement_factor: 454 rows
 quality: 0 issue
-Qlib export: 2 instruments, 1 calendar date, 24 files
-Qlib verify: D.calendar / D.list_instruments / D.features 可读取 2 条 feature 行，issues=[]
+Qlib export: 2 instruments, 1 calendar date, 26 files
+Qlib verify: D.calendar / D.list_instruments / D.features 可读取 2 条 feature 行，包含 $vwap，issues=[]
 ```
 
 真实源修复：
