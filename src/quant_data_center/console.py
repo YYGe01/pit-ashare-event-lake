@@ -2407,10 +2407,29 @@ def _raw_factor_input_row(
     public_row = _drop_empty_values(row)
     if dataset in {"daily_bar", "adj_factor", "price_limit", "trade_status"}:
         value_fields = {
-            "daily_bar": ("open", "high", "low", "close", "volume", "amount"),
+            "daily_bar": (
+                "open",
+                "high",
+                "low",
+                "close",
+                "pre_close",
+                "volume",
+                "amount",
+                "vwap",
+                "turnover_rate",
+                "outstanding_share",
+            ),
             "adj_factor": ("adj_factor", "factor_type"),
             "price_limit": ("limit_up", "limit_down", "prev_close", "limit_rule"),
-            "trade_status": ("trade_status", "halt_reason", "source_update_time"),
+            "trade_status": (
+                "trade_status",
+                "halt_reason",
+                "halt_start_date",
+                "halt_end_date",
+                "halt_period",
+                "expected_resume_date",
+                "market",
+            ),
         }[dataset]
         if not any(field in public_row for field in value_fields):
             return {}
@@ -2436,8 +2455,15 @@ def _raw_daily_input_row(
                 "high": _raw_first_value(record, ("high", "最高", "最高价")),
                 "low": _raw_first_value(record, ("low", "最低", "最低价")),
                 "close": _raw_first_value(record, ("close", "收盘", "收盘价", "最新价")),
+                "pre_close": _raw_first_value(record, ("pre_close", "昨收", "昨收价")),
                 "volume": _raw_first_value(record, ("volume", "成交量")),
                 "amount": _raw_first_value(record, ("amount", "成交额")),
+                "vwap": _raw_first_value(record, ("vwap", "成交均价", "均价")),
+                "turnover_rate": _raw_first_value(record, ("turnover_rate", "turnover", "换手率")),
+                "outstanding_share": _raw_first_value(
+                    record,
+                    ("outstanding_share", "流通股本", "流通股"),
+                ),
             }
         )
     if dataset == "adj_factor":
@@ -2461,10 +2487,14 @@ def _raw_daily_input_row(
             {
                 "trade_status": _raw_first_value(record, ("trade_status", "交易状态", "停牌状态")),
                 "halt_reason": _raw_first_value(record, ("halt_reason", "停牌原因", "原因")),
-                "source_update_time": _raw_first_value(
+                "halt_start_date": _raw_date_from_keys(record, ("halt_start_date", "停牌时间")),
+                "halt_end_date": _raw_date_from_keys(record, ("halt_end_date", "停牌截止时间")),
+                "halt_period": _raw_first_value(record, ("halt_period", "停牌期限")),
+                "expected_resume_date": _raw_date_from_keys(
                     record,
-                    ("source_update_time", "更新时间", "最新公告日期"),
+                    ("expected_resume_date", "预计复牌时间", "source_update_time"),
                 ),
+                "market": _raw_first_value(record, ("market", "所属市场")),
             }
         )
     return row
@@ -2481,8 +2511,10 @@ def _raw_document_input_row(
         "instrument": _raw_record_instrument(record) or instrument,
         "symbol": _raw_first_value(record, _raw_symbol_keys()),
         "title": _raw_first_value(record, ("title", "新闻标题", "公告标题", "标题")),
-        "url": _raw_first_value(record, ("url", "链接", "公告链接", "URL")),
-        "source": _raw_first_value(record, ("source", "来源", "新闻来源")),
+        "url": _raw_first_value(record, ("url", "链接", "公告链接", "新闻链接", "网址", "URL")),
+        "source": _raw_first_value(record, ("source", "来源", "新闻来源", "文章来源")),
+        "document_type": _raw_first_value(record, ("document_type", "公告类型", "类型", "category")),
+        "keyword": _raw_first_value(record, ("keyword", "关键词")),
     }
 
 

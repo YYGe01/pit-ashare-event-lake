@@ -684,6 +684,97 @@ def test_qdc_console_raw_instrument_preview_reads_raw_records(tmp_path: Path) ->
     settings = QdcSettings.from_yaml(config_path)
     database = QdcDatabase(settings)
     database.init_schema()
+    daily_raw_path = settings.raw_root / "daily_bar" / "unit_test" / "dt=2026-05-11" / "raw.json"
+    daily_raw_path.parent.mkdir(parents=True)
+    daily_raw_payload = {
+        "function": "stock_zh_a_hist",
+        "params": {"symbol": "600000", "start_date": "2026-05-11"},
+        "records": [
+            {
+                "日期": "2026-05-11",
+                "股票代码": "600000",
+                "开盘": 10.0,
+                "最高": 10.5,
+                "最低": 9.9,
+                "收盘": 10.2,
+                "昨收": 10.1,
+                "成交量": 1000000,
+                "成交额": 10200000,
+                "成交均价": 10.2,
+                "换手率": 1.2,
+                "流通股本": 29352174170,
+            }
+        ],
+    }
+    daily_raw_path.write_text(json.dumps(daily_raw_payload, ensure_ascii=False), encoding="utf-8")
+    database.insert_source_object(
+        dataset="daily_bar",
+        source_id="unit_test",
+        layer="raw",
+        uri=str(daily_raw_path),
+        content_hash="unit-test-daily",
+        size_bytes=daily_raw_path.stat().st_size,
+    )
+    announcement_raw_path = (
+        settings.raw_root / "announcement" / "unit_test" / "dt=2026-05-11" / "raw.json"
+    )
+    announcement_raw_path.parent.mkdir(parents=True)
+    announcement_raw_payload = {
+        "function": "stock_notice_report",
+        "params": {"date": "20260511", "symbol": "全部"},
+        "records": [
+            {
+                "公告日期": "2026-05-11",
+                "代码": "600000",
+                "公告标题": "浦发银行关于利润分配的公告",
+                "公告类型": "分红派息",
+                "网址": "https://example.com/announcement/1",
+            }
+        ],
+    }
+    announcement_raw_path.write_text(
+        json.dumps(announcement_raw_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    database.insert_source_object(
+        dataset="announcement",
+        source_id="unit_test",
+        layer="raw",
+        uri=str(announcement_raw_path),
+        content_hash="unit-test-announcement",
+        size_bytes=announcement_raw_path.stat().st_size,
+    )
+    trade_status_raw_path = (
+        settings.raw_root / "trade_status" / "unit_test" / "dt=2026-05-11" / "raw.json"
+    )
+    trade_status_raw_path.parent.mkdir(parents=True)
+    trade_status_raw_payload = {
+        "function": "stock_tfp_em",
+        "params": {"date": "20260511"},
+        "records": [
+            {
+                "代码": "600000",
+                "停牌原因": "重大事项",
+                "停牌时间": "2026-05-11",
+                "停牌截止时间": "2026-05-11",
+                "停牌期限": "停牌一天",
+                "预计复牌时间": "2026-05-12",
+                "所属市场": "上交所主板",
+            }
+        ],
+    }
+    trade_status_raw_path.write_text(
+        json.dumps(trade_status_raw_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    database.insert_source_object(
+        dataset="trade_status",
+        source_id="unit_test",
+        layer="raw",
+        uri=str(trade_status_raw_path),
+        content_hash="unit-test-trade-status",
+        size_bytes=trade_status_raw_path.stat().st_size,
+    )
     raw_path = settings.raw_root / "news" / "unit_test" / "dt=2026-05-11" / "raw.json"
     raw_path.parent.mkdir(parents=True)
     raw_payload = {
@@ -694,6 +785,8 @@ def test_qdc_console_raw_instrument_preview_reads_raw_records(tmp_path: Path) ->
                 "新闻时间": "2026-05-11 09:30:00",
                 "新闻标题": "浦发银行订单增长",
                 "链接": "https://example.com/news/1",
+                "文章来源": "测试媒体",
+                "关键词": "600000",
             },
             {
                 "新闻时间": "2026-05-10 09:30:00",
@@ -749,16 +842,39 @@ def test_qdc_console_raw_instrument_preview_reads_raw_records(tmp_path: Path) ->
 
     assert preview["status"] == "ok"
     assert preview["instrument"] == "SH600000"
-    assert preview["summary"]["dataset_count"] == 2
-    assert preview["summary"]["object_count"] == 2
-    assert preview["summary"]["row_count"] == 2
+    assert preview["summary"]["dataset_count"] == 5
+    assert preview["summary"]["object_count"] == 5
+    assert preview["summary"]["row_count"] == 5
     sections = {section["dataset"]: section for section in preview["sections"]}
+    daily_section = sections["daily_bar"]
+    assert daily_section["rows"][0]["trade_date"] == "2026-05-11"
+    assert daily_section["rows"][0]["open"] == 10.0
+    assert daily_section["rows"][0]["pre_close"] == 10.1
+    assert daily_section["rows"][0]["volume"] == 1000000
+    assert daily_section["rows"][0]["vwap"] == 10.2
+    assert daily_section["rows"][0]["turnover_rate"] == 1.2
+    assert daily_section["rows"][0]["outstanding_share"] == 29352174170
+    announcement_section = sections["announcement"]
+    assert announcement_section["rows"][0]["document_type"] == "分红派息"
+    assert announcement_section["rows"][0]["url"] == "https://example.com/announcement/1"
+    trade_status_section = sections["trade_status"]
+    assert trade_status_section["rows"][0]["halt_reason"] == "重大事项"
+    assert trade_status_section["rows"][0]["expected_resume_date"] == "2026-05-12"
+    assert "source_update_time" not in trade_status_section["columns"]
     news_section = sections["news"]
     assert news_section["objects"][0]["function"] == "stock_news_em"
     assert news_section["objects"][0]["parameter_summary"] == "symbol=600000；start_date=2026-05-11"
     assert news_section["objects"][0]["record_count"] == 2
     assert "params" not in news_section["objects"][0]
-    assert news_section["columns"] == ["factor_input", "publish_date", "instrument", "title", "url"]
+    assert news_section["columns"] == [
+        "factor_input",
+        "publish_date",
+        "instrument",
+        "title",
+        "url",
+        "source",
+        "keyword",
+    ]
     assert "新闻标题" not in news_section["columns"]
     assert news_section["rows"][0] == {
         "factor_input": "新闻文本输入，用来生成新闻数量、情绪和事件类型因子",
@@ -766,6 +882,8 @@ def test_qdc_console_raw_instrument_preview_reads_raw_records(tmp_path: Path) ->
         "instrument": "SH600000",
         "title": "浦发银行订单增长",
         "url": "https://example.com/news/1",
+        "source": "测试媒体",
+        "keyword": "600000",
     }
     adj_section = sections["adj_factor"]
     assert adj_section["rows"][0]["trade_date"] == "2026-05-11"

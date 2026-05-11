@@ -216,6 +216,8 @@ const fieldLabels = {
   volume: "成交量",
   amount: "成交额",
   vwap: "成交均价",
+  turnover_rate: "换手率",
+  outstanding_share: "流通股本",
   adj_factor: "复权因子",
   factor_type: "因子类型",
   raw_close: "未复权收盘价",
@@ -226,7 +228,12 @@ const fieldLabels = {
   limit_rule: "涨跌停规则",
   trade_status: "交易状态",
   halt_reason: "停牌原因",
-  source_update_time: "来源更新时间",
+  source_update_time: "预计复牌日期",
+  halt_start_date: "停牌开始日期",
+  halt_end_date: "停牌截止日期",
+  halt_period: "停牌期限",
+  expected_resume_date: "预计复牌日期",
+  market: "所属市场",
   calendar_id: "日历编号",
   is_open: "是否开市",
   pre_trade_date: "上一交易日",
@@ -238,6 +245,8 @@ const fieldLabels = {
   title: "标题",
   url: "链接",
   source: "来源",
+  document_type: "事件类型",
+  keyword: "关键词",
   weight: "权重",
   announcement_id: "公告编号",
   news_id: "新闻编号",
@@ -383,6 +392,51 @@ const factorColumnGroups = [
   },
 ];
 
+const sourceColumnGroups = [
+  {
+    title: "行情价格",
+    description: "原始采集到的价格和成交字段，不包含加工后的文本因子。",
+    fields: ["open", "high", "low", "close", "pre_close", "volume", "amount", "vwap"],
+  },
+  {
+    title: "涨跌和流动性",
+    description: "保留上游直接给出的换手和流通股本字段，派生涨跌幅不在原始预览重复展示。",
+    fields: ["turnover_rate", "outstanding_share"],
+  },
+  {
+    title: "复权和涨跌停",
+    description: "原始复权输入和涨跌停约束字段，用来检查价格连续性和交易边界。",
+    fields: [
+      "adj_factor",
+      "factor_type",
+      "raw_close",
+      "qfq_close",
+      "limit_up",
+      "limit_down",
+      "prev_close",
+      "limit_rule",
+    ],
+  },
+  {
+    title: "停复牌状态",
+    description: "上游停牌表里的状态、原因和预计复牌日期；不展示笼统的来源更新时间。",
+    fields: [
+      "trade_status",
+      "halt_reason",
+      "halt_start_date",
+      "halt_end_date",
+      "halt_period",
+      "expected_resume_date",
+      "market",
+    ],
+  },
+  {
+    title: "事件明细",
+    description: "新闻和公告保留为原始文本明细，同一天多条时先显示数量，点击后展开。",
+    fields: ["news_count", "announcement_count"],
+  },
+];
+
 const factorWideColumns = [
   "trade_date",
   ...factorColumnGroups.flatMap((group) => group.fields),
@@ -391,25 +445,38 @@ const factorWideColumns = [
 const rawDateColumnOrder = [
   "date",
   "instrument",
-  "open",
-  "high",
-  "low",
-  "close",
-  "volume",
-  "amount",
-  "adj_factor",
-  "raw_close",
-  "qfq_close",
-  "limit_up",
-  "limit_down",
-  "prev_close",
-  "limit_rule",
-  "trade_status",
-  "halt_reason",
-  "source_update_time",
-  "news_count",
-  "announcement_count",
+  ...sourceColumnGroups.flatMap((group) => group.fields),
 ];
+
+const sourceCoverageDimensions = {
+  open: "daily_bar",
+  high: "daily_bar",
+  low: "daily_bar",
+  close: "daily_bar",
+  pre_close: "daily_bar",
+  volume: "daily_bar",
+  amount: "daily_bar",
+  vwap: "daily_bar",
+  turnover_rate: "daily_bar",
+  outstanding_share: "daily_bar",
+  adj_factor: "adj_factor",
+  factor_type: "adj_factor",
+  raw_close: "adj_factor",
+  qfq_close: "adj_factor",
+  limit_up: "price_limit",
+  limit_down: "price_limit",
+  prev_close: "price_limit",
+  limit_rule: "price_limit",
+  trade_status: "trade_status",
+  halt_reason: "trade_status",
+  halt_start_date: "trade_status",
+  halt_end_date: "trade_status",
+  halt_period: "trade_status",
+  expected_resume_date: "trade_status",
+  market: "trade_status",
+  news_count: "news",
+  announcement_count: "announcement",
+};
 
 const $ = (id) => document.getElementById(id);
 
@@ -923,7 +990,7 @@ function renderDataCoverage(coverage) {
 
   const datasetCoverageHtml = tableSummary(
     "这里只展示采集得到的基础、行情和事件源表；处理后的新闻/公告日频因子不放在覆盖表。",
-  ) + table(
+  ) + renderSourceCategories() + table(
     [
       { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel },
       { key: "coverage_kind", label: fieldLabel("coverage_kind"), format: coverageKindLabel },
@@ -966,12 +1033,15 @@ function renderDataCoverage(coverage) {
       { key: "exchange", label: fieldLabel("exchange") },
       { key: "industry", label: fieldLabel("industry"), format: (value) => value || "-" },
       { key: "universes", label: fieldLabel("universes"), value: universesValue, maxLength: 120 },
-      ...overviewInstrumentDimensions.map((dataset) => ({
-        key: dataset,
-        label: datasetLabel(dataset),
-        value: (row) => dimensionStatusValue(row.dimension_statuses?.[dataset]),
-        maxLength: 180,
-      })),
+      ...rawDateColumnOrder
+        .filter((field) => field !== "date" && field !== "instrument")
+        .map((field) => ({
+          key: field,
+          label: fieldLabel(field),
+          value: (row) =>
+            dimensionStatusValue(row.dimension_statuses?.[sourceCoverageDimensions[field]]),
+          maxLength: 180,
+        })),
     ],
     instrumentRows,
     "暂无标的完整度明细。",
@@ -1269,9 +1339,13 @@ function renderRawDateTable(sections) {
     return '<div class="empty">当前标的和日期范围没有匹配的 raw 采集记录。</div>';
   }
   const columns = rawDateColumns(rows);
-  return table(columns, rows, "当前标的和日期范围没有匹配的 raw 采集记录。", {
-    pageSize: Number($("preview-limit").value || CLIENT_TABLE_PAGE_SIZE),
-  });
+  return [
+    renderSourceCategories(),
+    tableSummary("原始数据按日期聚合，一行一个日期；新闻和公告列显示当天条数，点击数量展开明细。"),
+    table(columns, rows, "当前标的和日期范围没有匹配的 raw 采集记录。", {
+      pageSize: Number($("preview-limit").value || CLIENT_TABLE_PAGE_SIZE),
+    }),
+  ].join("");
 }
 
 function buildRawDateRows(sections) {
@@ -1319,10 +1393,29 @@ function ensureRawDateRow(rowsByDate, date, instrument) {
 
 function mergeRawDailyFields(target, dataset, source) {
   const fieldGroups = {
-    daily_bar: ["open", "high", "low", "close", "volume", "amount"],
+    daily_bar: [
+      "open",
+      "high",
+      "low",
+      "close",
+      "pre_close",
+      "volume",
+      "amount",
+      "vwap",
+      "turnover_rate",
+      "outstanding_share",
+    ],
     adj_factor: ["adj_factor", "factor_type", "raw_close", "qfq_close"],
     price_limit: ["limit_up", "limit_down", "prev_close", "limit_rule"],
-    trade_status: ["trade_status", "halt_reason", "source_update_time"],
+    trade_status: [
+      "trade_status",
+      "halt_reason",
+      "halt_start_date",
+      "halt_end_date",
+      "halt_period",
+      "expected_resume_date",
+      "market",
+    ],
     universe_constituent: ["weight"],
   };
   (fieldGroups[dataset] || []).forEach((field) => {
@@ -1347,7 +1440,7 @@ function addRawDocument(row, dataset, document) {
 function rawDateColumns(rows) {
   const visibleKeys = (key) =>
     !key.startsWith("_") && rows.some((row) => row[key] !== undefined && row[key] !== "");
-  const ordered = rawDateColumnOrder.filter(visibleKeys);
+  const ordered = rawDateColumnOrder;
   const seen = new Set(rows.flatMap((row) => Object.keys(row)).filter(visibleKeys));
   const extras = [...seen].filter((key) => !rawDateColumnOrder.includes(key)).sort();
   return [...ordered, ...extras].map((key) => ({
@@ -1391,14 +1484,23 @@ function renderRawDocumentDetail(document, label) {
   const publishDate = escapeHtml(document.publish_date || "-");
   const rawSource = document.source || document.source_id;
   const source = rawSource ? escapeHtml(document.source || sourceLabel(document.source_id)) : "";
+  const documentType = document.document_type ? escapeHtml(document.document_type) : "";
+  const keyword = document.keyword ? escapeHtml(document.keyword) : "";
   const url = document.url ? String(document.url) : "";
   const link = url
     ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${title}</a>`
     : title;
+  const meta = [
+    label,
+    publishDate,
+    source,
+    documentType,
+    keyword ? `关键词：${keyword}` : "",
+  ].filter(Boolean).join(" / ");
   return `
     <div class="document-detail-item">
       <div class="document-detail-title">${link}</div>
-      <div class="document-detail-meta">${escapeHtml(label)} / ${publishDate}${source ? ` / ${source}` : ""}</div>
+      <div class="document-detail-meta">${meta}</div>
     </div>
   `;
 }
@@ -1536,6 +1638,14 @@ function renderFactorCategories() {
   return `
     <div class="factor-category-grid">
       ${factorColumnGroups.map(renderFactorCategory).join("")}
+    </div>
+  `;
+}
+
+function renderSourceCategories() {
+  return `
+    <div class="factor-category-grid">
+      ${sourceColumnGroups.map(renderFactorCategory).join("")}
     </div>
   `;
 }
