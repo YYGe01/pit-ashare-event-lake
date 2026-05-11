@@ -36,7 +36,7 @@ const pageTitles = {
 const pageSummaries = {
   dashboard: "先判断当前采集是否正常，再查看卡住的数据集、队列进度和最近运行记录。",
   backfill: "查看历史回补队列，定位哪些日期、标的和数据集还在等待、运行或失败。",
-  dataset: "查看采集源表覆盖、原始日频缺口、单标的原始记录和处理后的日频因子。",
+  dataset: "查看采集源表覆盖、核心维度缺失数、单标的原始记录和处理后的日频因子。",
   quality: "集中查看质量问题，优先处理未关闭和高严重级别异常。",
   qlib: "确认研究数据是否已经导出为 Qlib 可读 provider，并检查最近导出结果。",
 };
@@ -283,16 +283,16 @@ const fieldLabels = {
   date_count: "日期数",
   instruments_with_rows: "有数据标的",
   instruments_missing: "缺失标的",
-  missing_daily_rows: "缺失日频行",
-  daily_coverage_percent: "日频覆盖率",
+  missing_daily_rows: "核心缺失行",
+  daily_coverage_percent: "核心覆盖率",
   coverage_kind: "维度类型",
   industry: "行业",
   is_active: "是否活跃",
   universes: "股票池",
   stock_basic_present: "证券主数据",
   universe_constituent_present: "股票池成分",
-  raw_missing_daily_rows: "原始日频缺口",
-  core_missing_days: "原始日频缺口",
+  raw_missing_daily_rows: "核心缺失数",
+  core_missing_days: "核心缺失数",
   trade_status_days: "交易状态天数",
   news_rows: "新闻明细",
   announcement_rows: "公告明细",
@@ -921,20 +921,15 @@ function renderDataCoverage(coverage) {
       `来源：${reference.instrument_source || "none"}`,
     ),
     coverageCard(
-      "原始日频完整",
+      "核心完整标的",
       `${number(instrumentSummary.complete_instruments || 0)} / ${number(instrumentSummary.total_instruments || 0)}`,
-      `完整率 ${number(instrumentSummary.complete_percent || 0)}%`,
-    ),
-    coverageCard(
-      "原始日频缺口",
-      `${number(instrumentSummary.missing_daily_rows || 0)} 行`,
-      missingByDimensionText(instrumentSummary.missing_by_dimension || {}),
+      `日线、复权、涨跌停完整率 ${number(instrumentSummary.complete_percent || 0)}%`,
     ),
   ].join("");
   setHtml("coverage-summary", coverageSummaryHtml);
 
   const datasetCoverageHtml = tableSummary(
-    "这里只展示采集得到的基础、行情和事件源表；处理后的新闻/公告日频因子不放在覆盖表。日线、复权、涨跌停按当前日期范围判断缺口。",
+    "这里只展示采集得到的基础、行情和事件源表；处理后的新闻/公告日频因子不放在覆盖表。",
   ) + table(
     [
       { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel },
@@ -943,7 +938,6 @@ function renderDataCoverage(coverage) {
       { key: "min_date", label: "日期范围", value: dateRangeValue },
       { key: "date_count", label: fieldLabel("date_count") },
       { key: "instruments_with_rows", label: "标的覆盖", value: instrumentCoverageValue },
-      { key: "missing_daily_rows", label: "日频缺口", value: dailyMissingValue },
       { key: "source_ids", label: fieldLabel("source_ids"), format: sourceSummary },
     ],
     sourceDatasetRows,
@@ -951,7 +945,6 @@ function renderDataCoverage(coverage) {
   );
   setHtml("dataset-coverage-table", datasetCoverageHtml);
 
-  const hidden = Number(coverage.hidden_instrument_count || 0);
   const instrumentCoverageSummaryHtml = overviewInstrumentDimensions.map((dataset) => {
     const total = Number(instrumentSummary.total_instruments || 0);
     const available = Number(instrumentSummary.available_by_dimension?.[dataset] || 0);
@@ -972,11 +965,7 @@ function renderDataCoverage(coverage) {
   }).join("");
   setHtml("instrument-coverage-summary", instrumentCoverageSummaryHtml);
 
-  const instrumentCoverageTableHtml = tableSummary(
-    hidden
-      ? `下表只展示原始维度。原始日频缺口是日线、复权、涨跌停在当前日期范围内缺了多少行，另有 ${number(hidden)} 个标的未展示。`
-      : "下表只展示原始维度。原始日频缺口是日线、复权、涨跌停在当前日期范围内缺了多少行。",
-  ) + table(
+  const instrumentCoverageTableHtml = table(
     [
       { key: "instrument", label: fieldLabel("instrument") },
       { key: "name", label: fieldLabel("name"), format: (value) => value || "-" },
@@ -984,11 +973,6 @@ function renderDataCoverage(coverage) {
       { key: "exchange", label: fieldLabel("exchange") },
       { key: "industry", label: fieldLabel("industry"), format: (value) => value || "-" },
       { key: "universes", label: fieldLabel("universes"), value: universesValue, maxLength: 120 },
-      {
-        key: "raw_missing_daily_rows",
-        label: fieldLabel("raw_missing_daily_rows"),
-        value: (row) => `${number(row.raw_missing_daily_rows ?? row.core_missing_days ?? 0)} 行`,
-      },
       ...overviewInstrumentDimensions.map((dataset) => ({
         key: dataset,
         label: datasetLabel(dataset),
@@ -1036,23 +1020,6 @@ function instrumentCoverageValue(row) {
     : number(row.instruments_with_rows);
 }
 
-function dailyMissingValue(row) {
-  if (row.missing_daily_rows === null || row.missing_daily_rows === undefined) {
-    return "-";
-  }
-  return `缺 ${number(row.missing_daily_rows)} 行`;
-}
-
-function missingByDimensionText(missingByDimension) {
-  const entries = Object.entries(missingByDimension || {});
-  if (!entries.length) {
-    return "暂无核心维度统计";
-  }
-  return entries
-    .map(([dataset, count]) => `${datasetLabel(dataset)} 缺 ${number(count)}`)
-    .join("；");
-}
-
 function instrumentMissingCount(dataset, summary, total, available) {
   if (summary.missing_by_dimension && dataset in summary.missing_by_dimension) {
     return Number(summary.missing_by_dimension[dataset] || 0);
@@ -1071,13 +1038,10 @@ function dimensionStatusValue(status) {
   if (!status) {
     return "-";
   }
-  const unit = status.unit || "";
-  const observed = `${number(status.observed || 0)} ${unit}`.trim();
   if (status.expected !== null && status.expected !== undefined) {
-    const expected = `${number(status.expected)} ${unit}`.trim();
-    return `${observed}/${expected}`;
+    return number(status.missing || 0);
   }
-  return observed;
+  return number(status.observed || 0);
 }
 
 function renderWatermarks(rows) {
