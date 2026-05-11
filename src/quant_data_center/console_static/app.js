@@ -36,7 +36,7 @@ const pageTitles = {
 const pageSummaries = {
   dashboard: "先判断当前采集是否正常，再查看卡住的数据集、队列进度和最近运行记录。",
   backfill: "查看历史回补队列，定位哪些日期、标的和数据集还在等待、运行或失败。",
-  dataset: "查看采集源表覆盖、核心维度缺失数、单标的原始记录和处理后的日频因子。",
+  dataset: "查看采集源表覆盖、核心维度覆盖分数、单标的原始记录和处理后的日频因子。",
   quality: "集中查看质量问题，优先处理未关闭和高严重级别异常。",
   qlib: "确认研究数据是否已经导出为 Qlib 可读 provider，并检查最近导出结果。",
 };
@@ -291,8 +291,8 @@ const fieldLabels = {
   universes: "股票池",
   stock_basic_present: "证券主数据",
   universe_constituent_present: "股票池成分",
-  raw_missing_daily_rows: "核心缺失数",
-  core_missing_days: "核心缺失数",
+  raw_missing_daily_rows: "核心缺失行",
+  core_missing_days: "核心缺失行",
   trade_status_days: "交易状态天数",
   news_rows: "新闻明细",
   announcement_rows: "公告明细",
@@ -1039,7 +1039,11 @@ function dimensionStatusValue(status) {
     return "-";
   }
   if (status.expected !== null && status.expected !== undefined) {
-    return number(status.missing || 0);
+    const expected = Number(status.expected || 0);
+    const observed = status.observed !== null && status.observed !== undefined
+      ? Number(status.observed || 0)
+      : Math.max(expected - Number(status.missing || 0), 0);
+    return `${number(observed)}/${number(expected)}`;
   }
   return number(status.observed || 0);
 }
