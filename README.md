@@ -103,7 +103,7 @@ data/quant_data_center/             本地运行数据，已 gitignored
 conda run -n ai-trader python -m pip install -e /root/code/qlib -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://mirrors.aliyun.com/pypi/simple
 ```
 
-当前已用本地 `/root/code/qlib` 验证交易日历读取 `D.calendar`、标的列表读取 `D.list_instruments` 和特征读取 `D.features` 能读取 `qdc export-qlib` 产物。导出字段包含 Alpha158 默认需要的成交均价 `$vwap`，并包含新闻数量 `$news_count`、新闻情绪均值 `$news_sentiment_mean`、风险类新闻数量 `$news_risk_count`、融资类公告数量 `$announcement_financing_count` 等 QDC 外部日频因子；`--market-name` 可写出 Qlib 命名市场 `market` 文件。`config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml` 可用当前 Qlib 数据目录 `provider` 跑通 LightGBM Alpha158 qrun 冒烟验证 `smoke`；`config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml` 使用当前仓库的 `QdcAlpha158WithExternal` 处理器 `handler` 追加 QDC 外部因子。正式评估仍需要完整股票池 `universe` 和稳定训练/验证/测试 `train/valid/test` 切分。
+当前已用本地 `/root/code/qlib` 验证交易日历读取 `D.calendar`、标的列表读取 `D.list_instruments` 和特征读取 `D.features` 能读取 `qdc export-qlib` 产物。导出字段包含 Alpha158 默认需要的成交均价 `$vwap`，并包含新闻数量 `$news_count`、新闻情绪均值 `$news_sentiment_mean`、风险类新闻数量 `$news_risk_count`、融资类公告数量 `$announcement_financing_count` 等 QDC 外部日频因子；`--market-name` 可写出 Qlib 命名市场 `market` 文件。`config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml` 可用当前 Qlib 数据目录 `provider` 跑通 LightGBM Alpha158 qrun 冒烟验证 `smoke`；`config/qlib/workflow_config_lightgbm_alpha158_qdc_csi300.yaml` 使用 `market=csi300` 跑正式股票池 baseline；`config/qlib/workflow_config_lightgbm_alpha158_qdc_csi300_external.yaml` 使用当前仓库的 `QdcAlpha158WithExternal` 处理器 `handler` 追加 QDC 外部因子。正式组合回测仍需要指数 benchmark 和组合分析配置。
 
 ## 验证
 

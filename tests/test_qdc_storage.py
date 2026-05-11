@@ -1051,6 +1051,89 @@ def test_qdc_run_backfill_announcement_news_and_build_factors_with_fake_akshare(
     assert row == (1.0, 1.0)
 
 
+def test_qdc_news_falls_back_to_global_stream_and_maps_instrument(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def stock_news_em(symbol: str):
+        assert symbol == "300750"
+        return pd.DataFrame([])
+
+    def stock_info_a_code_name():
+        return pd.DataFrame(
+            [
+                {"code": "300750", "name": "宁德时代"},
+                {"code": "600000", "name": "浦发银行"},
+            ]
+        )
+
+    def stock_info_global_cls():
+        return pd.DataFrame(
+            [
+                {
+                    "标题": "宁德时代：控股股东捐赠股份完成过户",
+                    "内容": "宁德时代(300750.SZ)公告称，控股股东股份过户完成。",
+                    "发布日期": "2026-05-11",
+                    "发布时间": "18:50:42",
+                },
+                {
+                    "标题": "未命中标的的宏观新闻",
+                    "内容": "这条新闻不包含测试股票名称或代码。",
+                    "发布日期": "2026-05-11",
+                    "发布时间": "18:51:42",
+                },
+            ]
+        )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "akshare",
+        SimpleNamespace(
+            stock_news_em=stock_news_em,
+            stock_info_a_code_name=stock_info_a_code_name,
+            stock_info_global_cls=stock_info_global_cls,
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "plan-backfill",
+                "--dataset",
+                "news",
+                "--source-id",
+                "akshare",
+                "--start",
+                "2026-05-11",
+                "--end",
+                "2026-05-11",
+                "--symbols",
+                "SZ300750",
+            ]
+        )
+        == 0
+    )
+    assert main(["--config", str(config_path), "run-backfill", "--dataset", "news"]) == 0
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    assert database.silver_table_counts()["news"] == 1
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            select publish_date, instrument, title
+            from qdc_silver.news
+            """
+        ).fetchone()
+    assert (str(row[0]), row[1], row[2]) == (
+        "2026-05-11",
+        "SZ300750",
+        "宁德时代：控股股东捐赠股份完成过户",
+    )
+
+
 def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     settings = QdcSettings.from_yaml(config_path)

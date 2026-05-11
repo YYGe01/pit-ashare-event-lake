@@ -569,7 +569,104 @@ class AkshareSilverCollector:
                         "source_id": source_id,
                     }
                 )
+        if not records:
+            records.extend(
+                self._collect_global_news_fallback(
+                    akshare=akshare,
+                    source_id=source_id,
+                    start_iso=start_iso,
+                    end_iso=end_iso,
+                    instruments=[normalize_instrument(item) for item in instruments],
+                )
+            )
         return self.silver.upsert_news(records)
+
+    def _collect_global_news_fallback(
+        self,
+        *,
+        akshare: Any,
+        source_id: str,
+        start_iso: str,
+        end_iso: str,
+        instruments: list[str],
+    ) -> list[dict[str, Any]]:
+        aliases_by_instrument = _news_aliases_by_instrument(
+            akshare=akshare,
+            instruments=instruments,
+        )
+        if not aliases_by_instrument:
+            return []
+        records = []
+        for function_name in (
+            "stock_info_global_cls",
+            "stock_info_global_em",
+            "stock_info_global_ths",
+            "stock_info_global_sina",
+            "stock_info_global_futu",
+        ):
+            function = getattr(akshare, function_name, None)
+            if function is None:
+                continue
+            try:
+                provider_records = _records(function())
+            except Exception as exc:
+                self._write_source_objects(
+                    dataset="news",
+                    source_id=source_id,
+                    partition_value=start_iso,
+                    stem=f"{function_name}_{start_iso}_{end_iso}_error",
+                    raw_payload={
+                        "function": function_name,
+                        "params": {"start_date": start_iso, "end_date": end_iso},
+                        "error": str(exc),
+                    },
+                    bronze_records=[],
+                )
+                continue
+            self._write_source_objects(
+                dataset="news",
+                source_id=source_id,
+                partition_value=start_iso,
+                stem=f"{function_name}_{start_iso}_{end_iso}",
+                raw_payload={
+                    "function": function_name,
+                    "params": {"start_date": start_iso, "end_date": end_iso},
+                    "records": provider_records,
+                },
+                bronze_records=provider_records,
+            )
+            for row in provider_records:
+                publish_date = _global_news_publish_date(row)
+                if publish_date is None or publish_date < start_iso or publish_date > end_iso:
+                    continue
+                title = _global_news_title(row)
+                if title is None:
+                    continue
+                url = _first_present(row, ("新闻链接", "链接", "url", "URL"))
+                text = _global_news_text(row)
+                for instrument in _matched_news_instruments(
+                    text=text,
+                    aliases_by_instrument=aliases_by_instrument,
+                ):
+                    records.append(
+                        {
+                            "news_id": _stable_id(
+                                "news",
+                                source_id,
+                                function_name,
+                                instrument,
+                                publish_date,
+                                title,
+                                url,
+                            ),
+                            "publish_date": publish_date,
+                            "instrument": instrument,
+                            "title": title,
+                            "url": _json_safe(url),
+                            "source_id": source_id,
+                        }
+                    )
+        return list({str(record["news_id"]): record for record in records}.values())
 
     def _write_source_objects(
         self,
@@ -755,6 +852,99 @@ def _safe_index_weight_records(*, akshare: Any, index_symbol: str) -> list[dict[
         return _records(akshare.index_stock_cons_weight_csindex(symbol=index_symbol))
     except Exception:
         return []
+
+
+def _news_aliases_by_instrument(
+    *,
+    akshare: Any,
+    instruments: list[str],
+) -> dict[str, set[str]]:
+    names_by_symbol = _safe_stock_names_by_symbol(akshare=akshare)
+    aliases = {}
+    for raw_instrument in instruments:
+        instrument = normalize_instrument(raw_instrument)
+        symbol = instrument_to_symbol(instrument)
+        values = {
+            instrument,
+            symbol,
+            f"{symbol}.SH" if instrument.startswith("SH") else f"{symbol}.SZ",
+            f"{symbol}.SS" if instrument.startswith("SH") else f"{symbol}.SZ",
+        }
+        name = names_by_symbol.get(symbol)
+        if name:
+            values.add(name)
+        aliases[instrument] = {value for value in values if len(value) >= 2}
+    return aliases
+
+
+def _safe_stock_names_by_symbol(*, akshare: Any) -> dict[str, str]:
+    function = getattr(akshare, "stock_info_a_code_name", None)
+    if function is None:
+        return {}
+    try:
+        records = _records(function())
+    except Exception:
+        return {}
+    names = {}
+    for row in records:
+        raw_code = _first_present(row, ("code", "证券代码", "股票代码", "代码"))
+        name = _first_present(row, ("name", "证券简称", "股票简称", "名称"))
+        if raw_code is None or not name:
+            continue
+        try:
+            names[_digits_only(raw_code)] = str(name).strip()
+        except ValueError:
+            continue
+    return names
+
+
+def _global_news_publish_date(row: dict[str, Any]) -> str | None:
+    date_value = _first_present(row, ("发布日期", "日期", "date", "publish_date"))
+    time_value = _first_present(row, ("发布时间", "时间", "datetime", "time"))
+    if date_value is not None:
+        return _optional_date_to_iso(date_value)
+    if time_value is not None:
+        return _optional_date_to_iso(time_value)
+    return None
+
+
+def _global_news_title(row: dict[str, Any]) -> str | None:
+    title = _first_present(row, ("新闻标题", "标题", "title"))
+    if title:
+        return str(title).strip()
+    content = _first_present(row, ("内容", "摘要", "summary", "content"))
+    if not content:
+        return None
+    text = str(content).strip()
+    if text.startswith("【") and "】" in text:
+        return text[1 : text.index("】")].strip()
+    return text[:80].strip()
+
+
+def _global_news_text(row: dict[str, Any]) -> str:
+    return " ".join(
+        str(value)
+        for value in (
+            _first_present(row, ("新闻标题", "标题", "title")),
+            _first_present(row, ("内容", "摘要", "summary", "content")),
+        )
+        if value not in (None, "")
+    )
+
+
+def _matched_news_instruments(
+    *,
+    text: str,
+    aliases_by_instrument: dict[str, set[str]],
+) -> list[str]:
+    if not text:
+        return []
+    matched = []
+    normalized_text = text.upper()
+    for instrument, aliases in aliases_by_instrument.items():
+        if any(alias.upper() in normalized_text for alias in aliases):
+            matched.append(instrument)
+    return matched
 
 
 def _digits_only(value: Any) -> str:
