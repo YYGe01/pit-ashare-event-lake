@@ -372,6 +372,7 @@ qdc smoke
 qdc plan-backfill
 qdc list-backfill
 qdc run-backfill --control-only
+qdc run-backfill --retry-failed
 qdc run-backfill 真实 AkShare 分支：stock_basic / trade_calendar / daily_bar / adj_factor / price_limit / trade_status
 qdc run-backfill 真实 AkShare 分支：announcement / news
 qdc refresh-universe / list-universe
@@ -386,7 +387,7 @@ qdc export-qlib 基础 day provider 导出
 qdc verify-qlib 使用本地 Qlib 读取导出的 provider
 ```
 
-`run-backfill --control-only` 只用于验证任务状态流和水位表，不采集真实数据。当前 `run-backfill` 已支持 AkShare 的 `stock_basic`、`trade_calendar`、`daily_bar`、`adj_factor`、`price_limit`、`trade_status`、`announcement`、`news`；其他 dataset/source 会在 `plan-backfill` 或 `run-backfill` 阶段明确拒绝。
+`run-backfill --control-only` 只用于验证任务状态流和水位表，不采集真实数据。默认 `run-backfill` 只运行 `pending` 任务；需要人工恢复失败任务时，使用 `run-backfill --retry-failed` 显式运行 `failed` 任务。当前 `run-backfill` 已支持 AkShare 的 `stock_basic`、`trade_calendar`、`daily_bar`、`adj_factor`、`price_limit`、`trade_status`、`announcement`、`news`；其他 dataset/source 会在 `plan-backfill` 或 `run-backfill` 阶段明确拒绝。
 
 `daily_bar`、`adj_factor`、`price_limit`、`news` 可从 `qdc_silver.universe_constituent` 最新快照或配置里的静态 `--universe` 展开 symbol，也可以显式传入 `--symbols` 覆盖。当前已经支持 AkShare 指数成分快照刷新；历史成分变更追溯可作为后续增强。
 
@@ -405,6 +406,7 @@ qdc list-universe --universe csi300
 qdc plan-backfill --dataset daily_bar --source-id akshare --universe csi300 --start 2026-05-01 --end 2026-05-03 --batch-size 1 --chunk-days 2
 qdc list-backfill --dataset daily_bar
 qdc run-backfill --dataset daily_bar --limit-tasks 4 --control-only
+qdc run-backfill --dataset daily_bar --retry-failed --limit-tasks 4
 qdc plan-backfill --dataset trade_calendar --source-id akshare --start 2026-05-01 --end 2026-05-03
 qdc run-backfill --dataset trade_calendar --limit-tasks 1
 qdc daily --date 2026-05-11 --universe csi300 --control-only
@@ -565,7 +567,7 @@ LightGBM Alpha158 + news + announcement
 已确定：第一版使用 DuckDB + Parquet
 已确定：Qlib 只消费导出后的日频字段，不直接消费 raw 新闻/公告
 已实现：qdc CLI、DuckDB 控制表、配置校验、init/db-info/smoke
-已实现：plan-backfill / list-backfill / run-backfill 控制面、任务水位和单写进程约束
+已实现：plan-backfill / list-backfill / run-backfill 控制面、任务水位、显式 failed task retry 和单写进程约束
 已实现：qdc_silver 基础行情、universe、公告、新闻和日频因子表
 已实现：AkShare 真实回补分支 stock_basic / trade_calendar / daily_bar / adj_factor / price_limit / trade_status / announcement / news
 已实现：refresh-universe 最新成分快照；plan-backfill 优先使用快照 symbol
@@ -579,7 +581,7 @@ LightGBM Alpha158 + news + announcement
 待实现：Qlib Alpha158 baseline 外部联调
 已验证：真实 AkShare 小样本 smoke，覆盖 csi300 成分快照、stock_basic、daily、公告、基础因子、Parquet、quality 和 Qlib 导出
 已验证：本地 /root/code/qlib 以 editable 方式安装到 ai-trader，并读取 QDC 导出的 Qlib provider
-待增强：历史成分变更追溯、更细质量规则、显式 retry failed CLI、更长历史 Qlib 导出和 Alpha158 baseline 配置
+待增强：历史成分变更追溯、更细质量规则、更长历史 Qlib 导出和 Alpha158 baseline 配置
 ```
 
 ## 14. 真实数据 smoke 记录

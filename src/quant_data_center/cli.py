@@ -339,13 +339,21 @@ def cmd_run_backfill(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     database = QdcDatabase(settings)
     database.init_schema()
+    task_status = "failed" if args.retry_failed else "pending"
     tasks = database.list_backfill_tasks(
-        status="pending",
+        status=task_status,
         dataset=args.dataset,
         limit=args.limit_tasks,
     )
     if not tasks:
-        _print_json({"status": "ok", "message": "no pending backfill tasks", "results": []})
+        _print_json(
+            {
+                "status": "ok",
+                "message": f"no {task_status} backfill tasks",
+                "task_status": task_status,
+                "results": [],
+            }
+        )
         return 0
     results, has_failures = _run_backfill_tasks(
         settings=settings,
@@ -356,6 +364,7 @@ def cmd_run_backfill(args: argparse.Namespace) -> int:
     _print_json(
         {
             "status": "partial" if has_failures else "ok",
+            "task_status": task_status,
             "ran_count": len(results),
             "results": results,
         }
@@ -704,6 +713,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run-backfill", help="Run pending backfill tasks")
     run_parser.add_argument("--dataset")
     run_parser.add_argument("--limit-tasks", type=int)
+    run_parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Run failed backfill tasks instead of pending tasks",
+    )
     run_parser.add_argument(
         "--control-only",
         action="store_true",

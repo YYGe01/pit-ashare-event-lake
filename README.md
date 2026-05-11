@@ -21,6 +21,7 @@ qdc list-universe --universe csi300
 qdc plan-backfill --dataset daily_bar --source-id akshare --universe csi300 --start 2026-05-01 --end 2026-05-03 --batch-size 1 --chunk-days 2
 qdc list-backfill --dataset daily_bar
 qdc run-backfill --dataset daily_bar --limit-tasks 4 --control-only
+qdc run-backfill --dataset daily_bar --retry-failed --limit-tasks 4
 qdc plan-backfill --dataset trade_calendar --source-id akshare --start 2026-05-01 --end 2026-05-03
 qdc run-backfill --dataset trade_calendar --limit-tasks 1
 qdc daily --date 2026-05-11 --universe csi300 --control-only
@@ -46,7 +47,7 @@ qdc verify-qlib --start 2026-05-01 --end 2026-05-03 --instruments SH600000,SZ000
 
 `daily_bar`、`adj_factor`、`price_limit`、`news` 可用 `--universe` 展开 symbol，也可以显式传入 `--symbols` 覆盖。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
 
-当前回补链路会写入 raw JSON、bronze Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc build-factors` 可生成新闻/公告日频 count 因子，`qdc sync-parquet` 可同步 silver/gold Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day provider 目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的 provider 做 data-layer smoke。
+当前回补链路会写入 raw JSON、bronze Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 可生成新闻/公告日频 count 因子，`qdc sync-parquet` 可同步 silver/gold Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day provider 目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的 provider 做 data-layer smoke。
 
 `qdc` 默认读取仓库内 `config/quant_data_center.yaml`；需要从其他目录运行或切换配置时，可设置 `QDC_CONFIG` 或传入 `--config`。
 

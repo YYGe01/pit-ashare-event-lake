@@ -309,6 +309,74 @@ def test_qdc_run_backfill_control_only_updates_tasks_and_watermark(tmp_path: Pat
     assert watermark["max_date"] == "2026-05-03"
 
 
+def test_qdc_run_backfill_can_retry_failed_tasks_control_only(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "plan-backfill",
+                "--dataset",
+                "daily_bar",
+                "--source-id",
+                "akshare",
+                "--start",
+                "2026-05-01",
+                "--end",
+                "2026-05-01",
+                "--symbols",
+                "SH600000",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    task = database.list_backfill_tasks(dataset="daily_bar")[0]
+    database.finish_backfill_task(
+        task_id=str(task["task_id"]),
+        status="failed",
+        last_error="provider timeout",
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "run-backfill",
+                "--dataset",
+                "daily_bar",
+                "--control-only",
+            ]
+        )
+        == 0
+    )
+    assert database.list_backfill_tasks(dataset="daily_bar")[0]["status"] == "failed"
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "run-backfill",
+                "--dataset",
+                "daily_bar",
+                "--retry-failed",
+                "--control-only",
+            ]
+        )
+        == 0
+    )
+
+    retried = database.list_backfill_tasks(dataset="daily_bar")[0]
+    assert retried["status"] == "success"
+    assert retried["attempt_count"] == 1
+    assert retried["last_error"] is None
+    assert database.fetch_dataset_watermarks()[0]["dataset"] == "daily_bar"
+
+
 def test_qdc_daily_control_only_plans_and_runs_daily_tasks(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
 
