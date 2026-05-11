@@ -20,6 +20,14 @@ const pageTitles = {
   qlib: "Qlib 导出",
 };
 
+const pageSummaries = {
+  dashboard: "先判断当前采集是否正常，再查看卡住的数据集和最近运行记录。",
+  backfill: "查看历史回补队列，定位哪些日期、标的和数据集还在等待、运行或失败。",
+  dataset: "直接查看统一研究层 qdc_silver 表，确认某个标的和日期的数据是否已可用于研究。",
+  quality: "集中查看质量问题，优先处理未关闭和高严重级别异常。",
+  qlib: "确认研究数据是否已经导出为 Qlib 可读 provider，并检查最近导出结果。",
+};
+
 const statusOrder = [
   "blocked",
   "failed",
@@ -48,6 +56,20 @@ const datasetLabels = {
   qlib_export: "Qlib 导出",
 };
 
+const datasetDescriptions = {
+  stock_basic: "证券主数据：股票代码、交易所、名称等基础信息。",
+  universe_constituent: "股票池成分：某个股票池在某天包含哪些标的。",
+  trade_calendar: "交易日历：哪些日期开市、上一交易日和下一交易日。",
+  daily_bar: "日线行情：每个交易日每只股票的开高低收、成交量、成交额和成交均价。",
+  adj_factor: "复权因子：处理分红、送转、拆股等导致的价格断点。",
+  price_limit: "涨跌停价格：每个交易日的涨停价、跌停价和规则。",
+  trade_status: "交易状态：正常交易、停牌和停牌原因。",
+  announcement: "公告：按发布日期保存的公告标题和链接，仍是事件来源明细。",
+  news: "新闻：按发布日期保存的新闻标题和链接，仍是事件来源明细。",
+  daily_news_factor: "新闻日频因子：把新闻标题按交易日和标的聚合成数量、情绪和事件计数。",
+  daily_announcement_factor: "公告日频因子：把公告标题按交易日和标的聚合成公告数量和事件计数。",
+};
+
 const statusLabels = {
   blocked: "阻塞",
   failed: "失败",
@@ -60,6 +82,18 @@ const statusLabels = {
   closed: "已关闭",
   warning: "警告",
   error: "错误",
+};
+
+const statusDescriptions = {
+  blocked: "存在失败或超时运行任务，进度不会自然完成，需要先处理。",
+  failed: "任务执行失败，查看最后错误，修复后重试。",
+  running: "任务正在执行；如果更新时间长期不变，可能需要 recover-running。",
+  pending: "任务已排队，还没有被 run-backfill 消费。",
+  superseded: "任务已经被拆分替代，不再计入总进度。",
+  success: "任务已经成功完成。",
+  complete: "这组任务全部成功。",
+  open: "问题仍未关闭，需要继续处理。",
+  closed: "问题已经关闭，只作历史记录。",
 };
 
 const layerLabels = {
@@ -220,6 +254,11 @@ function tokenLabel(value) {
   return key;
 }
 
+function statusDescription(value) {
+  const key = String(value ?? "").trim();
+  return statusDescriptions[key] || "";
+}
+
 async function api(path) {
   const response = await fetch(path, { cache: "no-store" });
   const payload = await response.json();
@@ -272,6 +311,10 @@ function table(columns, rows, emptyText = "暂无数据") {
   return `<div class="table-wrap"><table class="data-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
+function tableSummary(text) {
+  return `<div class="table-summary">${escapeHtml(text)}</div>`;
+}
+
 function populateSelect(selectId, options, allLabel, labelFn = (option) => option) {
   const select = $(selectId);
   const current = select.value;
@@ -296,6 +339,7 @@ function bindNav() {
       button.classList.add("active");
       $(activeSection).classList.add("active");
       $("page-title").textContent = pageTitles[activeSection];
+      $("page-summary").textContent = pageSummaries[activeSection];
     });
   });
 }
@@ -336,18 +380,48 @@ function renderOverview(payload) {
   const progressRows = payload.backfill_progress || [];
   const blockedCount = progressRows.reduce((sum, row) => sum + Number(row.blocked_count || 0), 0);
   const successTasks = progressRows.reduce((sum, row) => sum + Number(row.success_count || 0), 0);
+  const pendingTasks = progressRows.reduce((sum, row) => sum + Number(row.pending_count || 0), 0);
+  const runningTasks = progressRows.reduce((sum, row) => sum + Number(row.running_count || 0), 0);
+  const staleTasks = progressRows.reduce((sum, row) => sum + Number(row.stale_running_count || 0), 0);
   const totalTasks = progressRows.reduce((sum, row) => sum + Number(row.total_task_count || 0), 0);
   const successPercent = totalTasks ? Math.round((successTasks / totalTasks) * 100) : 0;
+  const latestWatermark = latestWatermarkDate(payload.watermarks || []);
+  const latestExport = (payload.latest_qlib_exports || [])[0];
+
+  $("overview-health").innerHTML = [
+    healthItem(
+      "采集是否卡住",
+      collectionHealthLabel({ blockedCount, runningTasks, pendingTasks, totalTasks }),
+      collectionHealthHint({ blockedCount, staleTasks, runningTasks, pendingTasks, totalTasks }),
+      blockedCount ? "danger" : runningTasks || pendingTasks ? "warning" : "success",
+    ),
+    healthItem(
+      "数据覆盖到哪里",
+      latestWatermark || "暂无水位",
+      latestWatermark
+        ? `已登记 ${number((payload.watermarks || []).length)} 条数据水位，说明采集至少覆盖到这些日期。`
+        : "还没有 dataset_watermark，通常表示还没成功跑完任何采集任务。",
+      latestWatermark ? "success" : "warning",
+    ),
+    healthItem(
+      "Qlib 是否可用",
+      latestExport ? tokenLabel(latestExport.status) : "暂无导出",
+      latestExport
+        ? `最近导出覆盖 ${latestExport.start_date || "-"} 到 ${latestExport.end_date || "-"}，可继续用 verify-qlib 验证。`
+        : "还没有 export_qlib 记录，Qlib 暂时没有新的 provider 可用。",
+      latestExport?.status === "success" ? "success" : "warning",
+    ),
+  ].join("");
 
   $("kpi-grid").innerHTML = [
-    kpi("统一研究层行数", silverTotal, `${Object.keys(silverCounts).length} 个表`),
-    kpi("回补任务", backfillTotal, `完成率 ${successPercent}%`),
-    kpi("运行记录", tableCounts.job_run || 0, "作业记录 job_run"),
-    kpi("阻塞任务", blockedCount, `失败 ${number(statusCounts.failed || 0)}`),
-    kpi("源文件索引", sourceTotal, "source_object"),
-    kpi("水位记录", tableCounts.dataset_watermark || 0, "dataset_watermark"),
-    kpi("Qlib 导出", (payload.latest_qlib_exports || []).length, "最近导出"),
-    kpi("质量问题", openIssues, "未关闭 open"),
+    kpi("统一研究层行数", silverTotal, "已经清洗进 qdc_silver 的总行数"),
+    kpi("回补任务", backfillTotal, `成功 ${number(successTasks)} / 总计 ${number(totalTasks)}，完成率 ${successPercent}%`),
+    kpi("运行记录", tableCounts.job_run || 0, "CLI 作业记录，包括 daily、build-factors、export-qlib"),
+    kpi("阻塞任务", blockedCount, `失败 ${number(statusCounts.failed || 0)}，超时运行 ${number(staleTasks)}`),
+    kpi("源文件索引", sourceTotal, "已经登记的 raw、bronze、gold、qlib 文件"),
+    kpi("水位记录", tableCounts.dataset_watermark || 0, "每个数据集已覆盖的日期范围"),
+    kpi("Qlib 导出", (payload.latest_qlib_exports || []).length, "最近 export_qlib 作业数量"),
+    kpi("质量问题", openIssues, "仍未关闭的质量问题"),
   ].join("");
 
   $("status-overview").innerHTML = [
@@ -361,6 +435,53 @@ function renderOverview(payload) {
   renderWatermarks(payload.watermarks || []);
   renderRecentJobs(payload.latest_job_runs || []);
   renderQlibJobs(payload.latest_qlib_exports || []);
+}
+
+function latestWatermarkDate(rows) {
+  const dates = rows.map((row) => row.max_date).filter(Boolean).sort();
+  return dates.length ? dates[dates.length - 1] : "";
+}
+
+function collectionHealthLabel({ blockedCount, runningTasks, pendingTasks, totalTasks }) {
+  if (blockedCount) {
+    return `${number(blockedCount)} 个阻塞`;
+  }
+  if (runningTasks) {
+    return `${number(runningTasks)} 个运行中`;
+  }
+  if (pendingTasks) {
+    return `${number(pendingTasks)} 个待执行`;
+  }
+  if (totalTasks) {
+    return "任务已完成";
+  }
+  return "暂无回补任务";
+}
+
+function collectionHealthHint({ blockedCount, staleTasks, runningTasks, pendingTasks, totalTasks }) {
+  if (blockedCount) {
+    return `先看回补任务页的 failed 和 stale running。超时运行 ${number(staleTasks)} 个。`;
+  }
+  if (runningTasks) {
+    return "正在推进，保持观察更新时间和最近运行记录即可。";
+  }
+  if (pendingTasks) {
+    return "任务已经排队，下一步运行 run-backfill 消费队列。";
+  }
+  if (totalTasks) {
+    return "当前回补队列已经没有待处理任务。";
+  }
+  return "还没有计划回补任务，可先用 plan-backfill 生成队列。";
+}
+
+function healthItem(label, value, hint, tone) {
+  return `
+    <div class="health-card health-${escapeHtml(tone)}">
+      <div class="health-label">${escapeHtml(label)}</div>
+      <div class="health-value">${escapeHtml(value)}</div>
+      <div class="health-hint">${escapeHtml(hint)}</div>
+    </div>
+  `;
 }
 
 function kpi(label, value, foot) {
@@ -377,33 +498,46 @@ function statusBars(label, counts) {
   const entries = Object.entries(counts || {});
   if (entries.length === 0) {
     return `
-      <div class="status-row">
-        <div class="list-title">${escapeHtml(label)}</div>
-        <div class="bar"><div class="bar-fill" style="width:0"></div></div>
-        <div class="muted">0</div>
+      <div class="status-group">
+        <div class="status-group-header">
+          <span>${escapeHtml(label)}</span>
+          <span class="muted">暂无记录</span>
+        </div>
       </div>
     `;
   }
   const total = entries.reduce((sum, [, count]) => sum + Number(count), 0) || 1;
-  return entries
+  const rows = entries
     .sort(([left], [right]) => statusOrder.indexOf(left) - statusOrder.indexOf(right))
     .map(([status, count]) => {
       const width = Math.max(2, (Number(count) / total) * 100);
       const cls = status.toLowerCase().replaceAll("_", "-");
       return `
         <div class="status-row">
-          <div>${escapeHtml(label)} ${tag(status)}</div>
+          <div>
+            ${tag(status)}
+            <div class="status-help">${escapeHtml(statusDescription(status))}</div>
+          </div>
           <div class="bar"><div class="bar-fill ${cls}" style="width:${width}%"></div></div>
           <div class="muted">${number(count)}</div>
         </div>
       `;
     })
     .join("");
+  return `
+    <div class="status-group">
+      <div class="status-group-header">
+        <span>${escapeHtml(label)}</span>
+        <span class="muted">共 ${number(total)} 条</span>
+      </div>
+      ${rows}
+    </div>
+  `;
 }
 
 function renderWatermarks(rows) {
   if (!rows.length) {
-    $("watermark-list").innerHTML = '<div class="empty">暂无数据</div>';
+    $("watermark-list").innerHTML = '<div class="empty">暂无数据水位。成功跑完采集后，这里会显示每个数据集覆盖的日期范围。</div>';
     return;
   }
   $("watermark-list").innerHTML = rows
@@ -418,8 +552,8 @@ function renderWatermarks(rows) {
       return `
         <div class="list-item">
           <div class="list-title">${escapeHtml(title)}</div>
-          <div class="list-meta">${escapeHtml(range || "-")}</div>
-          <div class="list-meta">${escapeHtml(row.updated_at || "")}</div>
+          <div class="list-meta">覆盖日期：${escapeHtml(range || "-")}</div>
+          <div class="list-meta">更新时间：${escapeHtml(row.updated_at || "")}</div>
         </div>
       `;
     })
@@ -428,7 +562,7 @@ function renderWatermarks(rows) {
 
 function renderProgress(rows) {
   if (!rows.length) {
-    $("progress-list").innerHTML = '<div class="empty">暂无任务</div>';
+    $("progress-list").innerHTML = '<div class="empty">暂无回补任务。可先用 plan-backfill 生成任务，再用 run-backfill 执行。</div>';
     return;
   }
   $("progress-list").innerHTML = rows
@@ -441,38 +575,63 @@ function renderProgress(rows) {
         row.universe ? universeLabel(row.universe) : "",
       ].filter(Boolean).join(" / ");
       const range = [row.min_date, row.max_date].filter(Boolean).join(" - ");
-      const meta = [
-        `成功 ${number(row.success_count)}`,
-        `待执行 ${number(row.pending_count)}`,
-        `运行中 ${number(row.running_count)}`,
-        `失败 ${number(row.failed_count)}`,
-      ].join(" · ");
       const stale = Number(row.stale_running_count || 0);
-      const staleText = stale ? `<div class="list-meta danger">超时运行中 ${number(stale)}</div>` : "";
+      const state = String(row.state || "empty");
+      const staleText = stale
+        ? `<div class="progress-warning">有 ${number(stale)} 个运行中任务超过 15 分钟未更新，建议先确认回补进程是否还在。</div>`
+        : "";
       return `
         <div class="progress-item">
           <div class="progress-title">
             <span class="list-title">${escapeHtml(title)}</span>
-            ${tag(row.state)}
+            ${tag(state)}
           </div>
           <div class="progress-bar">
-            <div class="progress-fill ${escapeHtml(row.state)}" style="width:${percent}%"></div>
+            <div class="progress-fill ${escapeHtml(state)}" style="width:${percent}%"></div>
           </div>
           <div class="progress-meta">
             <span>${number(row.success_count)} / ${number(row.total_task_count)} 个任务</span>
             <span>${percent}%</span>
           </div>
-          <div class="list-meta">${escapeHtml(range)}</div>
-          <div class="list-meta">${escapeHtml(meta)}</div>
+          <dl class="progress-facts">
+            <div><dt>日期范围</dt><dd>${escapeHtml(range || "-")}</dd></div>
+            <div><dt>成功</dt><dd>${number(row.success_count)}</dd></div>
+            <div><dt>待执行</dt><dd>${number(row.pending_count)}</dd></div>
+            <div><dt>运行中</dt><dd>${number(row.running_count)}</dd></div>
+            <div><dt>失败</dt><dd>${number(row.failed_count)}</dd></div>
+          </dl>
           ${staleText}
+          <div class="next-step">${escapeHtml(progressNextStep(row))}</div>
         </div>
       `;
     })
     .join("");
 }
 
+function progressNextStep(row) {
+  const state = String(row.state || "");
+  if (state === "blocked") {
+    if (Number(row.failed_count || 0)) {
+      return "下一步：进入回补任务页，筛选 failed，查看最后错误并重试。";
+    }
+    return "下一步：确认回补进程是否还在；如果已经停止，执行 recover-running。";
+  }
+  if (state === "running") {
+    return "下一步：继续观察更新时间和最近运行记录，不需要手动干预。";
+  }
+  if (state === "pending") {
+    return "下一步：运行 run-backfill 消费待执行任务。";
+  }
+  if (state === "complete") {
+    return "下一步：可继续 build-factors、sync-parquet 或 export-qlib。";
+  }
+  return "下一步：先计划回补任务，或查看是否缺少控制表。";
+}
+
 function renderRecentJobs(rows) {
-  $("recent-jobs").innerHTML = table(
+  $("recent-jobs").innerHTML = tableSummary(
+    `最近 ${number(rows.length)} 条作业记录。失败时先看错误信息，再回到对应 CLI 处理。`,
+  ) + table(
     [
       { key: "status", label: fieldLabel("status"), status: true },
       { key: "job_type", label: fieldLabel("job_type") },
@@ -484,6 +643,7 @@ function renderRecentJobs(rows) {
       { key: "error_message", label: fieldLabel("error_message"), maxLength: 90 },
     ],
     rows,
+    "暂无运行记录。执行 daily、run-backfill、build-factors 或 export-qlib 后会出现。",
   );
 }
 
@@ -495,7 +655,9 @@ async function loadBackfillTasks() {
     appendQuery(query, "status", $("task-status").value);
     appendQuery(query, "limit", $("task-limit").value);
     const payload = await api(`/api/backfill-tasks?${query.toString()}`);
-    $("task-table").innerHTML = table(
+    $("task-table").innerHTML = tableSummary(
+      `当前筛选返回 ${number(payload.task_count)} 个任务。优先看 failed、running 和 last_error。`,
+    ) + table(
       [
         { key: "status", label: fieldLabel("status"), status: true },
         { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel },
@@ -509,6 +671,7 @@ async function loadBackfillTasks() {
         { key: "last_error", label: fieldLabel("last_error"), maxLength: 120 },
       ],
       payload.tasks,
+      "当前筛选条件下没有回补任务。",
     );
   } catch (error) {
     showError(friendlyError(error));
@@ -524,12 +687,16 @@ async function loadDatasetPreview() {
     appendQuery(query, "start", $("preview-start").value.trim());
     appendQuery(query, "end", $("preview-end").value.trim());
     appendQuery(query, "limit", $("preview-limit").value);
+    const selectedDataset = $("preview-dataset").value;
+    $("preview-explanation").innerHTML = `<strong>当前数据集：</strong>${escapeHtml(datasetLabel(selectedDataset))}。${escapeHtml(datasetDescriptions[selectedDataset] || "")}`;
     const payload = await api(`/api/dataset-preview?${query.toString()}`);
     const columns = payload.columns.slice(0, 18).map((column) => ({
       key: column,
       label: fieldLabel(column),
     }));
-    $("preview-table").innerHTML = table(columns, payload.rows);
+    $("preview-table").innerHTML = tableSummary(
+      `当前显示 ${number(payload.row_count)} 行，最多展示前 ${number($("preview-limit").value)} 行。`,
+    ) + table(columns, payload.rows, "当前筛选条件下没有数据。换个日期、标的或数据集再看。");
   } catch (error) {
     showError(friendlyError(error));
   }
@@ -543,7 +710,9 @@ async function loadQualityIssues() {
     appendQuery(query, "status", $("quality-status").value);
     appendQuery(query, "limit", $("quality-limit").value);
     const payload = await api(`/api/quality-issues?${query.toString()}`);
-    $("quality-table").innerHTML = table(
+    $("quality-table").innerHTML = tableSummary(
+      `当前筛选返回 ${number(payload.issue_count)} 条质量问题。建议先处理 open 状态。`,
+    ) + table(
       [
         { key: "status", label: fieldLabel("status"), status: true },
         { key: "severity", label: fieldLabel("severity"), status: true },
@@ -555,6 +724,7 @@ async function loadQualityIssues() {
         { key: "created_at", label: fieldLabel("created_at") },
       ],
       payload.issues,
+      "当前筛选条件下没有质量问题。",
     );
   } catch (error) {
     showError(friendlyError(error));
@@ -568,7 +738,9 @@ async function loadQlibObjects() {
     appendQuery(query, "dataset", "qlib_export");
     appendQuery(query, "limit", "80");
     const payload = await api(`/api/source-objects?${query.toString()}`);
-    $("qlib-objects").innerHTML = table(
+    $("qlib-objects").innerHTML = tableSummary(
+      `已登记 ${number(payload.object_count)} 个 Qlib 导出文件索引。`,
+    ) + table(
       [
         { key: "layer", label: fieldLabel("layer"), status: true },
         { key: "uri", label: fieldLabel("uri"), maxLength: 120 },
@@ -576,6 +748,7 @@ async function loadQlibObjects() {
         { key: "created_at", label: fieldLabel("created_at") },
       ],
       payload.objects,
+      "暂无 Qlib 导出文件。先执行 export-qlib。",
     );
   } catch (error) {
     showError(friendlyError(error));
@@ -583,7 +756,9 @@ async function loadQlibObjects() {
 }
 
 function renderQlibJobs(rows) {
-  $("qlib-jobs").innerHTML = table(
+  $("qlib-jobs").innerHTML = tableSummary(
+    `最近 ${number(rows.length)} 次 Qlib 导出记录。成功后再用 verify-qlib 验证可读性。`,
+  ) + table(
     [
       { key: "status", label: fieldLabel("status"), status: true },
       { key: "start_date", label: fieldLabel("start_date") },
@@ -602,6 +777,7 @@ function renderQlibJobs(rows) {
       { key: "created_at", label: fieldLabel("created_at") },
     ],
     rows,
+    "暂无 Qlib 导出记录。先执行 export-qlib。",
   );
 }
 

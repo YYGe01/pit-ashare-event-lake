@@ -29,6 +29,9 @@
         <header class="topbar">
           <div>
             <h1 id="page-title">总览</h1>
+            <p id="page-summary" class="page-summary">
+              先判断当前采集是否正常，再查看卡住的数据集和最近运行记录。
+            </p>
             <div id="database-path" class="muted text-ellipsis"></div>
           </div>
           <div class="topbar-actions">
@@ -40,11 +43,25 @@
         <div id="error-banner" class="error-banner hidden"></div>
 
         <section id="dashboard" class="page-section active">
+          <section class="guide-panel">
+            <div>
+              <h2>先看这三件事</h2>
+              <p>总览页只回答一个问题：当前数据采集是不是在正常推进。</p>
+            </div>
+            <div id="overview-health" class="health-grid"></div>
+          </section>
+
           <div id="kpi-grid" class="kpi-grid"></div>
 
           <section class="panel">
             <div class="panel-header">
-              <h2>采集进度</h2>
+              <div>
+                <h2>采集进度</h2>
+                <p class="panel-subtitle">每张卡表示一个数据集在某个来源和股票池下的回补批次总进度。</p>
+              </div>
+            </div>
+            <div class="panel-note">
+              <strong>怎么读：</strong>绿色或完成表示这组任务已跑完；蓝色运行中表示正在写数据；橙色待执行表示排队；红色阻塞表示存在失败或超时任务，需要先处理。
             </div>
             <div id="progress-list" class="progress-list"></div>
           </section>
@@ -52,14 +69,20 @@
           <div class="content-grid">
             <section class="panel wide">
               <div class="panel-header">
-                <h2>任务状态</h2>
+                <div>
+                  <h2>任务状态</h2>
+                  <p class="panel-subtitle">把所有控制表按状态汇总，用来发现失败、阻塞和未关闭质量问题。</p>
+                </div>
               </div>
               <div id="status-overview" class="status-layout"></div>
             </section>
 
             <section class="panel">
               <div class="panel-header">
-                <h2>数据水位</h2>
+                <div>
+                  <h2>数据水位</h2>
+                  <p class="panel-subtitle">表示每个数据集已经覆盖到的日期范围。</p>
+                </div>
               </div>
               <div id="watermark-list" class="list-block"></div>
             </section>
@@ -67,16 +90,34 @@
 
           <section class="panel">
             <div class="panel-header">
-              <h2>最近运行</h2>
+              <div>
+                <h2>最近运行</h2>
+                <p class="panel-subtitle">记录最近的 CLI 作业，例如回补、每日增量、因子加工和 Qlib 导出。</p>
+              </div>
             </div>
             <div id="recent-jobs"></div>
           </section>
         </section>
 
         <section id="backfill" class="page-section">
+          <section class="guide-panel">
+            <div>
+              <h2>回补任务怎么看</h2>
+              <p>回补任务是历史数据采集队列。先筛选数据集，再看失败和运行中的任务。</p>
+            </div>
+            <div class="guide-grid">
+              <div class="guide-card"><b>pending</b><span>已经排队，等待 `run-backfill` 执行。</span></div>
+              <div class="guide-card"><b>running</b><span>正在采集或写入，长时间不动可能是陈旧任务。</span></div>
+              <div class="guide-card"><b>failed</b><span>失败任务需要查看最后错误，修复后用重试参数执行。</span></div>
+              <div class="guide-card"><b>superseded</b><span>原任务已被拆成更小任务，不再计入进度。</span></div>
+            </div>
+          </section>
           <section class="panel">
             <div class="panel-header">
-              <h2>回补任务</h2>
+              <div>
+                <h2>回补任务</h2>
+                <p class="panel-subtitle">适合定位哪段日期、哪批标的还没采完。</p>
+              </div>
               <div class="filters">
                 <select id="task-dataset" class="input"></select>
                 <select id="task-status" class="input">
@@ -94,14 +135,31 @@
                 </select>
               </div>
             </div>
+            <div class="panel-note">
+              <strong>处理建议：</strong>长时间 running 可先停回补进程，再执行 `qdc recover-running --dataset &lt;dataset&gt; --older-than-minutes 15`；大任务过慢时可用 `qdc split-backfill --task-id &lt;task_id&gt; --batch-size 10` 拆小。
+            </div>
             <div id="task-table"></div>
           </section>
         </section>
 
         <section id="dataset" class="page-section">
+          <section class="guide-panel">
+            <div>
+              <h2>数据预览怎么看</h2>
+              <p>这里直接看统一研究层 `qdc_silver` 表，适合确认某个标的某天有没有行情、新闻因子或公告因子。</p>
+            </div>
+            <div class="guide-grid">
+              <div class="guide-card"><b>1. 选数据集</b><span>例如日线行情、新闻日频因子、公告日频因子。</span></div>
+              <div class="guide-card"><b>2. 输入标的</b><span>使用 Qlib 风格代码，例如 SH600000 或 SZ000001。</span></div>
+              <div class="guide-card"><b>3. 限定日期</b><span>用 YYYY-MM-DD 缩小范围，避免一次看太多行。</span></div>
+            </div>
+          </section>
           <section class="panel">
             <div class="panel-header">
-              <h2>数据预览</h2>
+              <div>
+                <h2>数据预览</h2>
+                <p class="panel-subtitle">这是研究和 Qlib 导出的来源表，不是原始 JSON。</p>
+              </div>
               <div class="filters">
                 <select id="preview-dataset" class="input"></select>
                 <input id="preview-instrument" class="input" placeholder="标的 instrument" />
@@ -114,14 +172,29 @@
                 </select>
               </div>
             </div>
+            <div id="preview-explanation" class="panel-note"></div>
             <div id="preview-table"></div>
           </section>
         </section>
 
         <section id="quality" class="page-section">
+          <section class="guide-panel">
+            <div>
+              <h2>质量检查怎么看</h2>
+              <p>质量问题用来记录缺字段、空数据、日期缺口等异常。先处理未关闭的高严重级别问题。</p>
+            </div>
+            <div class="guide-grid">
+              <div class="guide-card"><b>open</b><span>问题还存在，需要处理或重新跑质量检查。</span></div>
+              <div class="guide-card"><b>closed</b><span>问题已经关闭，通常只作历史记录。</span></div>
+              <div class="guide-card"><b>severity</b><span>严重级别越高，越应该优先看。</span></div>
+            </div>
+          </section>
           <section class="panel">
             <div class="panel-header">
-              <h2>质量检查</h2>
+              <div>
+                <h2>质量检查</h2>
+                <p class="panel-subtitle">定位哪个数据集、哪个实体出现质量异常。</p>
+              </div>
               <div class="filters">
                 <select id="quality-dataset" class="input"></select>
                 <select id="quality-status" class="input">
@@ -141,16 +214,33 @@
         </section>
 
         <section id="qlib" class="page-section">
+          <section class="guide-panel">
+            <div>
+              <h2>Qlib 导出怎么看</h2>
+              <p>这里确认当前 DuckDB 里的研究数据是否已经被导成 Qlib 可读的 provider 目录。</p>
+            </div>
+            <div class="guide-grid">
+              <div class="guide-card"><b>最近导出</b><span>看导出日期范围、目标目录和文件数量。</span></div>
+              <div class="guide-card"><b>导出文件</b><span>看 calendars、features、instruments 等文件是否登记。</span></div>
+              <div class="guide-card"><b>下一步验证</b><span>用 `qdc verify-qlib` 检查 Qlib 是否能读取。</span></div>
+            </div>
+          </section>
           <div class="content-grid">
             <section class="panel">
               <div class="panel-header">
-                <h2>最近导出</h2>
+                <div>
+                  <h2>最近导出</h2>
+                  <p class="panel-subtitle">每行对应一次 `qdc export-qlib`。</p>
+                </div>
               </div>
               <div id="qlib-jobs"></div>
             </section>
             <section class="panel">
               <div class="panel-header">
-                <h2>导出文件</h2>
+                <div>
+                  <h2>导出文件</h2>
+                  <p class="panel-subtitle">Qlib provider 目录下已登记的输出文件。</p>
+                </div>
               </div>
               <div id="qlib-objects"></div>
             </section>
