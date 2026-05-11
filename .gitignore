@@ -26,6 +26,7 @@ data/
 # Logs
 logs/
 *.log
+mlruns/
 
 # OS / IDE
 .DS_Store

@@ -490,6 +490,12 @@ cd /root/code/qlib/examples
 qrun benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_2026.yaml
 ```
 
+QDC 仓库内已提供最小 qrun smoke 配置：
+
+```bash
+qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml
+```
+
 本地 Qlib 源码联调安装命令：
 
 ```bash
@@ -579,7 +585,8 @@ LightGBM Alpha158 + news + announcement
 已实现：qdc export-qlib 基础 day provider 导出，包含行情、vwap、复权、涨跌停和新闻/公告 count 因子
 已实现：qdc verify-qlib 通过本地 Qlib 校验 provider，可发现缺失 instrument / 空 feature，并输出严格 JSON
 已验证：Qlib Alpha158 handler 可读取 QDC provider 并生成特征/label
-待实现：Qlib LightGBM Alpha158 baseline qrun 训练联调
+已验证：QDC 专用 LightGBM Alpha158 qrun smoke 可完成训练和信号记录
+待实现：完整 universe Qlib LightGBM Alpha158 baseline 评估
 已验证：真实 AkShare 小样本 smoke，覆盖 csi300 成分快照、stock_basic、daily、公告、基础因子、Parquet、quality 和 Qlib 导出
 已验证：本地 /root/code/qlib 以 editable 方式安装到 ai-trader，并读取 QDC 导出的 Qlib provider
 待增强：历史成分变更追溯、更细质量规则、完整 universe Qlib 导出和 Alpha158 baseline 配置
@@ -650,3 +657,30 @@ Qlib Alpha158 handler: shape=(968, 159), non_null_label=964
 ```
 
 说明：当前只验证 Alpha158 data handler 能读取 QDC provider 并生成特征/label；正式 LightGBM baseline 仍需要完整 universe、训练/验证/测试切分和 qrun 配置。
+
+## 16. Qlib LightGBM Alpha158 qrun smoke
+
+新增 QDC 专用配置：
+
+```text
+config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml
+```
+
+命令：
+
+```bash
+qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml
+```
+
+结果：
+
+```text
+qrun status: success
+provider_uri: data/quant_data_center/qlib/cn_data
+market: all
+model: LGBModel
+handler: Alpha158
+records: SignalRecord / SigAnaRecord
+```
+
+说明：当前两标的 smoke 能完成 LightGBM 训练、生成 `pred.pkl` artifact 和信号分析记录；由于样本只有 2 个标的，IC/Rank IC 为 `nan`，不作为策略质量结论。正式 baseline 需要完整 universe、指数 benchmark 和组合回测配置。

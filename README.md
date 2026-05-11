@@ -30,6 +30,7 @@ qdc sync-parquet --layer all
 qdc quality --dataset daily_bar --start 2026-05-01 --end 2026-05-03
 qdc export-qlib --start 2026-05-01 --end 2026-05-03 --provider-uri data/quant_data_center/qlib/cn_data
 qdc verify-qlib --start 2026-05-01 --end 2026-05-03 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
+qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml
 ```
 
 `run-backfill --control-only` 只验证任务状态流和水位表，不采集真实数据。
@@ -72,7 +73,7 @@ data/quant_data_center/             本地运行数据，已 gitignored
 conda run -n ai-trader python -m pip install -e /root/code/qlib -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://mirrors.aliyun.com/pypi/simple
 ```
 
-当前已用本地 `/root/code/qlib` 验证 `D.calendar`、`D.list_instruments` 和 `D.features` 能读取 `qdc export-qlib` 产物。导出字段包含 Alpha158 默认需要的 `$vwap`。Alpha158 训练需要更长历史区间和更完整 universe，不使用只有 1 个交易日、2 个标的的 smoke provider。
+当前已用本地 `/root/code/qlib` 验证 `D.calendar`、`D.list_instruments` 和 `D.features` 能读取 `qdc export-qlib` 产物。导出字段包含 Alpha158 默认需要的 `$vwap`。`config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml` 可用当前 provider 跑通 LightGBM Alpha158 qrun smoke；正式评估仍需要完整 universe 和稳定 train/valid/test 切分。
 
 ## 验证
 
