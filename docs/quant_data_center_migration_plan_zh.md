@@ -578,10 +578,11 @@ LightGBM Alpha158 + news + announcement
 已实现：qdc quality 基础质量命令
 已实现：qdc export-qlib 基础 day provider 导出，包含行情、vwap、复权、涨跌停和新闻/公告 count 因子
 已实现：qdc verify-qlib 通过本地 Qlib 校验 provider，可发现缺失 instrument / 空 feature，并输出严格 JSON
-待实现：Qlib Alpha158 baseline 外部联调
+已验证：Qlib Alpha158 handler 可读取 QDC provider 并生成特征/label
+待实现：Qlib LightGBM Alpha158 baseline qrun 训练联调
 已验证：真实 AkShare 小样本 smoke，覆盖 csi300 成分快照、stock_basic、daily、公告、基础因子、Parquet、quality 和 Qlib 导出
 已验证：本地 /root/code/qlib 以 editable 方式安装到 ai-trader，并读取 QDC 导出的 Qlib provider
-待增强：历史成分变更追溯、更细质量规则、更长历史 Qlib 导出和 Alpha158 baseline 配置
+待增强：历史成分变更追溯、更细质量规则、完整 universe Qlib 导出和 Alpha158 baseline 配置
 ```
 
 ## 14. 真实数据 smoke 记录
@@ -625,3 +626,27 @@ stock_tfp_em 重复状态行：按 trade_date/instrument first-wins 去重
 announcement 重复公告行：按 announcement_id 去重
 daily 同一批 failed task：再次运行会重试 pending/failed task
 ```
+
+## 15. Qlib Alpha158 data-layer smoke
+
+2026-05-11 使用真实 AkShare 扩展两标的日线历史样本：
+
+```bash
+qdc plan-backfill --dataset daily_bar --source-id akshare --start 2023-01-01 --end 2024-12-31 --symbols SH600000,SZ000001 --batch-size 2 --chunk-days 800
+qdc run-backfill --dataset daily_bar --limit-tasks 3
+qdc quality --dataset daily_bar --start 2023-01-01 --end 2024-12-31
+qdc export-qlib --start 2023-01-01 --end 2024-12-31 --provider-uri data/quant_data_center/qlib/cn_data
+qdc verify-qlib --start 2023-01-01 --end 2024-12-31 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
+```
+
+结果：
+
+```text
+daily_bar: 968 rows
+quality daily_bar: 0 issue
+Qlib export: 2 instruments, 484 calendar dates, 26 files
+Qlib verify: 968 feature rows, issues=[]
+Qlib Alpha158 handler: shape=(968, 159), non_null_label=964
+```
+
+说明：当前只验证 Alpha158 data handler 能读取 QDC provider 并生成特征/label；正式 LightGBM baseline 仍需要完整 universe、训练/验证/测试切分和 qrun 配置。
