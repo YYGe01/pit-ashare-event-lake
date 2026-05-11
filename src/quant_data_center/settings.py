@@ -15,6 +15,18 @@ def _resolve_path(project_root: Path, value: str | Path) -> Path:
 
 
 @dataclass(frozen=True)
+class TextEventClassifierSettings:
+    """Configuration for single-document text event classification."""
+
+    provider: str
+    model: str
+    api_key_env: str
+    api_key_file: Path | None
+    temperature: float
+    max_tokens: int
+
+
+@dataclass(frozen=True)
 class QdcSettings:
     """Runtime paths and basic project options."""
 
@@ -35,6 +47,7 @@ class QdcSettings:
     paid_providers_enabled: bool
     raw_append_only: bool
     unknown_copyright_policy: str
+    text_event_classifier: TextEventClassifierSettings
     universes: dict[str, list[str]]
 
     @classmethod
@@ -47,6 +60,10 @@ class QdcSettings:
         paths = payload.get("paths", {})
         runtime = payload.get("runtime", {})
         policy = payload.get("policy", {})
+        text_event_classifier = _parse_text_event_classifier_settings(
+            project_root=project_root,
+            payload=payload.get("llm", {}),
+        )
         universes = _parse_universes(payload.get("universes", {}))
 
         required_paths = [
@@ -81,6 +98,7 @@ class QdcSettings:
             unknown_copyright_policy=str(
                 policy.get("unknown_copyright_policy", "metadata_only")
             ),
+            text_event_classifier=text_event_classifier,
             universes=universes,
         )
 
@@ -124,6 +142,18 @@ class QdcSettings:
             "paid_providers_enabled": self.paid_providers_enabled,
             "raw_append_only": self.raw_append_only,
             "unknown_copyright_policy": self.unknown_copyright_policy,
+            "text_event_classifier": {
+                "provider": self.text_event_classifier.provider,
+                "model": self.text_event_classifier.model,
+                "api_key_env": self.text_event_classifier.api_key_env,
+                "api_key_file": (
+                    str(self.text_event_classifier.api_key_file)
+                    if self.text_event_classifier.api_key_file
+                    else None
+                ),
+                "temperature": self.text_event_classifier.temperature,
+                "max_tokens": self.text_event_classifier.max_tokens,
+            },
             "universes": {
                 universe: {"symbol_count": len(symbols)}
                 for universe, symbols in sorted(self.universes.items())
@@ -152,3 +182,30 @@ def _parse_universes(payload: Any) -> dict[str, list[str]]:
             symbols = [str(item).strip() for item in raw_symbols or [] if str(item).strip()]
         universes[name] = symbols
     return universes
+
+
+def _parse_text_event_classifier_settings(
+    *,
+    project_root: Path,
+    payload: Any,
+) -> TextEventClassifierSettings:
+    if payload and not isinstance(payload, dict):
+        raise ValueError("qdc llm settings must be a mapping")
+    llm = payload or {}
+    raw_spec = llm.get("text_event", {})
+    if raw_spec and not isinstance(raw_spec, dict):
+        raise ValueError("qdc llm.text_event settings must be a mapping")
+    spec = raw_spec or {}
+    api_key_file = spec.get("api_key_file")
+    return TextEventClassifierSettings(
+        provider=str(spec.get("provider", "rule")).strip().lower() or "rule",
+        model=str(spec.get("model", "deepseek/deepseek-v4-flash")).strip(),
+        api_key_env=str(spec.get("api_key_env", "DEEPSEEK_API_KEY")).strip(),
+        api_key_file=(
+            _resolve_path(project_root, api_key_file)
+            if api_key_file is not None and str(api_key_file).strip()
+            else None
+        ),
+        temperature=float(spec.get("temperature", 0)),
+        max_tokens=int(spec.get("max_tokens", 512)),
+    )

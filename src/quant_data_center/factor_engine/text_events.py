@@ -6,7 +6,10 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
+
+from quant_data_center.settings import TextEventClassifierSettings
 
 
 VALID_DOCUMENT_TYPES = {"news", "announcement"}
@@ -285,11 +288,29 @@ class LiteLlmTextEventClassifier:
     def __init__(
         self,
         *,
+        settings: TextEventClassifierSettings | None = None,
         model: str | None = None,
-        api_key_env: str = "DEEPSEEK_API_KEY",
+        api_key_env: str | None = None,
+        api_key_file: str | Path | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> None:
-        self.model = model or os.environ.get("LITELLM_MODEL") or "deepseek/deepseek-v4-flash"
-        self.api_key_env = api_key_env
+        self.model = model or (settings.model if settings else None) or "deepseek/deepseek-v4-flash"
+        self.api_key_env = (
+            api_key_env or (settings.api_key_env if settings else None) or "DEEPSEEK_API_KEY"
+        )
+        raw_api_key_file = api_key_file if api_key_file is not None else (
+            settings.api_key_file if settings else None
+        )
+        self.api_key_file = Path(raw_api_key_file).expanduser() if raw_api_key_file else None
+        self.temperature = (
+            float(temperature)
+            if temperature is not None
+            else float(settings.temperature if settings else 0)
+        )
+        self.max_tokens = int(max_tokens if max_tokens is not None else (
+            settings.max_tokens if settings else 512
+        ))
 
     def classify(
         self,
@@ -299,8 +320,7 @@ class LiteLlmTextEventClassifier:
         document_type: str = "news",
     ) -> TextEventResult:
         document_type = _normalize_document_type(document_type)
-        if not os.environ.get(self.api_key_env):
-            raise ValueError(f"{self.api_key_env} is required for provider=llm")
+        api_key = self._load_api_key()
         try:
             from litellm import completion
         except ImportError as exc:  # pragma: no cover - depends on optional install.
@@ -308,6 +328,7 @@ class LiteLlmTextEventClassifier:
 
         response = completion(
             model=self.model,
+            api_key=api_key,
             messages=[
                 {
                     "role": "system",
@@ -318,8 +339,8 @@ class LiteLlmTextEventClassifier:
                 },
                 {"role": "user", "content": _llm_prompt(title, body, document_type)},
             ],
-            temperature=0,
-            max_tokens=512,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
         )
         content = _completion_content(response)
         parsed = _parse_json_object(content)
@@ -331,13 +352,30 @@ class LiteLlmTextEventClassifier:
             raw_response=content,
         )
 
+    def _load_api_key(self) -> str:
+        if self.api_key_file and self.api_key_file.exists():
+            api_key = self.api_key_file.read_text(encoding="utf-8").strip()
+            if api_key:
+                return api_key
+        api_key = os.environ.get(self.api_key_env, "").strip()
+        if api_key:
+            return api_key
+        locations = [f"env:{self.api_key_env}"]
+        if self.api_key_file:
+            locations.insert(0, f"file:{self.api_key_file}")
+        raise ValueError(f"provider=llm requires an API key in {' or '.join(locations)}")
 
-def build_text_event_classifier(provider: str = "rule") -> TextEventClassifier:
-    provider = provider.strip().lower()
+
+def build_text_event_classifier(
+    provider: str | None = None,
+    *,
+    settings: TextEventClassifierSettings | None = None,
+) -> TextEventClassifier:
+    provider = (provider or (settings.provider if settings else "rule")).strip().lower()
     if provider == "rule":
         return RuleBasedTextEventClassifier()
     if provider == "llm":
-        return LiteLlmTextEventClassifier()
+        return LiteLlmTextEventClassifier(settings=settings)
     raise ValueError("text event provider must be one of: rule, llm")
 
 

@@ -136,6 +136,12 @@ def cmd_validate_config(args: argparse.Namespace) -> int:
     for universe, symbols in settings.universes.items():
         if not symbols:
             errors.append(f"universes.{universe}.symbols must not be empty")
+    if settings.text_event_classifier.provider not in {"rule", "llm"}:
+        errors.append("llm.text_event.provider must be one of: rule, llm")
+    if not settings.text_event_classifier.model:
+        errors.append("llm.text_event.model must not be empty")
+    if settings.text_event_classifier.max_tokens <= 0:
+        errors.append("llm.text_event.max_tokens must be greater than 0")
     _print_json({"status": "fail" if errors else "ok", "errors": errors})
     return 1 if errors else 0
 
@@ -214,7 +220,11 @@ def cmd_build_factors(args: argparse.Namespace) -> int:
 
 
 def cmd_classify_text_event(args: argparse.Namespace) -> int:
-    classifier = build_text_event_classifier(args.provider)
+    settings = load_settings(args.config)
+    classifier = build_text_event_classifier(
+        args.provider,
+        settings=settings.text_event_classifier,
+    )
     result = classifier.classify(
         title=args.title,
         body=args.body,
@@ -730,7 +740,11 @@ def build_parser() -> argparse.ArgumentParser:
         "classify-text-event",
         help="Classify one news or announcement title with rule or optional LLM provider",
     )
-    classify_parser.add_argument("--provider", choices=["rule", "llm"], default="rule")
+    classify_parser.add_argument(
+        "--provider",
+        choices=["rule", "llm"],
+        help="Optional provider override; defaults to llm.text_event.provider in config",
+    )
     classify_parser.add_argument("--document-type", choices=["news", "announcement"], default="news")
     classify_parser.add_argument("--title", required=True)
     classify_parser.add_argument("--body")

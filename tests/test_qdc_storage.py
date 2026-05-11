@@ -43,6 +43,14 @@ policy:
   paid_providers_enabled: false
   raw_append_only: true
   unknown_copyright_policy: metadata_only
+llm:
+  text_event:
+    provider: rule
+    model: deepseek/unit-test
+    api_key_file: data/quant_data_center/secrets/deepseek_api_key
+    api_key_env: QDC_TEST_LLM_KEY
+    temperature: 0
+    max_tokens: 128
 universes:
   csi300:
     symbols:
@@ -1204,8 +1212,6 @@ def test_qdc_classify_text_event_rule_and_mock_litellm(
                 "--config",
                 str(config_path),
                 "classify-text-event",
-                "--provider",
-                "rule",
                 "--document-type",
                 "announcement",
                 "--title",
@@ -1222,7 +1228,9 @@ def test_qdc_classify_text_event_rule_and_mock_litellm(
 
     def completion(**kwargs):
         assert kwargs["model"] == "deepseek/unit-test"
+        assert kwargs["api_key"] == "unit-test"
         assert kwargs["temperature"] == 0
+        assert kwargs["max_tokens"] == 128
         return SimpleNamespace(
             choices=[
                 SimpleNamespace(
@@ -1242,8 +1250,13 @@ def test_qdc_classify_text_event_rule_and_mock_litellm(
             ]
         )
 
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "unit-test")
-    monkeypatch.setenv("LITELLM_MODEL", "deepseek/unit-test")
+    secret_path = tmp_path / "data" / "quant_data_center" / "secrets" / "deepseek_api_key"
+    secret_path.parent.mkdir(parents=True)
+    secret_path.write_text("unit-test\n", encoding="utf-8")
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace("provider: rule", "provider: llm", 1),
+        encoding="utf-8",
+    )
     monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=completion))
 
     assert (
@@ -1252,8 +1265,6 @@ def test_qdc_classify_text_event_rule_and_mock_litellm(
                 "--config",
                 str(config_path),
                 "classify-text-event",
-                "--provider",
-                "llm",
                 "--document-type",
                 "announcement",
                 "--title",
