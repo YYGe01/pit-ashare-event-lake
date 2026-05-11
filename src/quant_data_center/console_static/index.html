@@ -16,7 +16,7 @@
             <div class="brand-subtitle">quant_data_center</div>
           </div>
         </div>
-        <nav class="nav-list" aria-label="console navigation">
+        <nav class="nav-list" aria-label="控制台导航">
           <button class="nav-item active" data-section="dashboard">总览</button>
           <button class="nav-item" data-section="backfill">回补任务</button>
           <button class="nav-item" data-section="dataset">数据预览</button>
@@ -81,11 +81,11 @@
                 <select id="task-dataset" class="input"></select>
                 <select id="task-status" class="input">
                   <option value="">全部状态</option>
-                  <option value="pending">pending</option>
-                  <option value="running">running</option>
-                  <option value="success">success</option>
-                  <option value="failed">failed</option>
-                  <option value="superseded">superseded</option>
+                  <option value="pending">待执行 pending</option>
+                  <option value="running">运行中 running</option>
+                  <option value="success">成功 success</option>
+                  <option value="failed">失败 failed</option>
+                  <option value="superseded">已拆分替代 superseded</option>
                 </select>
                 <select id="task-limit" class="input">
                   <option value="50">50</option>
@@ -104,9 +104,9 @@
               <h2>数据预览</h2>
               <div class="filters">
                 <select id="preview-dataset" class="input"></select>
-                <input id="preview-instrument" class="input" placeholder="instrument" />
-                <input id="preview-start" class="input" placeholder="start" />
-                <input id="preview-end" class="input" placeholder="end" />
+                <input id="preview-instrument" class="input" placeholder="标的 instrument" />
+                <input id="preview-start" class="input" placeholder="开始日期 start" />
+                <input id="preview-end" class="input" placeholder="结束日期 end" />
                 <select id="preview-limit" class="input">
                   <option value="50">50</option>
                   <option value="100">100</option>
@@ -126,8 +126,8 @@
                 <select id="quality-dataset" class="input"></select>
                 <select id="quality-status" class="input">
                   <option value="">全部状态</option>
-                  <option value="open">open</option>
-                  <option value="closed">closed</option>
+                  <option value="open">未关闭 open</option>
+                  <option value="closed">已关闭 closed</option>
                 </select>
                 <select id="quality-limit" class="input">
                   <option value="50">50</option>

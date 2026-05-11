@@ -33,6 +33,118 @@ const statusOrder = [
 ];
 const moneyFormatter = new Intl.NumberFormat("zh-CN");
 
+const datasetLabels = {
+  stock_basic: "证券主数据",
+  universe_constituent: "股票池成分",
+  trade_calendar: "交易日历",
+  daily_bar: "日线行情",
+  adj_factor: "复权因子",
+  price_limit: "涨跌停价格",
+  trade_status: "交易状态",
+  announcement: "公告",
+  news: "新闻",
+  daily_news_factor: "新闻日频因子",
+  daily_announcement_factor: "公告日频因子",
+  qlib_export: "Qlib 导出",
+};
+
+const statusLabels = {
+  blocked: "阻塞",
+  failed: "失败",
+  running: "运行中",
+  pending: "待执行",
+  superseded: "已拆分替代",
+  success: "成功",
+  complete: "已完成",
+  open: "未关闭",
+  closed: "已关闭",
+  warning: "警告",
+  error: "错误",
+};
+
+const layerLabels = {
+  raw: "原始留档层",
+  bronze: "上游快照层",
+  silver: "统一研究层",
+  gold: "研究宽表层",
+  qlib: "Qlib 数据目录",
+};
+
+const sourceLabels = {
+  akshare: "AkShare",
+  qdc: "QDC",
+};
+
+const universeLabels = {
+  csi300: "沪深300",
+};
+
+const fieldLabels = {
+  status: "状态",
+  severity: "严重级别",
+  job_type: "运行类型",
+  dataset: "数据集",
+  source_id: "数据来源",
+  universe: "股票池",
+  start: "开始",
+  end: "结束",
+  start_date: "开始日期",
+  end_date: "结束日期",
+  created_at: "创建时间",
+  updated_at: "更新时间",
+  error: "错误",
+  error_message: "错误信息",
+  symbols: "标的",
+  symbol_batch_json: "标的批次",
+  attempt: "尝试次数",
+  attempt_count: "尝试次数",
+  last_error: "最后错误",
+  issue_type: "问题类型",
+  entity_key: "实体键",
+  message: "说明",
+  layer: "层级",
+  uri: "文件路径",
+  size_bytes: "大小",
+  bytes: "字节",
+  provider: "数据目录",
+  files: "文件数",
+  trade_date: "交易日",
+  instrument: "标的",
+  symbol: "上游代码",
+  exchange: "交易所",
+  name: "名称",
+  open: "开盘价",
+  high: "最高价",
+  low: "最低价",
+  close: "收盘价",
+  pre_close: "昨收价",
+  volume: "成交量",
+  amount: "成交额",
+  vwap: "成交均价",
+  adj_factor: "复权因子",
+  factor_type: "因子类型",
+  limit_up: "涨停价",
+  limit_down: "跌停价",
+  prev_close: "前收盘价",
+  limit_rule: "涨跌停规则",
+  trade_status: "交易状态",
+  halt_reason: "停牌原因",
+  source_update_time: "来源更新时间",
+  calendar_id: "日历编号",
+  is_open: "是否开市",
+  pre_trade_date: "上一交易日",
+  next_trade_date: "下一交易日",
+  publish_date: "发布日期",
+  title: "标题",
+  url: "链接",
+  announcement_id: "公告编号",
+  news_id: "新闻编号",
+  news_count: "新闻数量",
+  announcement_count: "公告数量",
+  news_sentiment_mean: "新闻情绪均值",
+  announcement_sentiment_mean: "公告情绪均值",
+};
+
 const $ = (id) => document.getElementById(id);
 
 let overview = null;
@@ -66,6 +178,48 @@ function number(value) {
   return moneyFormatter.format(Number(value || 0));
 }
 
+function labelWithCode(map, value) {
+  const key = String(value ?? "").trim();
+  if (!key) {
+    return "-";
+  }
+  const label = map[key];
+  return label ? `${label} (${key})` : key;
+}
+
+function datasetLabel(value) {
+  return labelWithCode(datasetLabels, value);
+}
+
+function sourceLabel(value) {
+  return labelWithCode(sourceLabels, value);
+}
+
+function universeLabel(value) {
+  return labelWithCode(universeLabels, value);
+}
+
+function fieldLabel(value) {
+  return labelWithCode(fieldLabels, value);
+}
+
+function tokenLabel(value) {
+  const key = String(value ?? "").trim();
+  if (!key) {
+    return "-";
+  }
+  if (statusLabels[key]) {
+    return `${statusLabels[key]} (${key})`;
+  }
+  if (layerLabels[key]) {
+    return `${layerLabels[key]} (${key})`;
+  }
+  if (datasetLabels[key]) {
+    return `${datasetLabels[key]} (${key})`;
+  }
+  return key;
+}
+
 async function api(path) {
   const response = await fetch(path, { cache: "no-store" });
   const payload = await response.json();
@@ -91,7 +245,7 @@ function setLoading(targetId) {
 }
 
 function tag(value) {
-  const label = escapeHtml(value || "-");
+  const label = escapeHtml(tokenLabel(value));
   const type = String(value || "default").toLowerCase().replaceAll("_", "-");
   return `<span class="tag tag-${type}">${label}</span>`;
 }
@@ -106,8 +260,9 @@ function table(columns, rows, emptyText = "暂无数据") {
       const cells = columns
         .map((column) => {
           const raw = column.value ? column.value(row) : row[column.key];
-          const value = column.status ? tag(raw) : escapeHtml(compact(raw, column.maxLength));
-          const title = escapeHtml(compact(raw, 400));
+          const display = column.format ? column.format(raw, row) : raw;
+          const value = column.status ? tag(raw) : escapeHtml(compact(display, column.maxLength));
+          const title = escapeHtml(compact(display, 400));
           return `<td title="${title}">${value}</td>`;
         })
         .join("");
@@ -117,14 +272,14 @@ function table(columns, rows, emptyText = "暂无数据") {
   return `<div class="table-wrap"><table class="data-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
-function populateSelect(selectId, options, allLabel) {
+function populateSelect(selectId, options, allLabel, labelFn = (option) => option) {
   const select = $(selectId);
   const current = select.value;
   select.innerHTML = "";
   if (allLabel) {
     select.add(new Option(allLabel, ""));
   }
-  options.forEach((option) => select.add(new Option(option, option)));
+  options.forEach((option) => select.add(new Option(labelFn(option), option)));
   if ([...select.options].some((option) => option.value === current)) {
     select.value = current;
   }
@@ -185,14 +340,14 @@ function renderOverview(payload) {
   const successPercent = totalTasks ? Math.round((successTasks / totalTasks) * 100) : 0;
 
   $("kpi-grid").innerHTML = [
-    kpi("Silver 行数", silverTotal, `${Object.keys(silverCounts).length} tables`),
+    kpi("统一研究层行数", silverTotal, `${Object.keys(silverCounts).length} 个表`),
     kpi("回补任务", backfillTotal, `完成率 ${successPercent}%`),
-    kpi("运行记录", tableCounts.job_run || 0, "job_run"),
-    kpi("阻塞任务", blockedCount, `failed ${number(statusCounts.failed || 0)}`),
+    kpi("运行记录", tableCounts.job_run || 0, "作业记录 job_run"),
+    kpi("阻塞任务", blockedCount, `失败 ${number(statusCounts.failed || 0)}`),
     kpi("源文件索引", sourceTotal, "source_object"),
     kpi("水位记录", tableCounts.dataset_watermark || 0, "dataset_watermark"),
-    kpi("Qlib 导出", (payload.latest_qlib_exports || []).length, "latest jobs"),
-    kpi("质量问题", openIssues, "open"),
+    kpi("Qlib 导出", (payload.latest_qlib_exports || []).length, "最近导出"),
+    kpi("质量问题", openIssues, "未关闭 open"),
   ].join("");
 
   $("status-overview").innerHTML = [
@@ -254,7 +409,11 @@ function renderWatermarks(rows) {
   $("watermark-list").innerHTML = rows
     .slice(0, 8)
     .map((row) => {
-      const title = [row.dataset, row.source_id, row.universe].filter(Boolean).join(" / ");
+      const title = [
+        datasetLabel(row.dataset),
+        sourceLabel(row.source_id),
+        row.universe ? universeLabel(row.universe) : "",
+      ].filter(Boolean).join(" / ");
       const range = [row.min_date, row.max_date].filter(Boolean).join(" - ");
       return `
         <div class="list-item">
@@ -276,16 +435,20 @@ function renderProgress(rows) {
     .slice(0, 8)
     .map((row) => {
       const percent = Number(row.success_percent || 0);
-      const title = [row.dataset, row.source_id, row.universe].filter(Boolean).join(" / ");
+      const title = [
+        datasetLabel(row.dataset),
+        sourceLabel(row.source_id),
+        row.universe ? universeLabel(row.universe) : "",
+      ].filter(Boolean).join(" / ");
       const range = [row.min_date, row.max_date].filter(Boolean).join(" - ");
       const meta = [
-        `success ${number(row.success_count)}`,
-        `pending ${number(row.pending_count)}`,
-        `running ${number(row.running_count)}`,
-        `failed ${number(row.failed_count)}`,
+        `成功 ${number(row.success_count)}`,
+        `待执行 ${number(row.pending_count)}`,
+        `运行中 ${number(row.running_count)}`,
+        `失败 ${number(row.failed_count)}`,
       ].join(" · ");
       const stale = Number(row.stale_running_count || 0);
-      const staleText = stale ? `<div class="list-meta danger">stale running ${number(stale)}</div>` : "";
+      const staleText = stale ? `<div class="list-meta danger">超时运行中 ${number(stale)}</div>` : "";
       return `
         <div class="progress-item">
           <div class="progress-title">
@@ -296,7 +459,7 @@ function renderProgress(rows) {
             <div class="progress-fill ${escapeHtml(row.state)}" style="width:${percent}%"></div>
           </div>
           <div class="progress-meta">
-            <span>${number(row.success_count)} / ${number(row.total_task_count)} tasks</span>
+            <span>${number(row.success_count)} / ${number(row.total_task_count)} 个任务</span>
             <span>${percent}%</span>
           </div>
           <div class="list-meta">${escapeHtml(range)}</div>
@@ -311,14 +474,14 @@ function renderProgress(rows) {
 function renderRecentJobs(rows) {
   $("recent-jobs").innerHTML = table(
     [
-      { key: "status", label: "status", status: true },
-      { key: "job_type", label: "job_type" },
-      { key: "dataset", label: "dataset" },
-      { key: "source_id", label: "source_id" },
-      { key: "start_date", label: "start" },
-      { key: "end_date", label: "end" },
-      { key: "created_at", label: "created_at" },
-      { key: "error_message", label: "error", maxLength: 90 },
+      { key: "status", label: fieldLabel("status"), status: true },
+      { key: "job_type", label: fieldLabel("job_type") },
+      { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel },
+      { key: "source_id", label: fieldLabel("source_id"), format: sourceLabel },
+      { key: "start_date", label: fieldLabel("start_date") },
+      { key: "end_date", label: fieldLabel("end_date") },
+      { key: "created_at", label: fieldLabel("created_at") },
+      { key: "error_message", label: fieldLabel("error_message"), maxLength: 90 },
     ],
     rows,
   );
@@ -334,16 +497,16 @@ async function loadBackfillTasks() {
     const payload = await api(`/api/backfill-tasks?${query.toString()}`);
     $("task-table").innerHTML = table(
       [
-        { key: "status", label: "status", status: true },
-        { key: "dataset", label: "dataset" },
-        { key: "source_id", label: "source_id" },
-        { key: "universe", label: "universe" },
-        { key: "start_date", label: "start" },
-        { key: "end_date", label: "end" },
-        { key: "symbol_batch_json", label: "symbols", maxLength: 80 },
-        { key: "attempt_count", label: "attempt" },
-        { key: "updated_at", label: "updated_at" },
-        { key: "last_error", label: "last_error", maxLength: 120 },
+        { key: "status", label: fieldLabel("status"), status: true },
+        { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel },
+        { key: "source_id", label: fieldLabel("source_id"), format: sourceLabel },
+        { key: "universe", label: fieldLabel("universe"), format: universeLabel },
+        { key: "start_date", label: fieldLabel("start_date") },
+        { key: "end_date", label: fieldLabel("end_date") },
+        { key: "symbol_batch_json", label: fieldLabel("symbol_batch_json"), maxLength: 80 },
+        { key: "attempt_count", label: fieldLabel("attempt_count") },
+        { key: "updated_at", label: fieldLabel("updated_at") },
+        { key: "last_error", label: fieldLabel("last_error"), maxLength: 120 },
       ],
       payload.tasks,
     );
@@ -364,7 +527,7 @@ async function loadDatasetPreview() {
     const payload = await api(`/api/dataset-preview?${query.toString()}`);
     const columns = payload.columns.slice(0, 18).map((column) => ({
       key: column,
-      label: column,
+      label: fieldLabel(column),
     }));
     $("preview-table").innerHTML = table(columns, payload.rows);
   } catch (error) {
@@ -382,14 +545,14 @@ async function loadQualityIssues() {
     const payload = await api(`/api/quality-issues?${query.toString()}`);
     $("quality-table").innerHTML = table(
       [
-        { key: "status", label: "status", status: true },
-        { key: "severity", label: "severity", status: true },
-        { key: "dataset", label: "dataset" },
-        { key: "source_id", label: "source_id" },
-        { key: "issue_type", label: "issue_type" },
-        { key: "entity_key", label: "entity_key" },
-        { key: "message", label: "message", maxLength: 140 },
-        { key: "created_at", label: "created_at" },
+        { key: "status", label: fieldLabel("status"), status: true },
+        { key: "severity", label: fieldLabel("severity"), status: true },
+        { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel },
+        { key: "source_id", label: fieldLabel("source_id"), format: sourceLabel },
+        { key: "issue_type", label: fieldLabel("issue_type") },
+        { key: "entity_key", label: fieldLabel("entity_key") },
+        { key: "message", label: fieldLabel("message"), maxLength: 140 },
+        { key: "created_at", label: fieldLabel("created_at") },
       ],
       payload.issues,
     );
@@ -407,10 +570,10 @@ async function loadQlibObjects() {
     const payload = await api(`/api/source-objects?${query.toString()}`);
     $("qlib-objects").innerHTML = table(
       [
-        { key: "layer", label: "layer", status: true },
-        { key: "uri", label: "uri", maxLength: 120 },
-        { key: "size_bytes", label: "bytes" },
-        { key: "created_at", label: "created_at" },
+        { key: "layer", label: fieldLabel("layer"), status: true },
+        { key: "uri", label: fieldLabel("uri"), maxLength: 120 },
+        { key: "size_bytes", label: fieldLabel("bytes") },
+        { key: "created_at", label: fieldLabel("created_at") },
       ],
       payload.objects,
     );
@@ -422,21 +585,21 @@ async function loadQlibObjects() {
 function renderQlibJobs(rows) {
   $("qlib-jobs").innerHTML = table(
     [
-      { key: "status", label: "status", status: true },
-      { key: "start_date", label: "start" },
-      { key: "end_date", label: "end" },
+      { key: "status", label: fieldLabel("status"), status: true },
+      { key: "start_date", label: fieldLabel("start_date") },
+      { key: "end_date", label: fieldLabel("end_date") },
       {
         key: "parameters_json",
-        label: "provider",
+        label: fieldLabel("provider"),
         maxLength: 110,
         value: (row) => row.parameters_json?.provider_uri || "",
       },
       {
         key: "parameters_json",
-        label: "files",
+        label: fieldLabel("files"),
         value: (row) => row.parameters_json?.file_count || 0,
       },
-      { key: "created_at", label: "created_at" },
+      { key: "created_at", label: fieldLabel("created_at") },
     ],
     rows,
   );
@@ -477,9 +640,9 @@ function friendlyError(error) {
 }
 
 function init() {
-  populateSelect("task-dataset", datasets, "全部 dataset");
-  populateSelect("quality-dataset", datasets, "全部 dataset");
-  populateSelect("preview-dataset", datasets, null);
+  populateSelect("task-dataset", datasets, "全部数据集", datasetLabel);
+  populateSelect("quality-dataset", datasets, "全部数据集", datasetLabel);
+  populateSelect("preview-dataset", datasets, null, datasetLabel);
   $("preview-dataset").value = "daily_bar";
   bindNav();
   bindFilters();

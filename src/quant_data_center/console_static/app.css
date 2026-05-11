@@ -354,7 +354,7 @@ select {
 
 .status-row {
   display: grid;
-  grid-template-columns: 160px minmax(0, 1fr) 46px;
+  grid-template-columns: 220px minmax(0, 1fr) 64px;
   align-items: center;
   gap: 12px;
 }

@@ -4,7 +4,7 @@
 
 目标是服务 Qlib 研究：采集 A 股数据、支持历史回补和每日增量、加工稳定日频因子，并导出 Qlib 可读数据。本仓库不做模型训练、组合回测、实盘下单或交易终端适配。
 
-当前实施计划见 `docs/迁移实施计划.md`。第一次阅读项目时，建议先看 `docs/数据流阅读指南.md`，它按数据流解释 raw、bronze、silver、factor、gold 和 Qlib 导出的输入输出。
+当前实施计划见 `docs/迁移实施计划.md`。第一次阅读项目时，建议先看 `docs/数据流阅读指南.md`，它按数据流解释原始留档层、上游快照层、统一研究层、因子、研究宽表层和 Qlib 数据目录导出的输入输出。
 
 ## 当前入口
 
@@ -53,7 +53,7 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 
 `daily_bar`、`adj_factor`、`price_limit`、`news` 可用 `--universe` 展开 symbol，也可以显式传入 `--symbols` 覆盖。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
 
-当前回补链路会写入 raw JSON、bronze Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 默认用规则引擎生成新闻/公告日频 count、标题级情绪和事件因子，覆盖增长、风险、融资、合同、回购、股东增减持、监管、诉讼、业绩、质押和担保等事件；`qdc sync-parquet` 可同步 silver/gold Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day provider 目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的 provider 做 data-layer smoke。
+当前回补链路会写入原始 JSON、上游快照 Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 默认用规则引擎生成新闻/公告日频 count、标题级情绪和事件因子，覆盖增长、风险、融资、合同、回购、股东增减持、监管、诉讼、业绩、质押和担保等事件；`qdc sync-parquet` 可同步统一研究层/研究宽表层 Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day 数据目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的数据目录做数据读取层冒烟验证。
 
 LLM 抽取接口已预留为单条 smoke 命令，不参与 `build-factors` 全量构建。模型切换和 provider 默认值统一放在 `config/quant_data_center.yaml` 的 `llm.text_event` 段：
 
@@ -97,7 +97,7 @@ data/quant_data_center/             本地运行数据，已 gitignored
 
 ## Qlib 联调
 
-如需要在当前环境直接验证 Qlib provider，可安装本地 Qlib 源码和依赖。网络慢时优先使用国内 PyPI 源：
+如需要在当前环境直接验证 Qlib 数据目录 provider，可安装本地 Qlib 源码和依赖。网络慢时优先使用国内 PyPI 源：
 
 ```bash
 conda run -n ai-trader python -m pip install -e /root/code/qlib -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://mirrors.aliyun.com/pypi/simple
