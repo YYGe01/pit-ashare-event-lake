@@ -678,6 +678,10 @@ def test_qdc_console_instruments_supports_search_by_name(tmp_path: Path) -> None
     assert payload["instruments"][0]["instrument"] == "SH600000"
     assert payload["instruments"][0]["name"] == "浦发银行"
 
+    all_payload = QdcConsoleData(settings).instruments(limit=6000)
+    all_instruments = {item["instrument"] for item in all_payload["instruments"]}
+    assert {"SH600000", "SZ300750"}.issubset(all_instruments)
+
 
 def test_qdc_console_raw_instrument_preview_reads_raw_records(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)

@@ -152,7 +152,7 @@
               <div class="guide-card"><b>覆盖情况</b><span>看当前日期范围、源表行数、标的覆盖和原始源字段覆盖。</span></div>
               <div class="guide-card"><b>原始数据</b><span>按日期一行展示全部原始源字段，新闻和公告以数量汇总并可展开。</span></div>
               <div class="guide-card"><b>处理后因子</b><span>一张日频因子宽表，新闻和公告数量可点击展开明细。</span></div>
-              <div class="guide-card"><b>标的搜索</b><span>输入代码、简称或行业，选择下拉里的 instrument。</span></div>
+              <div class="guide-card"><b>标的搜索</b><span>输入代码、简称或行业，可从下拉连续添加多个 instrument。</span></div>
             </div>
           </section>
 
@@ -182,7 +182,7 @@
             <div class="panel-header">
               <div>
                 <h2>标的数据预览</h2>
-                <p class="panel-subtitle">先选择标的，再按日期查看原始数据或处理后的日频因子。</p>
+                <p class="panel-subtitle">先选择标的，再按日期查看原始数据或处理后的日频因子；因子预览支持多标的排开对比。</p>
               </div>
               <div class="filters">
                 <input
@@ -193,6 +193,7 @@
                   autocomplete="off"
                 />
                 <datalist id="instrument-options"></datalist>
+                <button id="add-preview-instrument" class="btn" type="button">添加标的</button>
                 <input id="preview-start" class="input" placeholder="开始日期 start" />
                 <input id="preview-end" class="input" placeholder="结束日期 end" />
                 <select id="preview-limit" class="input">
@@ -203,6 +204,7 @@
                 </select>
               </div>
             </div>
+            <div id="selected-instruments" class="selected-instruments"></div>
             <div id="preview-selected" class="panel-note"></div>
 
             <div id="raw-preview-mode">

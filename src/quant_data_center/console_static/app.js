@@ -25,6 +25,50 @@ const rawPreviewDatasets = [
 
 const CLIENT_TABLE_PAGE_SIZE = 5;
 
+const QLIB_EXPORT_FIELDS = {
+  open: "$open",
+  high: "$high",
+  low: "$low",
+  close: "$close",
+  volume: "$volume",
+  amount: "$amount",
+  vwap: "$vwap",
+  adj_factor: "$factor",
+  limit_up: "$limit_up",
+  limit_down: "$limit_down",
+  news_count: "$news_count",
+  news_sentiment_mean: "$news_sentiment_mean",
+  news_positive_count: "$news_positive_count",
+  news_negative_count: "$news_negative_count",
+  news_growth_count: "$news_growth_count",
+  news_risk_count: "$news_risk_count",
+  news_financing_count: "$news_financing_count",
+  news_weighted_sentiment_sum: "$news_weighted_sentiment_sum",
+  news_importance_sum: "$news_importance_sum",
+  news_contract_count: "$news_contract_count",
+  news_buyback_count: "$news_buyback_count",
+  news_shareholder_change_count: "$news_shareholder_change_count",
+  news_regulatory_count: "$news_regulatory_count",
+  news_litigation_count: "$news_litigation_count",
+  news_performance_count: "$news_performance_count",
+  announcement_count: "$announcement_count",
+  announcement_growth_count: "$announcement_growth_count",
+  announcement_risk_count: "$announcement_risk_count",
+  announcement_financing_count: "$announcement_financing_count",
+  announcement_operation_count: "$announcement_operation_count",
+  announcement_sentiment_mean: "$announcement_sentiment_mean",
+  announcement_positive_count: "$announcement_positive_count",
+  announcement_negative_count: "$announcement_negative_count",
+  announcement_weighted_sentiment_sum: "$announcement_weighted_sentiment_sum",
+  announcement_importance_sum: "$announcement_importance_sum",
+  announcement_contract_count: "$announcement_contract_count",
+  announcement_buyback_count: "$announcement_buyback_count",
+  announcement_shareholder_change_count: "$announcement_shareholder_change_count",
+  announcement_regulatory_count: "$announcement_regulatory_count",
+  announcement_litigation_count: "$announcement_litigation_count",
+  announcement_performance_count: "$announcement_performance_count",
+};
+
 const pageTitles = {
   dashboard: "总览",
   backfill: "回补任务",
@@ -439,6 +483,7 @@ const sourceColumnGroups = [
 
 const factorWideColumns = [
   "trade_date",
+  "instrument",
   ...factorColumnGroups.flatMap((group) => group.fields),
 ];
 
@@ -493,6 +538,7 @@ let activePreviewMode = "raw";
 let autoRefreshTimer = null;
 let instrumentSearchTimer = null;
 let instrumentOptions = [];
+let selectedPreviewInstruments = [];
 let factorPreviewPage = 1;
 let tableRenderSequence = 0;
 
@@ -613,7 +659,9 @@ function table(columns, rows, emptyText = "暂无数据", options = {}) {
   const shouldPaginate = options.paginate !== false && rows.length > pageSize;
   const tableId = `client-table-${++tableRenderSequence}`;
   const totalPages = Math.ceil(rows.length / pageSize);
-  const head = columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("");
+  const head = columns
+    .map((column) => `<th>${column.labelHtml || escapeHtml(column.label)}</th>`)
+    .join("");
   const body = rows
     .map((row, index) => {
       const cells = columns
@@ -770,9 +818,25 @@ function bindFilters() {
       250,
     );
   });
+  $("preview-instrument").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addPreviewInstrumentFromInput();
+    }
+  });
   $("preview-instrument").addEventListener("change", () => {
-    factorPreviewPage = 1;
-    loadActivePreview();
+    const added = addPreviewInstrumentFromInput({ onlyExact: true });
+    if (!added) {
+      factorPreviewPage = 1;
+      loadActivePreview();
+    }
+  });
+  $("add-preview-instrument").addEventListener("click", () => addPreviewInstrumentFromInput());
+  $("selected-instruments").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-instrument]");
+    if (button) {
+      removePreviewInstrument(button.dataset.removeInstrument);
+    }
   });
   ["preview-start", "preview-end", "preview-limit"].forEach((id) => {
     $(id).addEventListener("change", () => {
@@ -1268,7 +1332,7 @@ async function loadInstrumentOptions(query = "") {
   try {
     const params = new URLSearchParams();
     appendQuery(params, "query", query);
-    appendQuery(params, "limit", "80");
+    appendQuery(params, "limit", "6000");
     const payload = await api(`/api/instruments?${params.toString()}`);
     instrumentOptions = payload.instruments || [];
     const options = $("instrument-options");
@@ -1283,12 +1347,12 @@ async function loadInstrumentOptions(query = "") {
   }
 }
 
-function selectedPreviewInstrument() {
-  const value = $("preview-instrument").value.trim();
-  if (!value) {
+function resolvePreviewInstrument(value) {
+  const input = String(value || "").trim();
+  if (!input) {
     return "";
   }
-  const upper = value.toUpperCase();
+  const upper = input.toUpperCase();
   const exact = instrumentOptions.find((item) => String(item.instrument || "").toUpperCase() === upper);
   if (exact) {
     return exact.instrument;
@@ -1297,7 +1361,77 @@ function selectedPreviewInstrument() {
     const label = `${item.instrument || ""} ${item.symbol || ""} ${item.name || ""} ${item.industry || ""}`.toUpperCase();
     return label.includes(upper);
   });
-  return matches.length === 1 ? matches[0].instrument : value;
+  return matches.length === 1 ? matches[0].instrument : input.toUpperCase();
+}
+
+function exactPreviewInstrument(value) {
+  const input = String(value || "").trim().toUpperCase();
+  if (!input) {
+    return "";
+  }
+  const exact = instrumentOptions.find((item) => String(item.instrument || "").toUpperCase() === input);
+  return exact ? exact.instrument : "";
+}
+
+function selectedPreviewInstrument() {
+  if (selectedPreviewInstruments.length) {
+    return selectedPreviewInstruments[0];
+  }
+  const value = $("preview-instrument").value.trim();
+  if (!value) {
+    return "";
+  }
+  return resolvePreviewInstrument(value);
+}
+
+function selectedPreviewInstrumentList() {
+  if (selectedPreviewInstruments.length) {
+    return [...selectedPreviewInstruments];
+  }
+  const fallback = selectedPreviewInstrument();
+  return fallback ? [fallback] : [];
+}
+
+function addPreviewInstrumentFromInput(options = {}) {
+  const rawValue = $("preview-instrument").value.trim();
+  const instrument = options.onlyExact ? exactPreviewInstrument(rawValue) : resolvePreviewInstrument(rawValue);
+  if (!instrument) {
+    return false;
+  }
+  if (!selectedPreviewInstruments.includes(instrument)) {
+    selectedPreviewInstruments.push(instrument);
+  }
+  $("preview-instrument").value = "";
+  renderSelectedPreviewInstruments();
+  factorPreviewPage = 1;
+  loadActivePreview();
+  return true;
+}
+
+function removePreviewInstrument(instrument) {
+  selectedPreviewInstruments = selectedPreviewInstruments.filter((item) => item !== instrument);
+  renderSelectedPreviewInstruments();
+  factorPreviewPage = 1;
+  loadActivePreview();
+}
+
+function renderSelectedPreviewInstruments() {
+  const root = $("selected-instruments");
+  if (!root) {
+    return;
+  }
+  if (!selectedPreviewInstruments.length) {
+    root.innerHTML = '<span class="muted">可从下拉连续添加多个标的；原始数据预览只使用第一个标的。</span>';
+    return;
+  }
+  root.innerHTML = selectedPreviewInstruments
+    .map((instrument) => `
+      <span class="instrument-chip">
+        ${escapeHtml(instrument)}
+        <button type="button" aria-label="移除 ${escapeHtml(instrument)}" data-remove-instrument="${escapeHtml(instrument)}">×</button>
+      </span>
+    `)
+    .join("");
 }
 
 async function loadRawInstrumentPreview() {
@@ -1510,24 +1644,26 @@ async function loadFactorPreview() {
     if (activePreviewMode !== "factor") {
       return;
     }
-    const instrument = selectedPreviewInstrument();
-    if (!instrument) {
-      $("preview-selected").innerHTML = "<strong>先选择标的：</strong>可输入代码、名称或行业搜索。";
+    const instruments = selectedPreviewInstrumentList();
+    if (!instruments.length) {
+      $("preview-selected").innerHTML = "<strong>先选择标的：</strong>可输入代码、名称或行业搜索，并从下拉添加一个或多个标的。";
       $("factor-preview-explanation").innerHTML = "";
       $("factor-preview-summary").innerHTML = "";
       $("factor-preview-table").innerHTML = '<div class="empty">请输入标的后查看处理后因子。</div>';
       return;
     }
     setLoading("factor-preview-table");
-    const query = new URLSearchParams();
-    appendQuery(query, "instrument", instrument);
-    appendQuery(query, "start", $("preview-start").value.trim());
-    appendQuery(query, "end", $("preview-end").value.trim());
-    appendQuery(query, "limit", $("preview-limit").value);
     const pageSize = Number($("preview-limit").value || CLIENT_TABLE_PAGE_SIZE);
-    appendQuery(query, "offset", String(Math.max(factorPreviewPage - 1, 0) * pageSize));
-    const payload = await api(`/api/factor-preview?${query.toString()}`);
-    renderFactorPreview(payload);
+    const payloads = await Promise.all(instruments.map((instrument) => {
+      const query = new URLSearchParams();
+      appendQuery(query, "instrument", instrument);
+      appendQuery(query, "start", $("preview-start").value.trim());
+      appendQuery(query, "end", $("preview-end").value.trim());
+      appendQuery(query, "limit", $("preview-limit").value);
+      appendQuery(query, "offset", String(Math.max(factorPreviewPage - 1, 0) * pageSize));
+      return api(`/api/factor-preview?${query.toString()}`);
+    }));
+    renderFactorPreview(combineFactorPreviewPayloads(payloads));
   } catch (error) {
     showError(friendlyError(error));
   }
@@ -1536,16 +1672,61 @@ async function loadFactorPreview() {
 function renderFactorPreview(payload) {
   const summary = payload.summary || {};
   const range = [summary.min_trade_date, summary.max_trade_date].filter(Boolean).join(" - ");
-  $("preview-selected").innerHTML = `<strong>当前标的：</strong>${escapeHtml(payload.instrument)}。筛选日期 ${escapeHtml(payload.start || "-")} 到 ${escapeHtml(payload.end || "-")}。`;
-  $("factor-preview-explanation").innerHTML = "<strong>处理后因子：</strong>这里展示按交易日对齐后的研究字段，会进入 gold 宽表或 Qlib 外部因子。";
+  const instruments = payload.instruments || [payload.instrument].filter(Boolean);
+  $("preview-selected").innerHTML = `<strong>当前标的：</strong>${escapeHtml(instruments.join(", "))}。筛选日期 ${escapeHtml(payload.start || "-")} 到 ${escapeHtml(payload.end || "-")}。`;
+  $("factor-preview-explanation").innerHTML = "<strong>处理后因子：</strong>带 Qlib 标记的列会写入 qdc export-qlib 的 features；来源追踪、规则说明和停牌说明列只用于排查，不导出给 Qlib。";
   $("factor-preview-summary").innerHTML = [
-    coverageCard("当前页交易日", number(summary.trade_date_count || 0), range || "当前筛选无日频记录"),
+    coverageCard("当前页行数", number(summary.trade_date_count || 0), range || "当前筛选无日频记录"),
+    coverageCard("标的数量", number(instruments.length), instruments.length > 1 ? "按日期倒序、标的升序排开" : "单标的预览"),
     coverageCard("核心完整天数", number(summary.core_complete_days || 0), "同时有行情、复权因子和涨跌停"),
     coverageCard("新闻记录", number(summary.news_rows || 0), `日频新闻计数 ${number(summary.factor_news_count || 0)}`),
     coverageCard("公告记录", number(summary.announcement_rows || 0), `日频公告计数 ${number(summary.factor_announcement_count || 0)}`),
   ].join("");
   $("factor-preview-table").innerHTML = renderFactorWidePreview(payload);
   bindFactorPagination(payload);
+}
+
+function combineFactorPreviewPayloads(payloads) {
+  const rows = payloads
+    .flatMap((payload) => payload.timeline_rows || [])
+    .sort((left, right) => {
+      const dateOrder = String(right.trade_date || "").localeCompare(String(left.trade_date || ""));
+      if (dateOrder !== 0) {
+        return dateOrder;
+      }
+      return String(left.instrument || "").localeCompare(String(right.instrument || ""));
+    });
+  const newsRows = payloads.flatMap((payload) => payload.news_rows || []);
+  const announcementRows = payloads.flatMap((payload) => payload.announcement_rows || []);
+  const summaryRows = payloads.map((payload) => payload.summary || {});
+  const tradeDates = rows.map((row) => row.trade_date).filter(Boolean);
+  const instruments = payloads.map((payload) => payload.instrument).filter(Boolean).sort();
+  return {
+    status: "ok",
+    instrument: instruments[0] || "",
+    instruments,
+    start: payloads[0]?.start || "",
+    end: payloads[0]?.end || "",
+    limit: payloads[0]?.limit || 0,
+    offset: payloads[0]?.offset || 0,
+    page: factorPreviewPage,
+    page_size: payloads[0]?.page_size || payloads[0]?.limit || rows.length,
+    has_previous: payloads.some((payload) => payload.has_previous),
+    has_next: payloads.some((payload) => payload.has_next),
+    summary: {
+      trade_date_count: rows.length,
+      core_complete_days: summaryRows.reduce((sum, row) => sum + Number(row.core_complete_days || 0), 0),
+      news_rows: newsRows.length,
+      announcement_rows: announcementRows.length,
+      factor_news_count: summaryRows.reduce((sum, row) => sum + Number(row.factor_news_count || 0), 0),
+      factor_announcement_count: summaryRows.reduce((sum, row) => sum + Number(row.factor_announcement_count || 0), 0),
+      min_trade_date: tradeDates.length ? [...tradeDates].sort()[0] : null,
+      max_trade_date: tradeDates.length ? [...tradeDates].sort().at(-1) : null,
+    },
+    timeline_rows: rows,
+    news_rows: newsRows,
+    announcement_rows: announcementRows,
+  };
 }
 
 function renderFactorWidePreview(payload) {
@@ -1560,15 +1741,18 @@ function renderFactorWidePreview(payload) {
   const columns = factorWideColumns.map((key) => ({
     key,
     label: fieldLabel(key),
+    labelHtml: factorColumnLabel(key),
     format: key.endsWith("_source_id") ? sourceLabel : undefined,
     html: factorDocumentCellRenderer(key, newsByDate, announcementsByDate),
     maxLength: key === "halt_reason" ? 120 : 90,
   }));
+  const instruments = payload.instruments || [payload.instrument].filter(Boolean);
+  const pageSummary = instruments.length > 1
+    ? `第 ${number(page)} 页，每个标的每页 ${number(pageSize)} 个交易日；当前合并显示 ${number(rows.length)} 行。横向滚动可查看全部因子列。`
+    : `第 ${number(page)} 页，每页 ${number(pageSize)} 个交易日；当前显示第 ${number(rangeStart)}-${number(rangeEnd)} 条。横向滚动可查看全部因子列。`;
   return [
     renderFactorCategories(),
-    tableSummary(
-      `第 ${number(page)} 页，每页 ${number(pageSize)} 个交易日；当前显示第 ${number(rangeStart)}-${number(rangeEnd)} 条。横向滚动可查看全部因子列。`,
-    ),
+    tableSummary(pageSummary),
     renderFactorPagination(payload),
     table(columns, rows, "当前筛选条件下没有处理后因子。", { paginate: false }),
     renderFactorPagination(payload),
@@ -1588,14 +1772,22 @@ function factorDocumentCellRenderer(key, newsByDate, announcementsByDate) {
 
 function groupDocumentsByTradeDate(rows) {
   return rows.reduce((groups, row) => {
-    const tradeDate = String(row.trade_date || row.publish_date || "");
-    if (!tradeDate) {
+    const key = documentGroupKey(row);
+    if (!key) {
       return groups;
     }
-    groups[tradeDate] = groups[tradeDate] || [];
-    groups[tradeDate].push(row);
+    groups[key] = groups[key] || [];
+    groups[key].push(row);
     return groups;
   }, {});
+}
+
+function documentGroupKey(row) {
+  const tradeDate = String(row.trade_date || row.publish_date || "");
+  if (!tradeDate) {
+    return "";
+  }
+  return `${tradeDate}::${row.instrument || ""}`;
 }
 
 function documentCountCell(row, countKey, documentsByDate, idField) {
@@ -1603,7 +1795,7 @@ function documentCountCell(row, countKey, documentsByDate, idField) {
   if (!count) {
     return "0";
   }
-  const documents = documentsByDate[String(row.trade_date || "")] || [];
+  const documents = documentsByDate[documentGroupKey(row)] || [];
   if (!documents.length) {
     return escapeHtml(number(count));
   }
@@ -1637,7 +1829,7 @@ function renderDocumentDetail(document, idField) {
 function renderFactorCategories() {
   return `
     <div class="factor-category-grid">
-      ${factorColumnGroups.map(renderFactorCategory).join("")}
+      ${factorColumnGroups.map((group) => renderFactorCategory(group, { markQlib: true })).join("")}
     </div>
   `;
 }
@@ -1645,14 +1837,17 @@ function renderFactorCategories() {
 function renderSourceCategories() {
   return `
     <div class="factor-category-grid">
-      ${sourceColumnGroups.map(renderFactorCategory).join("")}
+      ${sourceColumnGroups.map((group) => renderFactorCategory(group)).join("")}
     </div>
   `;
 }
 
-function renderFactorCategory(group) {
+function renderFactorCategory(group, options = {}) {
   const fields = group.fields
-    .map((field) => `<span class="factor-chip">${escapeHtml(fieldLabel(field))}</span>`)
+    .map((field) => {
+      const badge = options.markQlib ? qlibBadge(field) : "";
+      return `<span class="factor-chip">${escapeHtml(fieldLabel(field))}${badge}</span>`;
+    })
     .join("");
   return `
     <section class="factor-category-card">
@@ -1661,6 +1856,15 @@ function renderFactorCategory(group) {
       <div class="factor-chip-list">${fields}</div>
     </section>
   `;
+}
+
+function qlibBadge(field) {
+  const feature = QLIB_EXPORT_FIELDS[field];
+  return feature ? `<span class="qlib-badge">Qlib ${escapeHtml(feature)}</span>` : "";
+}
+
+function factorColumnLabel(field) {
+  return `${escapeHtml(fieldLabel(field))}${qlibBadge(field)}`;
 }
 
 function renderFactorPagination(payload) {
@@ -1789,9 +1993,13 @@ async function refreshAll() {
     }
     const payload = await api("/api/overview");
     renderOverview(payload);
+    const instrumentQuery = $("preview-instrument").value.trim();
+    const instrumentOptionsPromise = instrumentOptions.length && !instrumentQuery
+      ? Promise.resolve()
+      : loadInstrumentOptions(instrumentQuery);
     await Promise.all([
       loadBackfillTasks(),
-      loadInstrumentOptions($("preview-instrument").value.trim()),
+      instrumentOptionsPromise,
       loadActivePreview(),
       loadQualityIssues(),
       loadQlibObjects(),
@@ -1811,7 +2019,8 @@ function friendlyError(error) {
 function init() {
   populateSelect("task-dataset", datasets, "全部数据集", datasetLabel);
   populateSelect("quality-dataset", datasets, "全部数据集", datasetLabel);
-  $("preview-instrument").value = "SH600000";
+  selectedPreviewInstruments = ["SH600000"];
+  renderSelectedPreviewInstruments();
   bindNav();
   bindPreviewMode();
   bindTablePagination();

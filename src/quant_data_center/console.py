@@ -30,6 +30,7 @@ STATIC_ROOT = Path(__file__).with_name("console_static")
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 500
 MAX_OFFSET = 10000
+MAX_INSTRUMENT_OPTION_LIMIT = 6000
 RAW_OBJECT_SCAN_LIMIT = 1000
 DOCUMENT_DETAIL_LOOKBACK_DAYS = 15
 DOCUMENT_DETAIL_LIMIT = 1000
@@ -266,7 +267,7 @@ class QdcConsoleData:
         query: str | None = None,
         limit: int | None = None,
     ) -> dict[str, Any]:
-        row_limit = _clamp_limit(limit, default=50)
+        row_limit = _clamp_instrument_limit(limit, default=500)
         if not self.settings.database_path.exists():
             rows = _configured_instrument_options(self.settings, query=query, limit=row_limit)
             return {"status": "ok", "instrument_count": len(rows), "instruments": rows}
@@ -2049,6 +2050,12 @@ def _clamp_limit(value: int | None, *, default: int = DEFAULT_LIMIT) -> int:
     if value is None or value <= 0:
         return default
     return min(value, MAX_LIMIT)
+
+
+def _clamp_instrument_limit(value: int | None, *, default: int = 500) -> int:
+    if value is None or value <= 0:
+        return default
+    return min(value, MAX_INSTRUMENT_OPTION_LIMIT)
 
 
 def _clamp_offset(value: int | None) -> int:
