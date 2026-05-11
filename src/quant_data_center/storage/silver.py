@@ -294,16 +294,29 @@ class SilverStore:
         )
 
     def upsert_daily_news_factor(self, records: list[dict[str, Any]]) -> int:
-        return self._upsert_count_factor(
+        return self._upsert_factor_table(
             table="daily_news_factor",
-            value_field="news_count",
+            factor_fields=[
+                "news_count",
+                "news_sentiment_mean",
+                "news_positive_count",
+                "news_negative_count",
+                "news_growth_count",
+                "news_risk_count",
+                "news_financing_count",
+            ],
             records=records,
         )
 
     def upsert_daily_announcement_factor(self, records: list[dict[str, Any]]) -> int:
-        return self._upsert_count_factor(
+        return self._upsert_factor_table(
             table="daily_announcement_factor",
-            value_field="announcement_count",
+            factor_fields=[
+                "announcement_count",
+                "announcement_risk_count",
+                "announcement_financing_count",
+                "announcement_operation_count",
+            ],
             records=records,
         )
 
@@ -346,11 +359,11 @@ class SilverStore:
             )
         return len(rows)
 
-    def _upsert_count_factor(
+    def _upsert_factor_table(
         self,
         *,
         table: str,
-        value_field: str,
+        factor_fields: list[str],
         records: list[dict[str, Any]],
     ) -> int:
         if not records:
@@ -360,12 +373,14 @@ class SilverStore:
             [
                 _required(record, "trade_date"),
                 _required(record, "instrument"),
-                float(_required(record, value_field)),
+                *[float(record.get(field, 0) or 0) for field in factor_fields],
                 _required(record, "source_id"),
                 record.get("updated_at") or now,
             ]
             for record in records
         ]
+        field_sql = ", ".join(factor_fields)
+        placeholders = ", ".join("?" for _ in range(len(factor_fields) + 4))
         with self.database.connect() as conn:
             conn.executemany(
                 f"""
@@ -377,9 +392,9 @@ class SilverStore:
             conn.executemany(
                 f"""
                 insert into qdc_silver.{table} (
-                  trade_date, instrument, {value_field}, source_id, updated_at
+                  trade_date, instrument, {field_sql}, source_id, updated_at
                 )
-                values (?, ?, ?, ?, ?)
+                values ({placeholders})
                 """,
                 rows,
             )

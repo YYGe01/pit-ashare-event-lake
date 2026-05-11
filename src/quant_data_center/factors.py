@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from quant_data_center.factor_engine import (
+    build_announcement_factor_rows,
+    build_news_factor_rows,
+)
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.database import QdcDatabase
 from quant_data_center.storage.silver import SilverStore
@@ -26,9 +30,8 @@ class FactorBuilder:
             raise ValueError(f"unsupported factor_set: {factor_set}; supported: {supported}")
         results = []
         if factor_set in {"all", "news_v1"}:
-            news_rows = self._count_documents(
-                table="news",
-                value_field="news_count",
+            news_rows = build_news_factor_rows(
+                self.database,
                 start_date=start_date,
                 end_date=end_date,
                 source_id="qdc_news_v1",
@@ -40,9 +43,8 @@ class FactorBuilder:
                 }
             )
         if factor_set in {"all", "announcement_v1"}:
-            announcement_rows = self._count_documents(
-                table="announcement",
-                value_field="announcement_count",
+            announcement_rows = build_announcement_factor_rows(
+                self.database,
                 start_date=start_date,
                 end_date=end_date,
                 source_id="qdc_announcement_v1",
@@ -64,33 +66,3 @@ class FactorBuilder:
             parameters={"results": results, "row_count": total_rows},
         )
         return {"status": "ok", "job_id": job_id, "row_count": total_rows, "results": results}
-
-    def _count_documents(
-        self,
-        *,
-        table: str,
-        value_field: str,
-        start_date: str,
-        end_date: str,
-        source_id: str,
-    ) -> list[dict[str, Any]]:
-        with self.database.connect() as conn:
-            rows = conn.execute(
-                f"""
-                select publish_date as trade_date, instrument, count(*)::double as value
-                from qdc_silver.{table}
-                where publish_date >= ? and publish_date <= ?
-                group by publish_date, instrument
-                order by publish_date, instrument
-                """,
-                [start_date, end_date],
-            ).fetchall()
-        return [
-            {
-                "trade_date": row[0].isoformat() if hasattr(row[0], "isoformat") else str(row[0]),
-                "instrument": str(row[1]),
-                value_field: float(row[2]),
-                "source_id": source_id,
-            }
-            for row in rows
-        ]

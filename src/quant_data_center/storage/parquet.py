@@ -92,8 +92,17 @@ class QdcParquetSync:
                   p.limit_rule,
                   coalesce(s.trade_status, 'normal') as trade_status,
                   s.halt_reason,
-                  n.news_count,
-                  af.announcement_count,
+                  coalesce(n.news_count, 0) as news_count,
+                  coalesce(n.news_sentiment_mean, 0) as news_sentiment_mean,
+                  coalesce(n.news_positive_count, 0) as news_positive_count,
+                  coalesce(n.news_negative_count, 0) as news_negative_count,
+                  coalesce(n.news_growth_count, 0) as news_growth_count,
+                  coalesce(n.news_risk_count, 0) as news_risk_count,
+                  coalesce(n.news_financing_count, 0) as news_financing_count,
+                  coalesce(af.announcement_count, 0) as announcement_count,
+                  coalesce(af.announcement_risk_count, 0) as announcement_risk_count,
+                  coalesce(af.announcement_financing_count, 0) as announcement_financing_count,
+                  coalesce(af.announcement_operation_count, 0) as announcement_operation_count,
                   b.source_id as daily_bar_source_id
                 from qdc_silver.daily_bar b
                 left join qdc_silver.adj_factor a

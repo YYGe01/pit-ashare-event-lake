@@ -25,7 +25,16 @@ QLIB_FIELDS = {
     "limit_up": "limit_up",
     "limit_down": "limit_down",
     "news_count": "news_count",
+    "news_sentiment_mean": "news_sentiment_mean",
+    "news_positive_count": "news_positive_count",
+    "news_negative_count": "news_negative_count",
+    "news_growth_count": "news_growth_count",
+    "news_risk_count": "news_risk_count",
+    "news_financing_count": "news_financing_count",
     "announcement_count": "announcement_count",
+    "announcement_risk_count": "announcement_risk_count",
+    "announcement_financing_count": "announcement_financing_count",
+    "announcement_operation_count": "announcement_operation_count",
 }
 
 
@@ -152,8 +161,17 @@ class QlibExporter:
                   a.adj_factor,
                   p.limit_up,
                   p.limit_down,
-                  n.news_count,
-                  af.announcement_count
+                  coalesce(n.news_count, 0) as news_count,
+                  coalesce(n.news_sentiment_mean, 0) as news_sentiment_mean,
+                  coalesce(n.news_positive_count, 0) as news_positive_count,
+                  coalesce(n.news_negative_count, 0) as news_negative_count,
+                  coalesce(n.news_growth_count, 0) as news_growth_count,
+                  coalesce(n.news_risk_count, 0) as news_risk_count,
+                  coalesce(n.news_financing_count, 0) as news_financing_count,
+                  coalesce(af.announcement_count, 0) as announcement_count,
+                  coalesce(af.announcement_risk_count, 0) as announcement_risk_count,
+                  coalesce(af.announcement_financing_count, 0) as announcement_financing_count,
+                  coalesce(af.announcement_operation_count, 0) as announcement_operation_count
                 from qdc_silver.daily_bar b
                 left join qdc_silver.adj_factor a
                   on b.trade_date = a.trade_date and b.instrument = a.instrument

@@ -310,6 +310,8 @@ volume
 amount
 factor
 news_count_1d
+news_sentiment_mean
+news_risk_count
 sentiment_mean_3d
 announcement_penalty_60d
 ```
@@ -380,10 +382,10 @@ qdc daily
 qdc_silver.stock_basic / universe_constituent / trade_calendar / daily_bar / adj_factor / price_limit / trade_status / announcement / news / daily_news_factor / daily_announcement_factor schema
 SilverStore upsert writer
 AkShare 阶段 2 回补写 raw JSON、bronze Parquet，并登记 qdc_meta.source_object
-qdc build-factors 生成 news_v1 / announcement_v1 count 因子
+qdc build-factors 生成 news_v1 / announcement_v1 count、标题情绪和事件规则因子
 qdc sync-parquet 同步 silver/gold Parquet
 qdc quality 基础质量检查
-qdc export-qlib 基础 day provider 导出
+qdc export-qlib 基础 day provider 导出，包含 QDC 外部日频因子
 qdc verify-qlib 使用本地 Qlib 读取导出的 provider
 ```
 
@@ -544,6 +546,18 @@ qdc build-factors --factor-set news_v1 --start 2023-01-01 --end 2026-05-11
 qdc build-factors --factor-set announcement_v1 --start 2023-01-01 --end 2026-05-11
 ```
 
+当前 `factor_engine` 已提供标题级规则因子：
+
+```text
+news_count
+news_sentiment_mean
+news_positive_count / news_negative_count
+news_growth_count / news_risk_count / news_financing_count
+announcement_risk_count / announcement_financing_count / announcement_operation_count
+```
+
+新闻和公告发布日期会优先按 `qdc_silver.trade_calendar` 对齐到下一个开市交易日；缺少交易日历时回退为原始 `publish_date`。
+
 ### 阶段 6：外部因子进入 Qlib
 
 目标：
@@ -553,6 +567,15 @@ qdc build-factors --factor-set announcement_v1 --start 2023-01-01 --end 2026-05-
 Qlib 自定义 handler 拼接 Alpha158 + 外部因子
 做消融对比
 ```
+
+当前已提供当前仓库内的 Qlib handler：
+
+```text
+src/quant_data_center/qlib_ext/handlers.py
+config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
+```
+
+`QdcAlpha158WithExternal` 继承 Qlib `Alpha158`，在特征配置里追加 QDC 导出的外部日频因子及 3/5 日均值表达式；不修改 `/root/code/qlib` 源码。
 
 对照组：
 
@@ -579,10 +602,11 @@ LightGBM Alpha158 + news + announcement
 已实现：refresh-universe 最新成分快照；plan-backfill 优先使用快照 symbol
 已实现：qdc daily 每日增量编排入口
 已实现：AkShare 回补 raw JSON、bronze Parquet 和 source_object 账本登记
-已实现：qdc build-factors 基础新闻/公告 count 因子
+已实现：qdc build-factors 基础新闻/公告 count、标题情绪、事件规则因子和交易日对齐
 已实现：silver/gold Parquet 派生同步
 已实现：qdc quality 基础质量命令
-已实现：qdc export-qlib 基础 day provider 导出，包含行情、vwap、复权、涨跌停、新闻/公告 count 因子和可选 Qlib 命名 market 文件
+已实现：qdc export-qlib 基础 day provider 导出，包含行情、vwap、复权、涨跌停、新闻/公告 count、标题情绪/事件因子和可选 Qlib 命名 market 文件
+已实现：当前仓库内 `QdcAlpha158WithExternal` handler，可在 Qlib qrun 中拼接 Alpha158 与 QDC 外部因子
 已实现：qdc verify-qlib 通过本地 Qlib 校验 provider，可发现缺失 instrument / 空 feature，并输出严格 JSON
 已验证：Qlib Alpha158 handler 可读取 QDC provider 并生成特征/label
 已验证：QDC 专用 LightGBM Alpha158 qrun smoke 可完成训练和信号记录

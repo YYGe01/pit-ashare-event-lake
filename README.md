@@ -31,6 +31,7 @@ qdc quality --dataset daily_bar --start 2026-05-01 --end 2026-05-03
 qdc export-qlib --start 2026-05-01 --end 2026-05-03 --provider-uri data/quant_data_center/qlib/cn_data --market-name qdc_smoke
 qdc verify-qlib --start 2026-05-01 --end 2026-05-03 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
 qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml
+qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 ```
 
 `run-backfill --control-only` 只验证任务状态流和水位表，不采集真实数据。
@@ -48,7 +49,7 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml
 
 `daily_bar`、`adj_factor`、`price_limit`、`news` 可用 `--universe` 展开 symbol，也可以显式传入 `--symbols` 覆盖。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
 
-当前回补链路会写入 raw JSON、bronze Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 可生成新闻/公告日频 count 因子，`qdc sync-parquet` 可同步 silver/gold Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day provider 目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的 provider 做 data-layer smoke。
+当前回补链路会写入 raw JSON、bronze Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 可生成新闻/公告日频 count、标题级情绪和事件规则因子，`qdc sync-parquet` 可同步 silver/gold Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day provider 目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的 provider 做 data-layer smoke。
 
 `qdc` 默认读取仓库内 `config/quant_data_center.yaml`；需要从其他目录运行或切换配置时，可设置 `QDC_CONFIG` 或传入 `--config`。
 
@@ -73,7 +74,7 @@ data/quant_data_center/             本地运行数据，已 gitignored
 conda run -n ai-trader python -m pip install -e /root/code/qlib -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://mirrors.aliyun.com/pypi/simple
 ```
 
-当前已用本地 `/root/code/qlib` 验证 `D.calendar`、`D.list_instruments` 和 `D.features` 能读取 `qdc export-qlib` 产物。导出字段包含 Alpha158 默认需要的 `$vwap`，`--market-name` 可写出 Qlib 命名 market 文件。`config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml` 可用当前 provider 跑通 LightGBM Alpha158 qrun smoke；正式评估仍需要完整 universe 和稳定 train/valid/test 切分。
+当前已用本地 `/root/code/qlib` 验证 `D.calendar`、`D.list_instruments` 和 `D.features` 能读取 `qdc export-qlib` 产物。导出字段包含 Alpha158 默认需要的 `$vwap`，并包含 `$news_count`、`$news_sentiment_mean`、`$news_risk_count`、`$announcement_financing_count` 等 QDC 外部日频因子；`--market-name` 可写出 Qlib 命名 market 文件。`config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml` 可用当前 provider 跑通 LightGBM Alpha158 qrun smoke；`config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml` 使用当前仓库的 `QdcAlpha158WithExternal` handler 追加 QDC 外部因子。正式评估仍需要完整 universe 和稳定 train/valid/test 切分。
 
 ## 验证
 

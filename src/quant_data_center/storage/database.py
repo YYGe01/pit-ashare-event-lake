@@ -14,6 +14,7 @@ from quant_data_center.storage.schema import (
     CONTROL_SCHEMA,
     CONTROL_SCHEMA_SQL,
     CONTROL_TABLES,
+    SILVER_SCHEMA_MIGRATIONS,
     SILVER_SCHEMA,
     SILVER_SCHEMA_SQL,
     SILVER_TABLES,
@@ -36,6 +37,25 @@ class QdcDatabase:
         with self.connect() as conn:
             conn.execute(CONTROL_SCHEMA_SQL)
             conn.execute(SILVER_SCHEMA_SQL)
+            self._migrate_silver_schema(conn)
+
+    def _migrate_silver_schema(self, conn: duckdb.DuckDBPyConnection) -> None:
+        for table, columns in SILVER_SCHEMA_MIGRATIONS.items():
+            for column, definition in columns.items():
+                exists = conn.execute(
+                    """
+                    select 1
+                    from information_schema.columns
+                    where table_schema = ?
+                      and table_name = ?
+                      and column_name = ?
+                    """,
+                    [SILVER_SCHEMA, table, column],
+                ).fetchone()
+                if not exists:
+                    conn.execute(
+                        f"alter table {SILVER_SCHEMA}.{table} add column {column} {definition}"
+                    )
 
     def table_counts(self) -> dict[str, int]:
         with self.connect() as conn:

@@ -320,19 +320,33 @@ def _check_document_table(frame: pd.DataFrame) -> list[dict[str, Any]]:
 def _check_count_factor(frame: pd.DataFrame) -> list[dict[str, Any]]:
     issues = []
     dataset = "daily_news_factor" if "news_count" in frame.columns else "daily_announcement_factor"
-    value_field = "news_count" if "news_count" in frame.columns else "announcement_count"
+    count_fields = [column for column in frame.columns if column.endswith("_count")]
+    sentiment_fields = [column for column in frame.columns if column.endswith("_sentiment_mean")]
     for row in frame.to_dict("records"):
-        if _is_null(row.get(value_field)) or float(row[value_field]) < 0:
-            issues.append(
-                _issue(
-                    dataset=dataset,
-                    source_id=row.get("source_id"),
-                    issue_type="invalid_count_factor",
-                    entity_key=f"{row.get('trade_date')}|{row.get('instrument')}",
-                    message=f"{dataset}.{value_field} must not be negative",
-                    observed=row,
+        for value_field in count_fields:
+            if _is_null(row.get(value_field)) or float(row[value_field]) < 0:
+                issues.append(
+                    _issue(
+                        dataset=dataset,
+                        source_id=row.get("source_id"),
+                        issue_type="invalid_count_factor",
+                        entity_key=f"{row.get('trade_date')}|{row.get('instrument')}",
+                        message=f"{dataset}.{value_field} must not be negative",
+                        observed=row,
+                    )
                 )
-            )
+        for value_field in sentiment_fields:
+            if _is_null(row.get(value_field)) or not -1 <= float(row[value_field]) <= 1:
+                issues.append(
+                    _issue(
+                        dataset=dataset,
+                        source_id=row.get("source_id"),
+                        issue_type="invalid_sentiment_factor",
+                        entity_key=f"{row.get('trade_date')}|{row.get('instrument')}",
+                        message=f"{dataset}.{value_field} must be between -1 and 1",
+                        observed=row,
+                    )
+                )
     return issues
 
 

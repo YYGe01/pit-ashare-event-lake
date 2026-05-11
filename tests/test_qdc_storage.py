@@ -867,6 +867,129 @@ def test_qdc_run_backfill_announcement_news_and_build_factors_with_fake_akshare(
     assert row == (1.0, 1.0)
 
 
+def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    silver = SilverStore(settings)
+    silver.upsert_trade_calendar(
+        [
+            {
+                "calendar_id": "SSE",
+                "trade_date": "2026-05-08",
+                "is_open": True,
+                "source_id": "unit_test",
+            },
+            {
+                "calendar_id": "SSE",
+                "trade_date": "2026-05-10",
+                "is_open": False,
+                "source_id": "unit_test",
+            },
+            {
+                "calendar_id": "SSE",
+                "trade_date": "2026-05-11",
+                "is_open": True,
+                "source_id": "unit_test",
+            },
+        ]
+    )
+    silver.upsert_news(
+        [
+            {
+                "news_id": "n1",
+                "publish_date": "2026-05-10",
+                "instrument": "SH600000",
+                "title": "公司签订重大订单增长",
+                "source_id": "unit_test",
+            },
+            {
+                "news_id": "n2",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "公司被立案调查存在退市风险",
+                "source_id": "unit_test",
+            },
+        ]
+    )
+    silver.upsert_announcements(
+        [
+            {
+                "announcement_id": "a1",
+                "publish_date": "2026-05-10",
+                "instrument": "SH600000",
+                "title": "向特定对象发行股票募集资金",
+                "source_id": "unit_test",
+            },
+            {
+                "announcement_id": "a2",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "年度权益分派公告",
+                "source_id": "unit_test",
+            },
+        ]
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "build-factors",
+                "--factor-set",
+                "all",
+                "--start",
+                "2026-05-11",
+                "--end",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    with database.connect() as conn:
+        news_row = conn.execute(
+            """
+            select
+              trade_date,
+              news_count,
+              news_sentiment_mean,
+              news_positive_count,
+              news_negative_count,
+              news_growth_count,
+              news_risk_count,
+              news_financing_count
+            from qdc_silver.daily_news_factor
+            where instrument = 'SH600000'
+            """
+        ).fetchone()
+        announcement_row = conn.execute(
+            """
+            select
+              announcement_count,
+              announcement_risk_count,
+              announcement_financing_count,
+              announcement_operation_count
+            from qdc_silver.daily_announcement_factor
+            where instrument = 'SH600000'
+            """
+        ).fetchone()
+
+    assert news_row == (
+        datetime(2026, 5, 11).date(),
+        2.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.0,
+    )
+    assert announcement_row == (2.0, 0.0, 1.0, 1.0)
+
+
 def test_qdc_news_provider_error_is_recorded_without_failing_task(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1195,6 +1318,36 @@ def test_qdc_quality_records_issues_for_invalid_daily_bar(tmp_path: Path) -> Non
 
 def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path) -> None:
     config_path, database = _seed_research_rows(tmp_path)
+    silver = SilverStore(QdcSettings.from_yaml(config_path))
+    silver.upsert_daily_news_factor(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SH600000",
+                "news_count": 2,
+                "news_sentiment_mean": 0.5,
+                "news_positive_count": 2,
+                "news_negative_count": 0,
+                "news_growth_count": 1,
+                "news_risk_count": 0,
+                "news_financing_count": 0,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    silver.upsert_daily_announcement_factor(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SH600000",
+                "announcement_count": 1,
+                "announcement_risk_count": 0,
+                "announcement_financing_count": 1,
+                "announcement_operation_count": 0,
+                "source_id": "unit_test",
+            }
+        ]
+    )
     provider_uri = tmp_path / "qlib_export"
 
     assert (
@@ -1229,8 +1382,12 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path) -> None:
     assert struct.unpack("<fff", close_bin) == (0.0, 10.199999809265137, 10.600000381469727)
     vwap_bin = (provider_uri / "features" / "sh600000" / "vwap.day.bin").read_bytes()
     assert struct.unpack("<fff", vwap_bin) == (0.0, 10.199999809265137, 10.600000381469727)
+    sentiment_bin = (
+        provider_uri / "features" / "sh600000" / "news_sentiment_mean.day.bin"
+    ).read_bytes()
+    assert struct.unpack("<fff", sentiment_bin) == (0.0, 0.5, 0.0)
     qlib_objects = database.list_source_objects(dataset="qlib_export", layer="qlib")
-    assert len(qlib_objects) == 15
+    assert len(qlib_objects) == 24
 
 
 def test_qdc_verify_qlib_reports_missing_instrument_without_db_side_effect(

@@ -198,6 +198,12 @@ create table if not exists qdc_silver.daily_news_factor (
   trade_date date not null,
   instrument varchar not null,
   news_count double not null,
+  news_sentiment_mean double not null,
+  news_positive_count double not null,
+  news_negative_count double not null,
+  news_growth_count double not null,
+  news_risk_count double not null,
+  news_financing_count double not null,
   source_id varchar not null,
   updated_at timestamp not null,
   primary key (trade_date, instrument)
@@ -207,6 +213,9 @@ create table if not exists qdc_silver.daily_announcement_factor (
   trade_date date not null,
   instrument varchar not null,
   announcement_count double not null,
+  announcement_risk_count double not null,
+  announcement_financing_count double not null,
+  announcement_operation_count double not null,
   source_id varchar not null,
   updated_at timestamp not null,
   primary key (trade_date, instrument)
@@ -226,3 +235,19 @@ SILVER_TABLES = [
     "daily_news_factor",
     "daily_announcement_factor",
 ]
+
+SILVER_SCHEMA_MIGRATIONS = {
+    "daily_news_factor": {
+        "news_sentiment_mean": "double default 0",
+        "news_positive_count": "double default 0",
+        "news_negative_count": "double default 0",
+        "news_growth_count": "double default 0",
+        "news_risk_count": "double default 0",
+        "news_financing_count": "double default 0",
+    },
+    "daily_announcement_factor": {
+        "announcement_risk_count": "double default 0",
+        "announcement_financing_count": "double default 0",
+        "announcement_operation_count": "double default 0",
+    },
+}
