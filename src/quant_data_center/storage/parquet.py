@@ -99,10 +99,32 @@ class QdcParquetSync:
                   coalesce(n.news_growth_count, 0) as news_growth_count,
                   coalesce(n.news_risk_count, 0) as news_risk_count,
                   coalesce(n.news_financing_count, 0) as news_financing_count,
+                  coalesce(n.news_weighted_sentiment_sum, 0) as news_weighted_sentiment_sum,
+                  coalesce(n.news_importance_sum, 0) as news_importance_sum,
+                  coalesce(n.news_contract_count, 0) as news_contract_count,
+                  coalesce(n.news_buyback_count, 0) as news_buyback_count,
+                  coalesce(n.news_shareholder_change_count, 0) as news_shareholder_change_count,
+                  coalesce(n.news_regulatory_count, 0) as news_regulatory_count,
+                  coalesce(n.news_litigation_count, 0) as news_litigation_count,
+                  coalesce(n.news_performance_count, 0) as news_performance_count,
                   coalesce(af.announcement_count, 0) as announcement_count,
+                  coalesce(af.announcement_growth_count, 0) as announcement_growth_count,
                   coalesce(af.announcement_risk_count, 0) as announcement_risk_count,
                   coalesce(af.announcement_financing_count, 0) as announcement_financing_count,
                   coalesce(af.announcement_operation_count, 0) as announcement_operation_count,
+                  coalesce(af.announcement_sentiment_mean, 0) as announcement_sentiment_mean,
+                  coalesce(af.announcement_positive_count, 0) as announcement_positive_count,
+                  coalesce(af.announcement_negative_count, 0) as announcement_negative_count,
+                  coalesce(af.announcement_weighted_sentiment_sum, 0)
+                    as announcement_weighted_sentiment_sum,
+                  coalesce(af.announcement_importance_sum, 0) as announcement_importance_sum,
+                  coalesce(af.announcement_contract_count, 0) as announcement_contract_count,
+                  coalesce(af.announcement_buyback_count, 0) as announcement_buyback_count,
+                  coalesce(af.announcement_shareholder_change_count, 0)
+                    as announcement_shareholder_change_count,
+                  coalesce(af.announcement_regulatory_count, 0) as announcement_regulatory_count,
+                  coalesce(af.announcement_litigation_count, 0) as announcement_litigation_count,
+                  coalesce(af.announcement_performance_count, 0) as announcement_performance_count,
                   b.source_id as daily_bar_source_id
                 from qdc_silver.daily_bar b
                 left join qdc_silver.adj_factor a

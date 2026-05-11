@@ -28,6 +28,7 @@ qdc plan-backfill --dataset trade_calendar --source-id akshare --start 2026-05-0
 qdc run-backfill --dataset trade_calendar --limit-tasks 1
 qdc daily --date 2026-05-11 --universe csi300 --control-only
 qdc build-factors --factor-set all --start 2026-05-01 --end 2026-05-03
+qdc classify-text-event --provider rule --document-type announcement --title "公司收到交易所监管问询函"
 qdc sync-parquet --layer all
 qdc quality --dataset daily_bar --start 2026-05-01 --end 2026-05-03
 qdc export-qlib --start 2026-05-01 --end 2026-05-03 --provider-uri data/quant_data_center/qlib/cn_data --market-name qdc_smoke
@@ -52,7 +53,14 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 
 `daily_bar`、`adj_factor`、`price_limit`、`news` 可用 `--universe` 展开 symbol，也可以显式传入 `--symbols` 覆盖。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
 
-当前回补链路会写入 raw JSON、bronze Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 可生成新闻/公告日频 count、标题级情绪和事件规则因子，`qdc sync-parquet` 可同步 silver/gold Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day provider 目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的 provider 做 data-layer smoke。
+当前回补链路会写入 raw JSON、bronze Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 默认用规则引擎生成新闻/公告日频 count、标题级情绪和事件因子，覆盖增长、风险、融资、合同、回购、股东增减持、监管、诉讼、业绩、质押和担保等事件；`qdc sync-parquet` 可同步 silver/gold Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day provider 目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的 provider 做 data-layer smoke。
+
+LLM 抽取接口已预留为单条 smoke 命令，不参与 `build-factors` 全量构建。`environment.yml` 已包含 `litellm`；如果是旧环境，可先运行 `pip install -e .[llm]`。后续需要验证 API 时只在运行时提供环境变量，不要写入配置或文档：
+
+```bash
+DEEPSEEK_API_KEY=<secret> LITELLM_MODEL=deepseek/deepseek-v4-flash \
+  qdc classify-text-event --provider llm --document-type announcement --title "公司拟回购股份"
+```
 
 长时间回补时，`qdc recover-running` 可把陈旧的 `running` 任务标记为 `failed` 以便后续重试；`qdc split-backfill` 可把一个大 symbol 批次任务拆成更小的 pending 子任务。
 

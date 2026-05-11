@@ -17,7 +17,7 @@ SUPPORTED_FACTOR_SETS = {"all", "news_v1", "announcement_v1"}
 
 
 class FactorBuilder:
-    """Build simple daily count factors from normalized silver tables."""
+    """Build deterministic rule-driven daily factors from normalized silver tables."""
 
     def __init__(self, settings: QdcSettings) -> None:
         self.settings = settings

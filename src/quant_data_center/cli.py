@@ -14,6 +14,7 @@ from typing import Any
 from quant_data_center.collectors.akshare import AkshareSilverCollector
 from quant_data_center.console import run_console
 from quant_data_center.exports.qlib import QlibExporter, QlibProviderVerifier
+from quant_data_center.factor_engine import build_text_event_classifier
 from quant_data_center.factors import FactorBuilder
 from quant_data_center.jobs.backfill import parse_date, parse_symbols, plan_backfill_tasks
 from quant_data_center.quality import QualityChecker
@@ -209,6 +210,17 @@ def cmd_build_factors(args: argparse.Namespace) -> int:
         end_date=args.end,
     )
     _print_json(result)
+    return 0
+
+
+def cmd_classify_text_event(args: argparse.Namespace) -> int:
+    classifier = build_text_event_classifier(args.provider)
+    result = classifier.classify(
+        title=args.title,
+        body=args.body,
+        document_type=args.document_type,
+    )
+    _print_json({"status": "ok", "classification": result.to_dict()})
     return 0
 
 
@@ -713,6 +725,16 @@ def build_parser() -> argparse.ArgumentParser:
     factor_parser.add_argument("--start", required=True, help="YYYY-MM-DD")
     factor_parser.add_argument("--end", required=True, help="YYYY-MM-DD")
     factor_parser.set_defaults(func=cmd_build_factors)
+
+    classify_parser = subparsers.add_parser(
+        "classify-text-event",
+        help="Classify one news or announcement title with rule or optional LLM provider",
+    )
+    classify_parser.add_argument("--provider", choices=["rule", "llm"], default="rule")
+    classify_parser.add_argument("--document-type", choices=["news", "announcement"], default="news")
+    classify_parser.add_argument("--title", required=True)
+    classify_parser.add_argument("--body")
+    classify_parser.set_defaults(func=cmd_classify_text_event)
 
     daily_parser = subparsers.add_parser(
         "daily",

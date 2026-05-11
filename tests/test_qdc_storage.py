@@ -1136,7 +1136,10 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
               news_negative_count,
               news_growth_count,
               news_risk_count,
-              news_financing_count
+              news_financing_count,
+              news_contract_count,
+              news_regulatory_count,
+              news_performance_count
             from qdc_silver.daily_news_factor
             where instrument = 'SH600000'
             """
@@ -1145,25 +1148,124 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
             """
             select
               announcement_count,
+              announcement_growth_count,
               announcement_risk_count,
               announcement_financing_count,
-              announcement_operation_count
+              announcement_operation_count,
+              announcement_sentiment_mean
             from qdc_silver.daily_announcement_factor
             where instrument = 'SH600000'
             """
         ).fetchone()
 
-    assert news_row == (
+    assert (
+        news_row[0],
+        news_row[1],
+        round(float(news_row[2]), 3),
+        news_row[3],
+        news_row[4],
+        news_row[5],
+        news_row[6],
+        news_row[7],
+        news_row[8],
+        news_row[9],
+        news_row[10],
+    ) == (
         datetime(2026, 5, 11).date(),
         2.0,
+        0.007,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
         0.0,
-        1.0,
-        1.0,
         1.0,
         1.0,
         0.0,
     )
-    assert announcement_row == (2.0, 0.0, 1.0, 1.0)
+    assert (
+        announcement_row[0],
+        announcement_row[1],
+        announcement_row[2],
+        announcement_row[3],
+        announcement_row[4],
+        round(float(announcement_row[5]), 2),
+    ) == (2.0, 0.0, 0.0, 1.0, 1.0, 0.15)
+
+
+def test_qdc_classify_text_event_rule_and_mock_litellm(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "classify-text-event",
+                "--provider",
+                "rule",
+                "--document-type",
+                "announcement",
+                "--title",
+                "公司收到交易所监管问询函",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    classification = payload["classification"]
+    assert classification["provider"] == "rule"
+    assert "regulatory" in classification["event_types"]
+    assert classification["sentiment_score"] < 0
+
+    def completion(**kwargs):
+        assert kwargs["model"] == "deepseek/unit-test"
+        assert kwargs["temperature"] == 0
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=json.dumps(
+                            {
+                                "event_types": ["buyback"],
+                                "sentiment_score": 0.7,
+                                "importance_score": 0.8,
+                                "matched_keywords": ["回购"],
+                                "evidence": "公司拟回购股份",
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                )
+            ]
+        )
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "unit-test")
+    monkeypatch.setenv("LITELLM_MODEL", "deepseek/unit-test")
+    monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(completion=completion))
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "classify-text-event",
+                "--provider",
+                "llm",
+                "--document-type",
+                "announcement",
+                "--title",
+                "公司拟回购股份",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["classification"]["provider"] == "llm"
+    assert payload["classification"]["model"] == "deepseek/unit-test"
+    assert payload["classification"]["event_types"] == ["buyback"]
 
 
 def test_qdc_news_provider_error_is_recorded_without_failing_task(
@@ -1545,7 +1647,7 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> No
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["object_id_count"] == 24
+    assert payload["object_id_count"] == 44
     assert len(payload["object_id_sample"]) == 5
     assert "object_ids" not in payload
 
@@ -1567,7 +1669,7 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> No
     ).read_bytes()
     assert struct.unpack("<fff", sentiment_bin) == (0.0, 0.5, 0.0)
     qlib_objects = database.list_source_objects(dataset="qlib_export", layer="qlib")
-    assert len(qlib_objects) == 24
+    assert len(qlib_objects) == 44
 
 
 def test_qdc_verify_qlib_reports_missing_instrument_without_db_side_effect(

@@ -6,90 +6,25 @@ from collections import defaultdict
 from typing import Any
 
 from quant_data_center.factor_engine.calendar_align import TradeDayAligner, date_minus_days
+from quant_data_center.factor_engine.text_events import (
+    BUYBACK_EVENTS,
+    CONTRACT_EVENTS,
+    FINANCING_EVENTS,
+    GROWTH_EVENTS,
+    LITIGATION_EVENTS,
+    OPERATION_EVENTS,
+    PERFORMANCE_EVENTS,
+    REGULATORY_EVENTS,
+    RISK_EVENTS,
+    SHAREHOLDER_CHANGE_EVENTS,
+    RuleBasedTextEventClassifier,
+    TextEventResult,
+    event_matches_any,
+)
 from quant_data_center.storage.database import QdcDatabase
 
 DOCUMENT_TABLES = {"announcement", "news"}
 DOCUMENT_LOOKBACK_DAYS = 15
-
-POSITIVE_KEYWORDS = (
-    "增长",
-    "预增",
-    "上升",
-    "提升",
-    "中标",
-    "签订",
-    "突破",
-    "创新高",
-    "增持",
-    "回购",
-    "盈利",
-    "扭亏",
-    "订单",
-    "获批",
-)
-NEGATIVE_KEYWORDS = (
-    "亏损",
-    "预亏",
-    "下滑",
-    "下降",
-    "减持",
-    "处罚",
-    "立案",
-    "调查",
-    "诉讼",
-    "仲裁",
-    "违规",
-    "退市",
-    "ST",
-    "风险",
-    "违约",
-    "冻结",
-    "质押",
-)
-GROWTH_EVENT_KEYWORDS = (
-    "增长",
-    "预增",
-    "中标",
-    "签订",
-    "订单",
-    "获批",
-    "扩产",
-    "投产",
-    "突破",
-)
-RISK_EVENT_KEYWORDS = (
-    "风险",
-    "处罚",
-    "立案",
-    "调查",
-    "诉讼",
-    "仲裁",
-    "违规",
-    "退市",
-    "亏损",
-    "违约",
-    "冻结",
-    "质押",
-)
-FINANCING_EVENT_KEYWORDS = (
-    "定增",
-    "增发",
-    "配股",
-    "可转债",
-    "融资",
-    "募集资金",
-    "发行股票",
-)
-OPERATION_EVENT_KEYWORDS = (
-    "权益分派",
-    "分红",
-    "回购",
-    "股权激励",
-    "并购",
-    "重组",
-    "重大合同",
-    "中标",
-)
 
 NEWS_FACTOR_FIELDS = (
     "news_count",
@@ -99,12 +34,32 @@ NEWS_FACTOR_FIELDS = (
     "news_growth_count",
     "news_risk_count",
     "news_financing_count",
+    "news_weighted_sentiment_sum",
+    "news_importance_sum",
+    "news_contract_count",
+    "news_buyback_count",
+    "news_shareholder_change_count",
+    "news_regulatory_count",
+    "news_litigation_count",
+    "news_performance_count",
 )
 ANNOUNCEMENT_FACTOR_FIELDS = (
     "announcement_count",
+    "announcement_growth_count",
     "announcement_risk_count",
     "announcement_financing_count",
     "announcement_operation_count",
+    "announcement_sentiment_mean",
+    "announcement_positive_count",
+    "announcement_negative_count",
+    "announcement_weighted_sentiment_sum",
+    "announcement_importance_sum",
+    "announcement_contract_count",
+    "announcement_buyback_count",
+    "announcement_shareholder_change_count",
+    "announcement_regulatory_count",
+    "announcement_litigation_count",
+    "announcement_performance_count",
 )
 
 
@@ -116,19 +71,18 @@ def build_news_factor_rows(
     source_id: str,
 ) -> list[dict[str, Any]]:
     documents = _load_documents(database, table="news", start_date=start_date, end_date=end_date)
+    classifier = RuleBasedTextEventClassifier()
     grouped: dict[tuple[str, str], dict[str, Any]] = defaultdict(_news_factor_seed)
     for document in documents:
         key = (document["trade_date"], document["instrument"])
         row = grouped[key]
-        title = document["title"]
-        score = _sentiment_score(title)
+        result = classifier.classify(title=document["title"], document_type="news")
+        score = result.sentiment_score
         row["news_count"] += 1.0
         row["_sentiment_sum"] += score
         row["news_positive_count"] += 1.0 if score > 0 else 0.0
         row["news_negative_count"] += 1.0 if score < 0 else 0.0
-        row["news_growth_count"] += _has_keyword(title, GROWTH_EVENT_KEYWORDS)
-        row["news_risk_count"] += _has_keyword(title, RISK_EVENT_KEYWORDS)
-        row["news_financing_count"] += _has_keyword(title, FINANCING_EVENT_KEYWORDS)
+        _add_text_event_fields(row, result, prefix="news")
     rows = []
     for trade_date, instrument in sorted(grouped):
         factor_row = grouped[(trade_date, instrument)]
@@ -155,21 +109,30 @@ def build_announcement_factor_rows(
     documents = _load_documents(
         database, table="announcement", start_date=start_date, end_date=end_date
     )
+    classifier = RuleBasedTextEventClassifier()
     grouped: dict[tuple[str, str], dict[str, Any]] = defaultdict(_announcement_factor_seed)
     for document in documents:
         key = (document["trade_date"], document["instrument"])
         row = grouped[key]
-        title = document["title"]
+        result = classifier.classify(title=document["title"], document_type="announcement")
+        score = result.sentiment_score
         row["announcement_count"] += 1.0
-        row["announcement_risk_count"] += _has_keyword(title, RISK_EVENT_KEYWORDS)
-        row["announcement_financing_count"] += _has_keyword(title, FINANCING_EVENT_KEYWORDS)
-        row["announcement_operation_count"] += _has_keyword(title, OPERATION_EVENT_KEYWORDS)
+        row["_sentiment_sum"] += score
+        row["announcement_positive_count"] += 1.0 if score > 0 else 0.0
+        row["announcement_negative_count"] += 1.0 if score < 0 else 0.0
+        _add_text_event_fields(row, result, prefix="announcement")
     rows = []
     for trade_date, instrument in sorted(grouped):
         factor_row = grouped[(trade_date, instrument)]
         factor_row["trade_date"] = trade_date
         factor_row["instrument"] = instrument
         factor_row["source_id"] = source_id
+        factor_row["announcement_sentiment_mean"] = (
+            factor_row["_sentiment_sum"] / factor_row["announcement_count"]
+            if factor_row["announcement_count"]
+            else 0.0
+        )
+        del factor_row["_sentiment_sum"]
         rows.append(factor_row)
     return rows
 
@@ -218,6 +181,14 @@ def _news_factor_seed() -> dict[str, float]:
         "news_growth_count": 0.0,
         "news_risk_count": 0.0,
         "news_financing_count": 0.0,
+        "news_weighted_sentiment_sum": 0.0,
+        "news_importance_sum": 0.0,
+        "news_contract_count": 0.0,
+        "news_buyback_count": 0.0,
+        "news_shareholder_change_count": 0.0,
+        "news_regulatory_count": 0.0,
+        "news_litigation_count": 0.0,
+        "news_performance_count": 0.0,
         "_sentiment_sum": 0.0,
     }
 
@@ -225,26 +196,47 @@ def _news_factor_seed() -> dict[str, float]:
 def _announcement_factor_seed() -> dict[str, float]:
     return {
         "announcement_count": 0.0,
+        "announcement_growth_count": 0.0,
         "announcement_risk_count": 0.0,
         "announcement_financing_count": 0.0,
         "announcement_operation_count": 0.0,
+        "announcement_sentiment_mean": 0.0,
+        "announcement_positive_count": 0.0,
+        "announcement_negative_count": 0.0,
+        "announcement_weighted_sentiment_sum": 0.0,
+        "announcement_importance_sum": 0.0,
+        "announcement_contract_count": 0.0,
+        "announcement_buyback_count": 0.0,
+        "announcement_shareholder_change_count": 0.0,
+        "announcement_regulatory_count": 0.0,
+        "announcement_litigation_count": 0.0,
+        "announcement_performance_count": 0.0,
+        "_sentiment_sum": 0.0,
     }
 
 
-def _sentiment_score(title: str) -> float:
-    positive_hits = _keyword_hits(title, POSITIVE_KEYWORDS)
-    negative_hits = _keyword_hits(title, NEGATIVE_KEYWORDS)
-    if positive_hits > negative_hits:
-        return 1.0
-    if negative_hits > positive_hits:
-        return -1.0
-    return 0.0
+def _add_text_event_fields(
+    row: dict[str, float],
+    result: TextEventResult,
+    *,
+    prefix: str,
+) -> None:
+    row[f"{prefix}_growth_count"] += _event_count(result, GROWTH_EVENTS)
+    row[f"{prefix}_risk_count"] += _event_count(result, RISK_EVENTS)
+    row[f"{prefix}_financing_count"] += _event_count(result, FINANCING_EVENTS)
+    if prefix == "announcement":
+        row[f"{prefix}_operation_count"] += _event_count(result, OPERATION_EVENTS)
+    row[f"{prefix}_weighted_sentiment_sum"] += result.weighted_sentiment
+    row[f"{prefix}_importance_sum"] += result.importance_score
+    row[f"{prefix}_contract_count"] += _event_count(result, CONTRACT_EVENTS)
+    row[f"{prefix}_buyback_count"] += _event_count(result, BUYBACK_EVENTS)
+    row[f"{prefix}_shareholder_change_count"] += _event_count(
+        result, SHAREHOLDER_CHANGE_EVENTS
+    )
+    row[f"{prefix}_regulatory_count"] += _event_count(result, REGULATORY_EVENTS)
+    row[f"{prefix}_litigation_count"] += _event_count(result, LITIGATION_EVENTS)
+    row[f"{prefix}_performance_count"] += _event_count(result, PERFORMANCE_EVENTS)
 
 
-def _has_keyword(title: str, keywords: tuple[str, ...]) -> float:
-    return 1.0 if _keyword_hits(title, keywords) > 0 else 0.0
-
-
-def _keyword_hits(title: str, keywords: tuple[str, ...]) -> int:
-    normalized = title.upper()
-    return sum(1 for keyword in keywords if keyword.upper() in normalized)
+def _event_count(result: TextEventResult, candidates: set[str]) -> float:
+    return 1.0 if event_matches_any(result, candidates) else 0.0
