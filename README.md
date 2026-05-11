@@ -4,7 +4,7 @@
 
 目标是服务 Qlib 研究：采集 A 股数据、支持历史回补和每日增量、加工稳定日频因子，并导出 Qlib 可读数据。本仓库不做模型训练、组合回测、实盘下单或交易终端适配。
 
-当前实施计划见 `docs/quant_data_center_migration_plan_zh.md`。
+当前实施计划见 `docs/迁移实施计划.md`。第一次阅读项目时，建议先看 `docs/数据流阅读指南.md`，它按数据流解释 raw、bronze、silver、factor、gold 和 Qlib 导出的输入输出。
 
 ## 当前入口
 
@@ -22,6 +22,8 @@ qdc plan-backfill --dataset daily_bar --source-id akshare --universe csi300 --st
 qdc list-backfill --dataset daily_bar
 qdc run-backfill --dataset daily_bar --limit-tasks 4 --control-only
 qdc run-backfill --dataset daily_bar --retry-failed --limit-tasks 4
+qdc recover-running --dataset daily_bar --older-than-minutes 15
+qdc split-backfill --task-id <task_id> --batch-size 10
 qdc plan-backfill --dataset trade_calendar --source-id akshare --start 2026-05-01 --end 2026-05-03
 qdc run-backfill --dataset trade_calendar --limit-tasks 1
 qdc daily --date 2026-05-11 --universe csi300 --control-only
@@ -30,6 +32,7 @@ qdc sync-parquet --layer all
 qdc quality --dataset daily_bar --start 2026-05-01 --end 2026-05-03
 qdc export-qlib --start 2026-05-01 --end 2026-05-03 --provider-uri data/quant_data_center/qlib/cn_data --market-name qdc_smoke
 qdc verify-qlib --start 2026-05-01 --end 2026-05-03 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
+qdc console --host 127.0.0.1 --port 8765
 qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml
 qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 ```
@@ -51,6 +54,10 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 
 当前回补链路会写入 raw JSON、bronze Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 可生成新闻/公告日频 count、标题级情绪和事件规则因子，`qdc sync-parquet` 可同步 silver/gold Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day provider 目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的 provider 做 data-layer smoke。
 
+长时间回补时，`qdc recover-running` 可把陈旧的 `running` 任务标记为 `failed` 以便后续重试；`qdc split-backfill` 可把一个大 symbol 批次任务拆成更小的 pending 子任务。
+
+`qdc console` 会启动一个本地只读 Web 控制台，默认访问 `http://127.0.0.1:8765/`。当前轻量版直接读取 DuckDB，展示总览、回补任务、silver 数据预览、质量问题、Qlib 导出记录和导出文件索引，不会触发采集或写库。
+
 `qdc` 默认读取仓库内 `config/quant_data_center.yaml`；需要从其他目录运行或切换配置时，可设置 `QDC_CONFIG` 或传入 `--config`。
 
 ## 项目结构
@@ -58,9 +65,11 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 ```text
 config/quant_data_center.yaml       QDC 运行配置
 src/quant_data_center/              QDC 源码
+src/quant_data_center/console_static/  本地只读控制台静态页面
 tests/test_qdc_storage.py           当前 QDC 聚焦测试
-docs/quant_data_center_migration_plan_zh.md  迁移实施计划和当前状态
-docs/agent_journal/                 agent 工作记录
+docs/数据流阅读指南.md             数据流阅读指南
+docs/迁移实施计划.md               迁移实施计划和当前状态
+docs/工作日志/                     智能体工作记录
 data/quant_data_center/             本地运行数据，已 gitignored
 ```
 

@@ -5,7 +5,7 @@
 ## 语言规则
 
 - 默认用中文和用户沟通。
-- 项目文档、agent 工作日志、计划说明和解释性内容尽量用中文。
+- 项目文档、智能体工作日志、计划说明和解释性内容尽量用中文。
 - 代码标识符、Python 模块名、CLI 命令名、配置 key、表名、dataset 名、schema 字段名保持英文。
 
 ## 项目背景
@@ -22,7 +22,7 @@
 ```powershell
 git status --short
 Get-Content -Raw -Encoding UTF8 README.md
-Get-Content -Raw -Encoding UTF8 docs\quant_data_center_migration_plan_zh.md
+Get-Content -Raw -Encoding UTF8 docs\迁移实施计划.md
 Get-Content -Raw -Encoding UTF8 config\quant_data_center.yaml
 ```
 
@@ -72,8 +72,8 @@ conda run -n quant-data-center ...
 
 ## 状态和历史
 
-- 当前实施计划放在 `docs/quant_data_center_migration_plan_zh.md`。
-- Agent 工作摘要写入 `docs/agent_journal/YYYY-MM-DD.md`。
+- 当前实施计划放在 `docs/迁移实施计划.md`。
+- 智能体工作摘要写入 `docs/工作日志/YYYY年MM月DD日.md`。
 - QDC 配置放在 `config/quant_data_center.yaml`。
 - 本地运行数据放在 `data/quant_data_center/`，必须保持 gitignored。
 - 不要把聊天记录当成唯一事实来源。
@@ -112,13 +112,13 @@ ruff check .
 ## 文档规则
 
 - 用户需要直接运行的命令，要更新到 `README.md`。
-- 重大架构、存储、CLI 或工作流变化，要更新 `docs/quant_data_center_migration_plan_zh.md`。
-- 每次 agent 工作摘要写入 `docs/agent_journal/YYYY-MM-DD.md`。
+- 重大架构、存储、CLI 或工作流变化，要更新 `docs/迁移实施计划.md`。
+- 每次智能体工作摘要写入 `docs/工作日志/YYYY年MM月DD日.md`。
 - 文档中优先写清楚命令、路径和事实。
 
 ## 默认下一步
 
-如果用户只说“继续”，且没有给出新优先级，按 `docs/quant_data_center_migration_plan_zh.md` 的未完成项继续：
+如果用户只说“继续”，且没有给出新优先级，按 `docs/迁移实施计划.md` 的未完成项继续：
 
 1. 用真实大样本跑通 `refresh-universe`、`daily`、`build-factors`、`sync-parquet`、`export-qlib`。
 2. 联调 Qlib Alpha158 baseline。
@@ -131,7 +131,7 @@ ruff check .
 
 ### 通用工程规范
 
-开发时默认遵守 `docs/agent_engineering_standards_zh.md`。如果项目已有更具体的规范，以项目规范优先；没有项目规范时，按以下原则执行：
+开发时默认遵守 `docs/智能体工程规范.md`。如果项目已有更具体的规范，以项目规范优先；没有项目规范时，按以下原则执行：
 
 ```text
 小步改动：一次任务只解决一个清晰问题；功能、重构、格式化、迁移和大规模删除尽量拆成独立提交。

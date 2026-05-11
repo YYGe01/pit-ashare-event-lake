@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from quant_data_center.collectors.akshare import AkshareSilverCollector
+from quant_data_center.console import run_console
 from quant_data_center.exports.qlib import QlibExporter, QlibProviderVerifier
 from quant_data_center.factors import FactorBuilder
 from quant_data_center.jobs.backfill import parse_date, parse_symbols, plan_backfill_tasks
@@ -127,6 +128,12 @@ def cmd_validate_config(args: argparse.Namespace) -> int:
             errors.append(f"universes.{universe}.symbols must not be empty")
     _print_json({"status": "fail" if errors else "ok", "errors": errors})
     return 1 if errors else 0
+
+
+def cmd_console(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    run_console(settings, host=args.host, port=args.port)
+    return 0
 
 
 def cmd_sync_parquet(args: argparse.Namespace) -> int:
@@ -373,6 +380,29 @@ def cmd_run_backfill(args: argparse.Namespace) -> int:
     return 1 if has_failures else 0
 
 
+def cmd_recover_running(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    tasks = database.recover_running_backfill_tasks(
+        dataset=args.dataset,
+        older_than_minutes=args.older_than_minutes,
+        limit=args.limit_tasks,
+        reason=args.reason,
+    )
+    _print_json({"status": "ok", "recovered_count": len(tasks), "tasks": tasks})
+    return 0
+
+
+def cmd_split_backfill(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    result = database.split_backfill_task(task_id=args.task_id, batch_size=args.batch_size)
+    _print_json({"status": "ok", **result})
+    return 0
+
+
 def cmd_daily(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     database = QdcDatabase(settings)
@@ -615,6 +645,14 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser = subparsers.add_parser("validate-config", help="Validate qdc config")
     validate_parser.set_defaults(func=cmd_validate_config)
 
+    console_parser = subparsers.add_parser(
+        "console",
+        help="Start a read-only local web console for QDC collection state",
+    )
+    console_parser.add_argument("--host", default="127.0.0.1")
+    console_parser.add_argument("--port", type=int, default=8765)
+    console_parser.set_defaults(func=cmd_console)
+
     sync_parser = subparsers.add_parser(
         "sync-parquet",
         help="Synchronize DuckDB silver tables into derived Parquet layers",
@@ -729,6 +767,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validate task state flow without collecting real data",
     )
     run_parser.set_defaults(func=cmd_run_backfill)
+
+    recover_parser = subparsers.add_parser(
+        "recover-running",
+        help="Mark stale running backfill tasks as failed so they can be retried",
+    )
+    recover_parser.add_argument("--dataset")
+    recover_parser.add_argument("--older-than-minutes", type=int, default=15)
+    recover_parser.add_argument("--limit-tasks", type=int)
+    recover_parser.add_argument("--reason")
+    recover_parser.set_defaults(func=cmd_recover_running)
+
+    split_parser = subparsers.add_parser(
+        "split-backfill",
+        help="Split one symbol-batched backfill task into smaller pending subtasks",
+    )
+    split_parser.add_argument("--task-id", required=True)
+    split_parser.add_argument("--batch-size", type=int, required=True)
+    split_parser.set_defaults(func=cmd_split_backfill)
 
     return parser
 

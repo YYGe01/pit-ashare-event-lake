@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -256,6 +256,111 @@ class QdcDatabase:
                 """,
                 [status, last_error, _now(), task_id],
             )
+
+    def recover_running_backfill_tasks(
+        self,
+        *,
+        dataset: str | None = None,
+        older_than_minutes: int = 15,
+        limit: int | None = None,
+        reason: str | None = None,
+    ) -> list[dict[str, Any]]:
+        threshold = _now() - timedelta(minutes=max(0, older_than_minutes))
+        filters = ["status = 'running'", "updated_at <= ?"]
+        params: list[Any] = [threshold]
+        if dataset:
+            filters.append("dataset = ?")
+            params.append(dataset)
+        limit_clause = "limit ?" if limit and limit > 0 else ""
+        if limit_clause:
+            params.append(int(limit))
+        failure_reason = reason or (
+            f"recovered stale running task older than {older_than_minutes} minutes"
+        )
+        now = _now()
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                select *
+                from qdc_meta.backfill_task
+                where {' and '.join(filters)}
+                order by updated_at, created_at, task_id
+                {limit_clause}
+                """,
+                params,
+            ).fetchall()
+            columns = [item[0] for item in conn.description]
+            tasks = [_row_to_dict(columns, row) for row in rows]
+            for task in tasks:
+                conn.execute(
+                    """
+                    update qdc_meta.backfill_task
+                    set status = 'failed',
+                        last_error = ?,
+                        updated_at = ?
+                    where task_id = ?
+                    """,
+                    [failure_reason, now, task["task_id"]],
+                )
+                task["status"] = "failed"
+                task["last_error"] = failure_reason
+                task["updated_at"] = now.isoformat()
+        return tasks
+
+    def split_backfill_task(
+        self,
+        *,
+        task_id: str,
+        batch_size: int,
+    ) -> dict[str, Any]:
+        if batch_size <= 0:
+            raise ValueError("split-backfill requires --batch-size > 0")
+        tasks = self.fetch_backfill_tasks_by_ids([task_id])
+        if not tasks:
+            raise ValueError(f"unknown backfill task_id: {task_id}")
+        task = tasks[0]
+        if task.get("status") not in {"pending", "failed"}:
+            raise ValueError(
+                f"only pending or failed backfill tasks can be split: {task_id} "
+                f"status={task.get('status')}"
+            )
+        symbols = list(task.get("symbol_batch_json") or [])
+        if not symbols:
+            raise ValueError(f"backfill task has no symbol batch to split: {task_id}")
+        if len(symbols) <= batch_size:
+            raise ValueError(
+                f"backfill task symbol count {len(symbols)} is <= batch_size {batch_size}"
+            )
+
+        chunks = [symbols[index : index + batch_size] for index in range(0, len(symbols), batch_size)]
+        subtasks = []
+        for chunk in chunks:
+            subtask_id, inserted = self.insert_backfill_task(
+                dataset=str(task["dataset"]),
+                source_id=str(task["source_id"]),
+                universe=str(task.get("universe") or ""),
+                start_date=str(task["start_date"]),
+                end_date=str(task["end_date"]),
+                symbols=chunk,
+            )
+            subtasks.append(
+                {
+                    "task_id": subtask_id,
+                    "inserted": inserted,
+                    "symbols": chunk,
+                }
+            )
+        self.finish_backfill_task(
+            task_id=task_id,
+            status="superseded",
+            last_error=f"split into {len(subtasks)} subtasks with batch_size {batch_size}",
+        )
+        return {
+            "original_task": task,
+            "subtask_count": len(subtasks),
+            "inserted_count": sum(1 for item in subtasks if item["inserted"]),
+            "subtasks": subtasks,
+        }
 
     def upsert_dataset_watermark(
         self,

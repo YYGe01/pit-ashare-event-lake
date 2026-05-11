@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QDC 控制台</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">Q</div>
+          <div>
+            <div class="brand-title">QDC 控制台</div>
+            <div class="brand-subtitle">quant_data_center</div>
+          </div>
+        </div>
+        <nav class="nav-list" aria-label="console navigation">
+          <button class="nav-item active" data-section="dashboard">总览</button>
+          <button class="nav-item" data-section="backfill">回补任务</button>
+          <button class="nav-item" data-section="dataset">数据预览</button>
+          <button class="nav-item" data-section="quality">质量检查</button>
+          <button class="nav-item" data-section="qlib">Qlib 导出</button>
+        </nav>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h1 id="page-title">总览</h1>
+            <div id="database-path" class="muted text-ellipsis"></div>
+          </div>
+          <div class="topbar-actions">
+            <span id="database-state" class="tag tag-default">连接中</span>
+            <button id="refresh-btn" class="btn btn-primary" type="button">刷新</button>
+          </div>
+        </header>
+
+        <div id="error-banner" class="error-banner hidden"></div>
+
+        <section id="dashboard" class="page-section active">
+          <div id="kpi-grid" class="kpi-grid"></div>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>采集进度</h2>
+            </div>
+            <div id="progress-list" class="progress-list"></div>
+          </section>
+
+          <div class="content-grid">
+            <section class="panel wide">
+              <div class="panel-header">
+                <h2>任务状态</h2>
+              </div>
+              <div id="status-overview" class="status-layout"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <h2>数据水位</h2>
+              </div>
+              <div id="watermark-list" class="list-block"></div>
+            </section>
+          </div>
+
+          <section class="panel">
+            <div class="panel-header">
+              <h2>最近运行</h2>
+            </div>
+            <div id="recent-jobs"></div>
+          </section>
+        </section>
+
+        <section id="backfill" class="page-section">
+          <section class="panel">
+            <div class="panel-header">
+              <h2>回补任务</h2>
+              <div class="filters">
+                <select id="task-dataset" class="input"></select>
+                <select id="task-status" class="input">
+                  <option value="">全部状态</option>
+                  <option value="pending">pending</option>
+                  <option value="running">running</option>
+                  <option value="success">success</option>
+                  <option value="failed">failed</option>
+                  <option value="superseded">superseded</option>
+                </select>
+                <select id="task-limit" class="input">
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                </select>
+              </div>
+            </div>
+            <div id="task-table"></div>
+          </section>
+        </section>
+
+        <section id="dataset" class="page-section">
+          <section class="panel">
+            <div class="panel-header">
+              <h2>数据预览</h2>
+              <div class="filters">
+                <select id="preview-dataset" class="input"></select>
+                <input id="preview-instrument" class="input" placeholder="instrument" />
+                <input id="preview-start" class="input" placeholder="start" />
+                <input id="preview-end" class="input" placeholder="end" />
+                <select id="preview-limit" class="input">
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                </select>
+              </div>
+            </div>
+            <div id="preview-table"></div>
+          </section>
+        </section>
+
+        <section id="quality" class="page-section">
+          <section class="panel">
+            <div class="panel-header">
+              <h2>质量检查</h2>
+              <div class="filters">
+                <select id="quality-dataset" class="input"></select>
+                <select id="quality-status" class="input">
+                  <option value="">全部状态</option>
+                  <option value="open">open</option>
+                  <option value="closed">closed</option>
+                </select>
+                <select id="quality-limit" class="input">
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                </select>
+              </div>
+            </div>
+            <div id="quality-table"></div>
+          </section>
+        </section>
+
+        <section id="qlib" class="page-section">
+          <div class="content-grid">
+            <section class="panel">
+              <div class="panel-header">
+                <h2>最近导出</h2>
+              </div>
+              <div id="qlib-jobs"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-header">
+                <h2>导出文件</h2>
+              </div>
+              <div id="qlib-objects"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

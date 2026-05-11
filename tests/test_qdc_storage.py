@@ -11,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 
 from quant_data_center.cli import _print_json, main
+from quant_data_center.console import QdcConsoleData
 from quant_data_center.jobs.backfill import parse_date, plan_backfill_tasks
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.database import QdcDatabase
@@ -307,6 +308,181 @@ def test_qdc_run_backfill_control_only_updates_tasks_and_watermark(tmp_path: Pat
     assert watermark["universe"] == "csi300"
     assert watermark["min_date"] == "2026-05-01"
     assert watermark["max_date"] == "2026-05-03"
+
+
+def test_qdc_console_overview_reads_collection_state(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    database.record_job_run(
+        job_type="daily",
+        status="success",
+        dataset="daily",
+        source_id="akshare",
+        start_date="2026-05-11",
+        end_date="2026-05-11",
+        parameters={"planned_count": 1},
+    )
+    database.insert_backfill_task(
+        dataset="daily_bar",
+        source_id="akshare",
+        universe="csi300",
+        start_date="2026-05-11",
+        end_date="2026-05-11",
+        symbols=["SH600000"],
+    )
+
+    overview = QdcConsoleData(settings).overview()
+
+    assert overview["database_exists"] is True
+    assert overview["table_counts"]["job_run"] == 1
+    assert overview["table_counts"]["backfill_task"] == 1
+    assert overview["job_status_counts"] == {"success": 1}
+    assert overview["backfill_status_counts"] == {"pending": 1}
+    assert overview["latest_job_runs"][0]["parameters_json"] == {"planned_count": 1}
+    assert overview["backfill_progress"][0]["success_percent"] == 0
+    assert overview["backfill_progress"][0]["state"] == "pending"
+
+
+def test_qdc_console_dataset_preview_filters_silver_rows(tmp_path: Path) -> None:
+    config_path, _database = _seed_research_rows(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+
+    preview = QdcConsoleData(settings).dataset_preview(
+        dataset="daily_bar",
+        instrument="SH600000",
+        start="2026-05-12",
+        end="2026-05-12",
+    )
+
+    assert preview["dataset"] == "daily_bar"
+    assert preview["columns"][:2] == ["trade_date", "instrument"]
+    assert preview["row_count"] == 1
+    assert preview["rows"][0]["trade_date"] == "2026-05-12"
+    assert preview["rows"][0]["close"] == 10.6
+
+
+def test_qdc_console_dataset_preview_rejects_unknown_dataset(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+
+    try:
+        QdcConsoleData(settings).dataset_preview(dataset="daily_bar; drop table qdc_meta.job_run")
+    except ValueError as exc:
+        assert "unsupported preview dataset" in str(exc)
+    else:  # pragma: no cover - assertion branch
+        raise AssertionError("dataset preview accepted an unsafe dataset name")
+
+
+def test_qdc_recover_running_marks_stale_tasks_failed(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "plan-backfill",
+                "--dataset",
+                "daily_bar",
+                "--source-id",
+                "akshare",
+                "--start",
+                "2026-05-01",
+                "--end",
+                "2026-05-01",
+                "--symbols",
+                "SH600000",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    task = database.list_backfill_tasks(dataset="daily_bar")[0]
+    database.mark_backfill_task_running(str(task["task_id"]))
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "recover-running",
+                "--dataset",
+                "daily_bar",
+                "--older-than-minutes",
+                "0",
+                "--reason",
+                "unit test recovery",
+            ]
+        )
+        == 0
+    )
+
+    recovered = database.list_backfill_tasks(dataset="daily_bar")[0]
+    assert recovered["status"] == "failed"
+    assert recovered["last_error"] == "unit test recovery"
+
+
+def test_qdc_split_backfill_creates_smaller_pending_tasks(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "plan-backfill",
+                "--dataset",
+                "daily_bar",
+                "--source-id",
+                "akshare",
+                "--start",
+                "2026-05-01",
+                "--end",
+                "2026-05-01",
+                "--symbols",
+                "SH600000,SZ000001,SZ300750",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    task = database.list_backfill_tasks(dataset="daily_bar")[0]
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "split-backfill",
+                "--task-id",
+                str(task["task_id"]),
+                "--batch-size",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    tasks = database.list_backfill_tasks(dataset="daily_bar")
+    assert [task["status"] for task in tasks] == [
+        "superseded",
+        "pending",
+        "pending",
+        "pending",
+    ]
+    assert [task["symbol_batch_json"] for task in tasks[1:]] == [
+        ["SH600000"],
+        ["SZ000001"],
+        ["SZ300750"],
+    ]
+    try:
+        database.split_backfill_task(task_id=str(task["task_id"]), batch_size=1)
+    except ValueError as exc:
+        assert "only pending or failed backfill tasks can be split" in str(exc)
+    else:  # pragma: no cover - assertion branch
+        raise AssertionError("split-backfill accepted a superseded original task")
 
 
 def test_qdc_run_backfill_can_retry_failed_tasks_control_only(tmp_path: Path) -> None:
