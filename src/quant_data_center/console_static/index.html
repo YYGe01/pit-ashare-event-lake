@@ -68,7 +68,7 @@
             <div class="panel-header">
               <div>
                 <h2>标的维度明细</h2>
-                <p class="panel-subtitle">按标的展示中文名称、核心日频完整度、交易状态、新闻、公告和文本因子覆盖。</p>
+                <p class="panel-subtitle">按标的把每个数据维度拆成独立列，展示已采集量、预期量、缺失量和记录状态。</p>
               </div>
             </div>
             <div id="instrument-coverage-summary" class="coverage-grid"></div>
@@ -168,73 +168,64 @@
           <section class="guide-panel">
             <div>
               <h2>数据预览怎么看</h2>
-              <p>这里直接看统一研究层 `qdc_silver` 表。按数据集看表结构和样例，按标的看一只股票的日频时间线。</p>
+              <p>这里按标的查看两类数据：采集到的原始记录，以及加工后会进入研究和 Qlib 的日频因子。</p>
             </div>
             <div class="guide-grid">
-              <div class="guide-card"><b>按数据集看</b><span>适合确认某张表的数据源、日期范围、字段含义和原始行。</span></div>
-              <div class="guide-card"><b>按标的看</b><span>适合确认 SH600000 这类标的每天的行情、因子、新闻和公告。</span></div>
-              <div class="guide-card"><b>限定日期</b><span>用 YYYY-MM-DD 缩小范围，避免一次看太多历史。</span></div>
+              <div class="guide-card"><b>原始数据</b><span>读取 raw JSON 索引，尽量按上游返回字段展示。</span></div>
+              <div class="guide-card"><b>处理后因子</b><span>读取已按交易日对齐的行情、复权、涨跌停和文本因子。</span></div>
+              <div class="guide-card"><b>标的搜索</b><span>输入代码、简称或行业，选择下拉里的 instrument。</span></div>
             </div>
           </section>
 
           <div class="segmented-control" aria-label="数据预览模式">
-            <button class="segment-button active" data-preview-mode="dataset" type="button">按数据集看</button>
-            <button class="segment-button" data-preview-mode="instrument" type="button">按标的看</button>
+            <button class="segment-button active" data-preview-mode="raw" type="button">原始数据预览</button>
+            <button class="segment-button" data-preview-mode="factor" type="button">处理后因子预览</button>
           </div>
 
           <section class="panel">
-            <div id="dataset-preview-mode">
-              <div class="panel-header">
-                <div>
-                  <h2>数据集预览</h2>
-                  <p class="panel-subtitle">看一张 silver 表的覆盖摘要、字段解释和样例行。</p>
-                </div>
-                <div class="filters">
-                  <select id="preview-dataset" class="input"></select>
-                  <input id="preview-instrument" class="input" placeholder="标的 instrument" />
-                  <input id="preview-start" class="input" placeholder="开始日期 start" />
-                  <input id="preview-end" class="input" placeholder="结束日期 end" />
-                  <select id="preview-limit" class="input">
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                    <option value="200">200</option>
-                  </select>
-                </div>
+            <div class="panel-header">
+              <div>
+                <h2>标的数据预览</h2>
+                <p class="panel-subtitle">先选择标的，再切换查看原始采集记录或处理后的日频因子。</p>
               </div>
-              <div id="preview-explanation" class="panel-note"></div>
-              <div id="preview-summary" class="coverage-grid"></div>
-              <div id="preview-fields"></div>
-              <div id="preview-table"></div>
+              <div class="filters">
+                <input
+                  id="preview-instrument"
+                  class="input"
+                  list="instrument-options"
+                  placeholder="搜索标的，例如 SH600000 或 浦发"
+                  autocomplete="off"
+                />
+                <datalist id="instrument-options"></datalist>
+                <input id="preview-start" class="input" placeholder="开始日期 start" />
+                <input id="preview-end" class="input" placeholder="结束日期 end" />
+                <select id="preview-limit" class="input">
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                </select>
+              </div>
+            </div>
+            <div id="preview-selected" class="panel-note"></div>
+
+            <div id="raw-preview-mode">
+              <div id="raw-preview-explanation" class="panel-note"></div>
+              <div id="raw-preview-summary" class="coverage-grid"></div>
+              <div id="raw-preview-table"></div>
             </div>
 
-            <div id="instrument-preview-mode" class="hidden">
-              <div class="panel-header">
-                <div>
-                  <h2>标的时间线</h2>
-                  <p class="panel-subtitle">按交易日合并行情、复权、涨跌停、交易状态、新闻因子和公告因子。</p>
-                </div>
-                <div class="filters">
-                  <input id="timeline-instrument" class="input" placeholder="标的 instrument" />
-                  <input id="timeline-start" class="input" placeholder="开始日期 start" />
-                  <input id="timeline-end" class="input" placeholder="结束日期 end" />
-                  <select id="timeline-limit" class="input">
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                    <option value="200">200</option>
-                  </select>
-                </div>
-              </div>
-              <div id="timeline-explanation" class="panel-note"></div>
-              <div id="timeline-summary" class="coverage-grid"></div>
-              <div id="timeline-table"></div>
+            <div id="factor-preview-mode" class="hidden">
+              <div id="factor-preview-explanation" class="panel-note"></div>
+              <div id="factor-preview-summary" class="coverage-grid"></div>
+              <div id="factor-preview-table"></div>
               <div class="content-grid preview-detail-grid">
                 <section>
                   <div class="subsection-title">新闻明细</div>
-                  <div id="timeline-news"></div>
+                  <div id="factor-preview-news"></div>
                 </section>
                 <section>
                   <div class="subsection-title">公告明细</div>
-                  <div id="timeline-announcements"></div>
+                  <div id="factor-preview-announcements"></div>
                 </section>
               </div>
             </div>

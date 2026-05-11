@@ -584,16 +584,34 @@ def test_qdc_console_overview_reports_data_coverage(tmp_path: Path) -> None:
     assert rows["SH600000"]["news_rows"] == 1
     assert rows["SH600000"]["daily_news_factor_days"] == 1
     assert rows["SH600000"]["factor_news_count"] == 2
+    sh_dimensions = rows["SH600000"]["dimension_statuses"]
+    assert sh_dimensions["stock_basic"]["status"] == "complete"
+    assert sh_dimensions["daily_bar"]["observed"] == 2
+    assert sh_dimensions["daily_bar"]["expected"] == 2
+    assert sh_dimensions["daily_bar"]["missing"] == 0
+    assert sh_dimensions["news"]["observed"] == 1
+    assert sh_dimensions["news"]["expected"] is None
+    assert sh_dimensions["daily_news_factor"]["event_count"] == 2
     assert rows["SZ000001"]["missing_dimensions"] == ["adj_factor", "price_limit"]
     assert rows["SZ000001"]["announcement_rows"] == 1
     assert rows["SZ000001"]["daily_announcement_factor_days"] == 1
     assert rows["SZ000001"]["factor_announcement_count"] == 1
+    sz_dimensions = rows["SZ000001"]["dimension_statuses"]
+    assert sz_dimensions["adj_factor"]["missing"] == 1
+    assert sz_dimensions["price_limit"]["missing"] == 2
+    assert sz_dimensions["announcement"]["observed"] == 1
+    assert sz_dimensions["daily_announcement_factor"]["event_count"] == 1
     assert rows["SZ300750"]["name"] == "宁德时代"
     assert rows["SZ300750"]["missing_dimensions"] == [
         "daily_bar",
         "adj_factor",
         "price_limit",
     ]
+    sz300_dimensions = rows["SZ300750"]["dimension_statuses"]
+    assert sz300_dimensions["stock_basic"]["status"] == "missing"
+    assert sz300_dimensions["stock_basic"]["missing"] == 1
+    assert sz300_dimensions["universe_constituent"]["status"] == "complete"
+    assert sz300_dimensions["daily_bar"]["missing"] == 2
     assert rows["SZ300750"]["available_dimensions"] == ["universe_constituent"]
 
 
@@ -619,6 +637,94 @@ def test_qdc_console_dataset_preview_filters_silver_rows(tmp_path: Path) -> None
     assert preview["summary"]["source_ids"] == [{"source_id": "unit_test", "row_count": 1}]
     assert preview["rows"][0]["trade_date"] == "2026-05-12"
     assert preview["rows"][0]["close"] == 10.6
+
+
+def test_qdc_console_instruments_supports_search_by_name(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    silver = SilverStore(settings)
+    silver.upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "industry": "银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+            {
+                "instrument": "SZ300750",
+                "symbol": "300750",
+                "exchange": "SZ",
+                "name": "宁德时代",
+                "industry": "电力设备",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+        ]
+    )
+
+    payload = QdcConsoleData(settings).instruments(query="浦发")
+
+    assert payload["instrument_count"] == 1
+    assert payload["instruments"][0]["instrument"] == "SH600000"
+    assert payload["instruments"][0]["name"] == "浦发银行"
+
+
+def test_qdc_console_raw_instrument_preview_reads_raw_records(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    raw_path = settings.raw_root / "news" / "unit_test" / "dt=2026-05-11" / "raw.json"
+    raw_path.parent.mkdir(parents=True)
+    raw_payload = {
+        "function": "stock_news_em",
+        "params": {"symbol": "600000", "start_date": "2026-05-11"},
+        "records": [
+            {
+                "新闻时间": "2026-05-11 09:30:00",
+                "新闻标题": "浦发银行订单增长",
+                "链接": "https://example.com/news/1",
+            },
+            {
+                "新闻时间": "2026-05-10 09:30:00",
+                "新闻标题": "日期外新闻",
+                "链接": "https://example.com/news/2",
+            },
+        ],
+    }
+    raw_path.write_text(json.dumps(raw_payload, ensure_ascii=False), encoding="utf-8")
+    database.insert_source_object(
+        dataset="news",
+        source_id="unit_test",
+        layer="raw",
+        uri=str(raw_path),
+        content_hash="unit-test",
+        size_bytes=raw_path.stat().st_size,
+    )
+
+    preview = QdcConsoleData(settings).raw_instrument_preview(
+        instrument="SH600000",
+        start="2026-05-11",
+        end="2026-05-11",
+    )
+
+    assert preview["status"] == "ok"
+    assert preview["instrument"] == "SH600000"
+    assert preview["summary"]["dataset_count"] == 1
+    assert preview["summary"]["object_count"] == 1
+    assert preview["summary"]["row_count"] == 1
+    section = preview["sections"][0]
+    assert section["dataset"] == "news"
+    assert section["objects"][0]["function"] == "stock_news_em"
+    assert "新闻标题" in section["columns"]
+    assert section["rows"][0]["record_set"] == "records"
+    assert section["rows"][0]["新闻标题"] == "浦发银行订单增长"
 
 
 def test_qdc_console_instrument_timeline_merges_daily_and_documents(

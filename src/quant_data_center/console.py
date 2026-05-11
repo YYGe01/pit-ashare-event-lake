@@ -22,14 +22,26 @@ from quant_data_center.storage.schema import (
     SILVER_SCHEMA,
     SILVER_TABLES,
 )
+from quant_data_center.utils.instruments import instrument_to_symbol, normalize_instrument
 
 
 STATIC_ROOT = Path(__file__).with_name("console_static")
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 500
+RAW_OBJECT_SCAN_LIMIT = 1000
 STALE_RUNNING_MINUTES = 15
 COVERAGE_INSTRUMENT_LIMIT = 500
 REQUIRED_DAILY_COVERAGE_DATASETS = ("daily_bar", "adj_factor", "price_limit")
+RAW_PREVIEW_DATASETS = (
+    "stock_basic",
+    "universe_constituent",
+    "daily_bar",
+    "adj_factor",
+    "price_limit",
+    "trade_status",
+    "announcement",
+    "news",
+)
 INSTRUMENT_COVERAGE_DATASETS = (
     "stock_basic",
     "universe_constituent",
@@ -229,6 +241,64 @@ class QdcConsoleData:
                 limit=_clamp_limit(limit),
             )
         return {"status": "ok", "object_count": len(objects), "objects": objects}
+
+    def instruments(
+        self,
+        *,
+        query: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        row_limit = _clamp_limit(limit, default=50)
+        if not self.settings.database_path.exists():
+            rows = _configured_instrument_options(self.settings, query=query, limit=row_limit)
+            return {"status": "ok", "instrument_count": len(rows), "instruments": rows}
+
+        with self._connect() as conn:
+            silver_tables = self._existing_tables(conn, SILVER_SCHEMA)
+            rows = self._instrument_options(
+                conn,
+                silver_tables=silver_tables,
+                query=query,
+                limit=row_limit,
+            )
+        return {"status": "ok", "instrument_count": len(rows), "instruments": rows}
+
+    def raw_instrument_preview(
+        self,
+        *,
+        instrument: str,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        instrument = _normalize_preview_instrument(instrument)
+        row_limit = _clamp_limit(limit)
+        if not self.settings.database_path.exists():
+            return _empty_raw_instrument_preview(instrument, start=start, end=end, limit=row_limit)
+
+        with self._connect() as conn:
+            control_tables = self._existing_tables(conn, CONTROL_SCHEMA)
+            objects = self._raw_source_objects(
+                conn,
+                control_tables=control_tables,
+                scan_limit=RAW_OBJECT_SCAN_LIMIT,
+            )
+        sections = _raw_preview_sections(
+            objects=objects,
+            instrument=instrument,
+            start=start,
+            end=end,
+            limit=row_limit,
+        )
+        return {
+            "status": "ok",
+            "instrument": instrument,
+            "start": start,
+            "end": end,
+            "limit": row_limit,
+            "summary": _raw_preview_summary(sections),
+            "sections": sections,
+        }
 
     def _dataset_preview_summary(
         self,
@@ -474,9 +544,7 @@ class QdcConsoleData:
         end: str | None = None,
         limit: int | None = None,
     ) -> dict[str, Any]:
-        instrument = instrument.strip()
-        if not instrument:
-            raise ValueError("instrument timeline requires instrument")
+        instrument = _normalize_preview_instrument(instrument)
         if not self.settings.database_path.exists():
             return _empty_instrument_timeline(instrument, start=start, end=end)
 
@@ -819,6 +887,124 @@ class QdcConsoleData:
             """,
             [*params, limit],
         )
+
+    def _raw_source_objects(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        scan_limit: int,
+    ) -> list[dict[str, Any]]:
+        if "source_object" not in control_tables:
+            return []
+        placeholders = ", ".join("?" for _ in RAW_PREVIEW_DATASETS)
+        return _query_dicts(
+            conn,
+            f"""
+            select *
+            from {CONTROL_SCHEMA}.source_object
+            where layer = 'raw'
+              and dataset in ({placeholders})
+            order by created_at desc, dataset, uri
+            limit ?
+            """,
+            [*RAW_PREVIEW_DATASETS, scan_limit],
+        )
+
+    def _instrument_options(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        silver_tables: set[str],
+        query: str | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        candidates: set[str] = set()
+        normalized_query = (query or "").strip().upper()
+        like_query = f"%{normalized_query}%"
+        if "stock_basic" in silver_tables:
+            filters = ""
+            params: list[Any] = []
+            if normalized_query:
+                filters = """
+                where upper(instrument) like ?
+                   or upper(symbol) like ?
+                   or upper(coalesce(name, '')) like ?
+                   or upper(coalesce(industry, '')) like ?
+                """
+                params.extend([like_query, like_query, like_query, like_query])
+            rows = conn.execute(
+                f"""
+                select instrument
+                from {SILVER_SCHEMA}.stock_basic
+                {filters}
+                order by instrument
+                limit ?
+                """,
+                [*params, max(limit * 4, limit)],
+            ).fetchall()
+            candidates.update(str(row[0]) for row in rows)
+
+        if "universe_constituent" in silver_tables:
+            filters = ""
+            params = []
+            if normalized_query:
+                filters = """
+                where upper(c.instrument) like ?
+                   or upper(c.symbol) like ?
+                   or upper(coalesce(c.name, '')) like ?
+                   or upper(c.universe) like ?
+                """
+                params.extend([like_query, like_query, like_query, like_query])
+            rows = conn.execute(
+                f"""
+                with latest as (
+                  select universe, max(snapshot_date) as snapshot_date
+                  from {SILVER_SCHEMA}.universe_constituent
+                  group by universe
+                )
+                select distinct c.instrument
+                from {SILVER_SCHEMA}.universe_constituent c
+                join latest l
+                  on c.universe = l.universe
+                 and c.snapshot_date = l.snapshot_date
+                {filters}
+                order by c.instrument
+                limit ?
+                """,
+                [*params, max(limit * 4, limit)],
+            ).fetchall()
+            candidates.update(str(row[0]) for row in rows)
+
+        if not candidates:
+            reference_instruments, _source = self._reference_instruments(conn, silver_tables)
+            candidates.update(reference_instruments)
+
+        candidates.update(_configured_instruments(self.settings))
+        filtered = [
+            instrument
+            for instrument in sorted(candidates)
+            if not normalized_query
+            or normalized_query in instrument.upper()
+            or normalized_query in _instrument_symbol(instrument).upper()
+        ]
+        if normalized_query and len(filtered) < limit:
+            filtered = sorted(candidates)
+        identity = self._instrument_identity_by_instrument(
+            conn,
+            silver_tables=silver_tables,
+            instruments=filtered[: max(limit * 4, limit)],
+        )
+        rows = []
+        for instrument in filtered:
+            item = identity.get(instrument, _default_instrument_identity(instrument))
+            option = _instrument_option_from_identity(item)
+            if normalized_query and not _instrument_option_matches(option, normalized_query):
+                continue
+            rows.append(option)
+            if len(rows) >= limit:
+                break
+        return rows
 
     def _data_coverage(
         self,
@@ -1254,6 +1440,67 @@ class QdcConsoleData:
                 "daily_news_factor": daily_news_factor_days,
                 "daily_announcement_factor": daily_announcement_factor_days,
             }
+            dimension_statuses = {
+                "stock_basic": _dimension_status(
+                    observed=all_dimension_counts["stock_basic"],
+                    expected=1,
+                    unit="项",
+                ),
+                "universe_constituent": _dimension_status(
+                    observed=all_dimension_counts["universe_constituent"],
+                    expected=1,
+                    unit="项",
+                ),
+                "daily_bar": _dimension_status(
+                    observed=dimension_counts["daily_bar"],
+                    expected=expected_date_count,
+                    unit="天",
+                ),
+                "adj_factor": _dimension_status(
+                    observed=dimension_counts["adj_factor"],
+                    expected=expected_date_count,
+                    unit="天",
+                ),
+                "price_limit": _dimension_status(
+                    observed=dimension_counts["price_limit"],
+                    expected=expected_date_count,
+                    unit="天",
+                ),
+                "trade_status": _dimension_status(
+                    observed=trade_status_days,
+                    expected=None,
+                    unit="天",
+                    note="事件/状态类维度，只统计已有记录",
+                ),
+                "news": _dimension_status(
+                    observed=news_rows,
+                    expected=None,
+                    unit="条",
+                    note="事件明细维度，只统计已有记录",
+                ),
+                "announcement": _dimension_status(
+                    observed=announcement_rows,
+                    expected=None,
+                    unit="条",
+                    note="事件明细维度，只统计已有记录",
+                ),
+                "daily_news_factor": _dimension_status(
+                    observed=daily_news_factor_days,
+                    expected=None,
+                    unit="天",
+                    event_count=factor_news_count,
+                    event_unit="条",
+                    note="文本因子维度，只统计已有因子行",
+                ),
+                "daily_announcement_factor": _dimension_status(
+                    observed=daily_announcement_factor_days,
+                    expected=None,
+                    unit="天",
+                    event_count=factor_announcement_count,
+                    event_unit="条",
+                    note="文本因子维度，只统计已有因子行",
+                ),
+            }
             available_dimensions = [
                 dataset
                 for dataset in ALL_INSTRUMENT_COVERAGE_DIMENSIONS
@@ -1281,6 +1528,7 @@ class QdcConsoleData:
                     "complete": complete,
                     "missing_dimensions": missing_dimensions,
                     "dimension_counts": dimension_counts,
+                    "dimension_statuses": dimension_statuses,
                     "all_dimension_counts": all_dimension_counts,
                     "available_dimensions": available_dimensions,
                     "observed_dimension_count": len(available_dimensions),
@@ -1590,6 +1838,22 @@ def _make_handler(
                             limit=_query_limit(query),
                         )
                     )
+                elif path == "/api/instruments":
+                    self._send_json(
+                        data.instruments(
+                            query=_query_value(query, "query"),
+                            limit=_query_limit(query),
+                        )
+                    )
+                elif path == "/api/raw-instrument-preview":
+                    self._send_json(
+                        data.raw_instrument_preview(
+                            instrument=_query_value(query, "instrument") or "",
+                            start=_query_value(query, "start"),
+                            end=_query_value(query, "end"),
+                            limit=_query_limit(query),
+                        )
+                    )
                 elif path == "/api/dataset-preview":
                     dataset = _query_value(query, "dataset") or "daily_bar"
                     self._send_json(
@@ -1601,7 +1865,7 @@ def _make_handler(
                             limit=_query_limit(query),
                         )
                     )
-                elif path == "/api/instrument-timeline":
+                elif path in {"/api/instrument-timeline", "/api/factor-preview"}:
                     self._send_json(
                         data.instrument_timeline(
                             instrument=_query_value(query, "instrument") or "",
@@ -1737,6 +2001,347 @@ def _clamp_limit(value: int | None, *, default: int = DEFAULT_LIMIT) -> int:
     return min(value, MAX_LIMIT)
 
 
+def _normalize_preview_instrument(instrument: str) -> str:
+    instrument = instrument.strip()
+    if not instrument:
+        raise ValueError("instrument preview requires instrument")
+    return normalize_instrument(instrument)
+
+
+def _configured_instruments(settings: QdcSettings) -> list[str]:
+    instruments = {
+        normalize_instrument(instrument)
+        for symbols in settings.universes.values()
+        for instrument in symbols
+        if instrument
+    }
+    return sorted(instruments)
+
+
+def _configured_instrument_options(
+    settings: QdcSettings,
+    *,
+    query: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    normalized_query = (query or "").strip().upper()
+    rows = []
+    for instrument in _configured_instruments(settings):
+        identity = _default_instrument_identity(instrument)
+        option = _instrument_option_from_identity(identity)
+        if normalized_query and not _instrument_option_matches(option, normalized_query):
+            continue
+        rows.append(option)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _instrument_option_from_identity(identity: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "instrument": identity.get("instrument"),
+        "symbol": identity.get("symbol"),
+        "exchange": identity.get("exchange"),
+        "name": identity.get("name"),
+        "industry": identity.get("industry"),
+        "universes": identity.get("universes", []),
+        "label": _instrument_option_label(identity),
+    }
+
+
+def _instrument_option_label(identity: dict[str, Any]) -> str:
+    parts = [
+        str(identity.get("instrument") or ""),
+        str(identity.get("name") or "").strip(),
+        str(identity.get("industry") or "").strip(),
+    ]
+    universes = identity.get("universes") or []
+    if universes:
+        parts.append(",".join(str(item) for item in universes))
+    return " / ".join(part for part in parts if part)
+
+
+def _instrument_option_matches(option: dict[str, Any], query: str) -> bool:
+    haystack = " ".join(
+        str(value)
+        for value in [
+            option.get("instrument"),
+            option.get("symbol"),
+            option.get("exchange"),
+            option.get("name"),
+            option.get("industry"),
+            " ".join(option.get("universes") or []),
+        ]
+        if value
+    ).upper()
+    return query in haystack
+
+
+def _empty_raw_instrument_preview(
+    instrument: str,
+    *,
+    start: str | None,
+    end: str | None,
+    limit: int,
+) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "instrument": instrument,
+        "start": start,
+        "end": end,
+        "limit": limit,
+        "summary": {
+            "dataset_count": 0,
+            "object_count": 0,
+            "row_count": 0,
+            "datasets": [],
+        },
+        "sections": [],
+    }
+
+
+def _raw_preview_sections(
+    *,
+    objects: list[dict[str, Any]],
+    instrument: str,
+    start: str | None,
+    end: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    sections: dict[str, dict[str, Any]] = {}
+    for source_object in objects:
+        dataset = str(source_object.get("dataset") or "")
+        payload = _read_raw_payload(source_object)
+        object_matches = _raw_payload_matches_instrument(
+            payload,
+            source_object=source_object,
+            instrument=instrument,
+        )
+        rows, columns = _raw_rows_from_payload(
+            payload,
+            instrument=instrument,
+            start=start,
+            end=end,
+            object_matches=object_matches,
+            limit=limit,
+        )
+        has_error = bool(payload.get("error")) and object_matches
+        if not rows and not has_error:
+            continue
+        section = sections.setdefault(
+            dataset,
+            {
+                "dataset": dataset,
+                "objects": [],
+                "columns": [],
+                "rows": [],
+            },
+        )
+        section["objects"].append(_raw_object_meta(source_object, payload, len(rows)))
+        for column in columns:
+            if column not in section["columns"]:
+                section["columns"].append(column)
+        available = max(limit - len(section["rows"]), 0)
+        if available:
+            section["rows"].extend(rows[:available])
+
+    return [
+        {
+            **section,
+            "object_count": len(section["objects"]),
+            "row_count": len(section["rows"]),
+        }
+        for _dataset, section in sorted(sections.items())
+    ]
+
+
+def _read_raw_payload(source_object: dict[str, Any]) -> dict[str, Any]:
+    uri = str(source_object.get("uri") or "")
+    path = Path(uri)
+    if not path.exists():
+        return {
+            "function": None,
+            "params": {},
+            "records": [],
+            "error": f"raw 文件不存在：{uri}",
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, list):
+            return {"function": None, "params": {}, "records": payload}
+        return {"function": None, "params": {}, "records": [{"value": payload}]}
+    except json.JSONDecodeError as exc:
+        return {
+            "function": None,
+            "params": {},
+            "records": [],
+            "error": f"raw JSON 解析失败：{exc}",
+        }
+
+
+def _raw_payload_matches_instrument(
+    payload: dict[str, Any],
+    *,
+    source_object: dict[str, Any],
+    instrument: str,
+) -> bool:
+    params = payload.get("params") or {}
+    if isinstance(params, dict):
+        for value in params.values():
+            if _raw_value_matches_instrument(value, instrument):
+                return True
+    uri = str(source_object.get("uri") or "")
+    return instrument in uri.upper() or instrument_to_symbol(instrument) in uri
+
+
+def _raw_rows_from_payload(
+    payload: dict[str, Any],
+    *,
+    instrument: str,
+    start: str | None,
+    end: str | None,
+    object_matches: bool,
+    limit: int,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    rows = []
+    columns: list[str] = []
+    for record_set, records in _raw_record_sets(payload):
+        for row_index, record in enumerate(records, start=1):
+            raw_record = record if isinstance(record, dict) else {"value": record}
+            if not object_matches and not _raw_record_matches_instrument(raw_record, instrument):
+                continue
+            if not _raw_record_matches_date(raw_record, start=start, end=end):
+                continue
+            public_row = {
+                "record_set": record_set,
+                "row_index": row_index,
+                **raw_record,
+            }
+            for column in public_row:
+                if column not in columns:
+                    columns.append(column)
+            rows.append(public_row)
+            if len(rows) >= limit:
+                return rows, columns
+    return rows, columns
+
+
+def _raw_record_sets(payload: dict[str, Any]) -> list[tuple[str, list[Any]]]:
+    record_sets = []
+    for key in ("records", "raw_records", "qfq_records"):
+        records = payload.get(key)
+        if isinstance(records, list):
+            record_sets.append((key, records))
+    return record_sets
+
+
+def _raw_record_matches_instrument(record: dict[str, Any], instrument: str) -> bool:
+    for key in (
+        "instrument",
+        "symbol",
+        "code",
+        "股票代码",
+        "证券代码",
+        "代码",
+        "成分券代码",
+        "样本代码",
+        "SECURITY_CODE",
+    ):
+        if key in record and _raw_value_matches_instrument(record.get(key), instrument):
+            return True
+    return False
+
+
+def _raw_value_matches_instrument(value: Any, instrument: str) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip().upper()
+    if not text:
+        return False
+    if text == instrument or text == instrument_to_symbol(instrument):
+        return True
+    try:
+        return normalize_instrument(text) == instrument
+    except ValueError:
+        return False
+
+
+def _raw_record_matches_date(
+    record: dict[str, Any],
+    *,
+    start: str | None,
+    end: str | None,
+) -> bool:
+    date_text = _raw_record_date(record)
+    if not date_text:
+        return True
+    if start and date_text < start:
+        return False
+    if end and date_text > end:
+        return False
+    return True
+
+
+def _raw_record_date(record: dict[str, Any]) -> str | None:
+    for key in (
+        "trade_date",
+        "publish_date",
+        "date",
+        "日期",
+        "公告日期",
+        "新闻时间",
+        "发布时间",
+        "公告时间",
+        "time",
+    ):
+        if key in record:
+            return _normalize_date_text(record.get(key))
+    return None
+
+
+def _normalize_date_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        return text[:10]
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return None
+
+
+def _raw_object_meta(
+    source_object: dict[str, Any],
+    payload: dict[str, Any],
+    row_count: int,
+) -> dict[str, Any]:
+    return {
+        "object_id": source_object.get("object_id"),
+        "dataset": source_object.get("dataset"),
+        "source_id": source_object.get("source_id"),
+        "function": payload.get("function"),
+        "params": payload.get("params") or {},
+        "error": payload.get("error"),
+        "row_count": row_count,
+        "uri": source_object.get("uri"),
+        "created_at": source_object.get("created_at"),
+        "observed_at": source_object.get("observed_at"),
+        "size_bytes": source_object.get("size_bytes"),
+    }
+
+
+def _raw_preview_summary(sections: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "dataset_count": len(sections),
+        "object_count": sum(len(section.get("objects") or []) for section in sections),
+        "row_count": sum(int(section.get("row_count") or 0) for section in sections),
+        "datasets": [section.get("dataset") for section in sections],
+    }
+
+
 def _empty_dataset_preview(dataset: str) -> dict[str, Any]:
     return {
         "status": "ok",
@@ -1852,6 +2457,40 @@ def _default_instrument_identity(instrument: str) -> dict[str, Any]:
         "universes": [],
         "stock_basic_present": False,
         "universe_constituent_present": False,
+    }
+
+
+def _dimension_status(
+    *,
+    observed: int | float,
+    expected: int | None,
+    unit: str,
+    event_count: float | None = None,
+    event_unit: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    observed_number = float(observed or 0)
+    observed_value: int | float = (
+        int(observed_number) if observed_number.is_integer() else observed_number
+    )
+    if expected is None:
+        status = "observed" if observed_number > 0 else "empty"
+        complete = None
+        missing = None
+    else:
+        missing = max(int(expected) - int(observed_number), 0)
+        complete = missing == 0
+        status = "complete" if complete else "missing"
+    return {
+        "status": status,
+        "observed": observed_value,
+        "expected": expected,
+        "missing": missing,
+        "complete": complete,
+        "unit": unit,
+        "event_count": event_count,
+        "event_unit": event_unit,
+        "note": note,
     }
 
 

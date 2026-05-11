@@ -176,6 +176,10 @@ select {
   background: var(--surface);
 }
 
+#preview-instrument {
+  min-width: 260px;
+}
+
 .error-banner {
   margin-bottom: 16px;
   padding: 10px 12px;
