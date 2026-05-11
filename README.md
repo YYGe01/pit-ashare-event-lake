@@ -76,7 +76,7 @@ qdc classify-text-event --provider llm --document-type announcement --title "公
 
 长时间回补时，`qdc recover-running` 可把陈旧的运行中 `running` 任务标记为失败 `failed` 以便后续重试；`qdc split-backfill` 可把一个大的上游代码 `symbol` 批次任务拆成更小的待执行 `pending` 子任务。
 
-`qdc console` 会启动一个本地只读 Web 控制台，默认访问 `http://127.0.0.1:8765/`。当前轻量版直接读取 DuckDB，展示总览、回补任务、统一研究层 `silver` 数据预览、质量问题、Qlib 导出记录和导出文件索引；页面会用中文解释状态、指标和处理建议，不会触发采集或写库。
+`qdc console` 会启动一个本地只读 Web 控制台，默认访问 `http://127.0.0.1:8765/`。当前轻量版直接读取 DuckDB，展示总览、数据维度覆盖、标的核心完整度、回补任务、统一研究层 `silver` 数据预览、质量问题、Qlib 导出记录和导出文件索引；页面会用中文解释状态、指标和处理建议，不会触发采集或写库。
 
 `qdc` 默认读取仓库内 `config/quant_data_center.yaml`；需要从其他目录运行或切换配置时，可设置 `QDC_CONFIG` 或传入 `--config`。
 

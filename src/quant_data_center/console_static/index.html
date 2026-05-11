@@ -56,6 +56,28 @@
           <section class="panel">
             <div class="panel-header">
               <div>
+                <h2>数据维度覆盖</h2>
+                <p class="panel-subtitle">按数据集统计已采集来源、日期范围、覆盖标的数和核心日频缺失量。</p>
+              </div>
+            </div>
+            <div id="coverage-summary" class="coverage-grid"></div>
+            <div id="dataset-coverage-table"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>标的核心完整度</h2>
+                <p class="panel-subtitle">按标的检查日线行情、复权因子、涨跌停价格三个核心维度是否覆盖所有参考交易日。</p>
+              </div>
+            </div>
+            <div id="instrument-coverage-summary" class="coverage-grid"></div>
+            <div id="instrument-coverage-table"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
                 <h2>采集进度</h2>
                 <p class="panel-subtitle">每张卡表示一个数据集在某个来源和股票池下的回补批次总进度。</p>
               </div>

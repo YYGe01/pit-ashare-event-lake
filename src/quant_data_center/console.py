@@ -28,6 +28,20 @@ STATIC_ROOT = Path(__file__).with_name("console_static")
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 500
 STALE_RUNNING_MINUTES = 15
+COVERAGE_INSTRUMENT_LIMIT = 500
+REQUIRED_DAILY_COVERAGE_DATASETS = ("daily_bar", "adj_factor", "price_limit")
+INSTRUMENT_COVERAGE_DATASETS = (
+    "stock_basic",
+    "universe_constituent",
+    "daily_bar",
+    "adj_factor",
+    "price_limit",
+    "trade_status",
+    "announcement",
+    "news",
+    "daily_news_factor",
+    "daily_announcement_factor",
+)
 
 
 class QdcConsoleData:
@@ -75,6 +89,7 @@ class QdcConsoleData:
                 "backfill_progress": self._backfill_progress(conn, control_tables),
                 "watermarks": self._watermarks(conn, control_tables),
                 "latest_qlib_exports": self._qlib_exports(conn, control_tables, limit=5),
+                "data_coverage": self._data_coverage(conn, silver_tables),
             }
 
     def backfill_tasks(
@@ -248,6 +263,7 @@ class QdcConsoleData:
             "backfill_progress": [],
             "watermarks": [],
             "latest_qlib_exports": [],
+            "data_coverage": _empty_data_coverage(),
         }
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
@@ -525,6 +541,425 @@ class QdcConsoleData:
             [*params, limit],
         )
 
+    def _data_coverage(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        silver_tables: set[str],
+    ) -> dict[str, Any]:
+        reference = self._coverage_reference(conn, silver_tables)
+        dataset_rows = [
+            self._dataset_coverage_row(
+                conn,
+                table=table,
+                silver_tables=silver_tables,
+                reference=reference,
+            )
+            for table in SILVER_TABLES
+        ]
+        instrument_coverage = self._instrument_coverage(conn, silver_tables, reference)
+        return {
+            "status": "ok",
+            "reference": _public_coverage_reference(reference),
+            "required_dimensions": list(REQUIRED_DAILY_COVERAGE_DATASETS),
+            "dataset_rows": dataset_rows,
+            "instrument_summary": instrument_coverage["summary"],
+            "instrument_rows": instrument_coverage["rows"],
+            "hidden_instrument_count": instrument_coverage["hidden_count"],
+        }
+
+    def _coverage_reference(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        silver_tables: set[str],
+    ) -> dict[str, Any]:
+        instruments, instrument_source = self._reference_instruments(conn, silver_tables)
+        trade_dates, trade_date_source = self._reference_trade_dates(conn, silver_tables)
+        return {
+            "instrument_source": instrument_source,
+            "trade_date_source": trade_date_source,
+            "instrument_count": len(instruments),
+            "trade_date_count": len(trade_dates),
+            "min_trade_date": trade_dates[0] if trade_dates else None,
+            "max_trade_date": trade_dates[-1] if trade_dates else None,
+            "instruments": instruments,
+            "trade_dates": trade_dates,
+        }
+
+    def _reference_instruments(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        silver_tables: set[str],
+    ) -> tuple[list[str], str]:
+        if "universe_constituent" in silver_tables:
+            rows = conn.execute(
+                f"""
+                with latest as (
+                  select universe, max(snapshot_date) as snapshot_date
+                  from {SILVER_SCHEMA}.universe_constituent
+                  group by universe
+                )
+                select distinct c.instrument
+                from {SILVER_SCHEMA}.universe_constituent c
+                join latest l
+                  on c.universe = l.universe
+                 and c.snapshot_date = l.snapshot_date
+                order by c.instrument
+                """
+            ).fetchall()
+            instruments = [str(row[0]) for row in rows]
+            if instruments:
+                return instruments, "universe_constituent"
+
+        configured = sorted(
+            {
+                instrument
+                for symbols in self.settings.universes.values()
+                for instrument in symbols
+                if instrument
+            }
+        )
+        if configured:
+            return configured, "config.universes"
+
+        instruments: set[str] = set()
+        for table in INSTRUMENT_COVERAGE_DATASETS:
+            if table not in silver_tables:
+                continue
+            columns = self._columns(conn, SILVER_SCHEMA, table)
+            if "instrument" not in columns:
+                continue
+            rows = conn.execute(
+                f"""
+                select distinct instrument
+                from {SILVER_SCHEMA}.{table}
+                order by instrument
+                """
+            ).fetchall()
+            instruments.update(str(row[0]) for row in rows)
+        return sorted(instruments), "silver.instrument_union"
+
+    def _reference_trade_dates(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        silver_tables: set[str],
+    ) -> tuple[list[Any], str]:
+        if "trade_calendar" in silver_tables:
+            rows = conn.execute(
+                f"""
+                select trade_date
+                from {SILVER_SCHEMA}.trade_calendar
+                where is_open = true
+                order by trade_date
+                """
+            ).fetchall()
+            trade_dates = [row[0] for row in rows]
+            if trade_dates:
+                return trade_dates, "trade_calendar"
+
+        dates: set[Any] = set()
+        for table in REQUIRED_DAILY_COVERAGE_DATASETS:
+            if table not in silver_tables:
+                continue
+            rows = conn.execute(
+                f"""
+                select distinct trade_date
+                from {SILVER_SCHEMA}.{table}
+                order by trade_date
+                """
+            ).fetchall()
+            dates.update(row[0] for row in rows)
+        return sorted(dates), "required_daily_union"
+
+    def _dataset_coverage_row(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        table: str,
+        silver_tables: set[str],
+        reference: dict[str, Any],
+    ) -> dict[str, Any]:
+        if table not in silver_tables:
+            return _empty_dataset_coverage_row(table, "missing_table")
+
+        columns = self._columns(conn, SILVER_SCHEMA, table)
+        date_column = _preferred_date_column(columns)
+        row_count = int(
+            conn.execute(f"select count(*) from {SILVER_SCHEMA}.{table}").fetchone()[0]
+        )
+        sources = self._dataset_sources(conn, table, columns)
+        date_stats = self._dataset_date_stats(conn, table, date_column)
+        instrument_stats = self._dataset_instrument_stats(conn, table, columns, reference)
+        expected = self._dataset_expected_stats(
+            conn,
+            table=table,
+            columns=columns,
+            reference=reference,
+        )
+        return {
+            "dataset": table,
+            "coverage_kind": _coverage_kind(table),
+            "row_count": row_count,
+            "source_ids": sources,
+            **date_stats,
+            **instrument_stats,
+            **expected,
+        }
+
+    def _dataset_sources(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        table: str,
+        columns: list[str],
+    ) -> list[dict[str, Any]]:
+        if "source_id" not in columns:
+            return []
+        return _query_dicts(
+            conn,
+            f"""
+            select source_id, count(*) as row_count
+            from {SILVER_SCHEMA}.{table}
+            group by source_id
+            order by row_count desc, source_id
+            limit 8
+            """,
+        )
+
+    def _dataset_date_stats(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        table: str,
+        date_column: str | None,
+    ) -> dict[str, Any]:
+        if not date_column:
+            return {
+                "date_column": None,
+                "min_date": None,
+                "max_date": None,
+                "date_count": None,
+            }
+        row = conn.execute(
+            f"""
+            select min({date_column}), max({date_column}), count(distinct {date_column})
+            from {SILVER_SCHEMA}.{table}
+            """
+        ).fetchone()
+        return {
+            "date_column": date_column,
+            "min_date": row[0],
+            "max_date": row[1],
+            "date_count": int(row[2] or 0),
+        }
+
+    def _dataset_instrument_stats(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        table: str,
+        columns: list[str],
+        reference: dict[str, Any],
+    ) -> dict[str, Any]:
+        reference_instruments = set(reference["instruments"])
+        if "instrument" not in columns:
+            return {
+                "instrument_count": None,
+                "reference_instrument_count": len(reference_instruments),
+                "instruments_with_rows": None,
+                "instruments_missing": None,
+                "instrument_coverage_percent": None,
+            }
+        rows = conn.execute(
+            f"""
+            select distinct instrument
+            from {SILVER_SCHEMA}.{table}
+            order by instrument
+            """
+        ).fetchall()
+        instruments = {str(row[0]) for row in rows}
+        with_rows = len(reference_instruments & instruments) if reference_instruments else len(instruments)
+        missing = max(len(reference_instruments) - with_rows, 0)
+        percent = _percent(with_rows, len(reference_instruments)) if reference_instruments else None
+        return {
+            "instrument_count": len(instruments),
+            "reference_instrument_count": len(reference_instruments),
+            "instruments_with_rows": with_rows,
+            "instruments_missing": missing,
+            "instrument_coverage_percent": percent,
+        }
+
+    def _dataset_expected_stats(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        table: str,
+        columns: list[str],
+        reference: dict[str, Any],
+    ) -> dict[str, Any]:
+        reference_instruments = reference["instruments"]
+        trade_dates = reference["trade_dates"]
+        if (
+            table not in REQUIRED_DAILY_COVERAGE_DATASETS
+            or "instrument" not in columns
+            or "trade_date" not in columns
+            or not reference_instruments
+            or not trade_dates
+        ):
+            return {
+                "expected_daily_rows": None,
+                "present_daily_rows": None,
+                "missing_daily_rows": None,
+                "daily_coverage_percent": None,
+            }
+        expected_rows = len(reference_instruments) * len(trade_dates)
+        present_rows = self._count_distinct_daily_rows(
+            conn,
+            table=table,
+            instruments=reference_instruments,
+            min_date=trade_dates[0],
+            max_date=trade_dates[-1],
+        )
+        present_rows = min(present_rows, expected_rows)
+        return {
+            "expected_daily_rows": expected_rows,
+            "present_daily_rows": present_rows,
+            "missing_daily_rows": max(expected_rows - present_rows, 0),
+            "daily_coverage_percent": _percent(present_rows, expected_rows),
+        }
+
+    def _instrument_coverage(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        silver_tables: set[str],
+        reference: dict[str, Any],
+    ) -> dict[str, Any]:
+        instruments = reference["instruments"]
+        trade_dates = reference["trade_dates"]
+        expected_date_count = len(trade_dates)
+        if not instruments or not trade_dates:
+            return {
+                "summary": {
+                    "total_instruments": len(instruments),
+                    "expected_trade_dates": expected_date_count,
+                    "complete_instruments": 0,
+                    "missing_instruments": len(instruments),
+                    "complete_percent": 0,
+                    "missing_by_dimension": {
+                        dataset: len(instruments)
+                        for dataset in REQUIRED_DAILY_COVERAGE_DATASETS
+                    },
+                },
+                "rows": [],
+                "hidden_count": 0,
+            }
+
+        counts_by_dataset = {
+            dataset: self._instrument_daily_counts(
+                conn,
+                table=dataset,
+                silver_tables=silver_tables,
+                min_date=trade_dates[0],
+                max_date=trade_dates[-1],
+            )
+            for dataset in REQUIRED_DAILY_COVERAGE_DATASETS
+        }
+        missing_by_dimension = {dataset: 0 for dataset in REQUIRED_DAILY_COVERAGE_DATASETS}
+        rows = []
+        complete_count = 0
+        for instrument in instruments:
+            dimension_counts = {
+                dataset: min(int(counts.get(instrument, 0)), expected_date_count)
+                for dataset, counts in counts_by_dataset.items()
+            }
+            missing_dimensions = [
+                dataset
+                for dataset, count in dimension_counts.items()
+                if count < expected_date_count
+            ]
+            for dataset in missing_dimensions:
+                missing_by_dimension[dataset] += 1
+            complete = not missing_dimensions
+            complete_count += 1 if complete else 0
+            rows.append(
+                {
+                    "instrument": instrument,
+                    "complete": complete,
+                    "missing_dimensions": missing_dimensions,
+                    "dimension_counts": dimension_counts,
+                    "expected_trade_dates": expected_date_count,
+                }
+            )
+
+        rows.sort(
+            key=lambda row: (
+                row["complete"],
+                -len(row["missing_dimensions"]),
+                row["instrument"],
+            )
+        )
+        visible_rows = rows[:COVERAGE_INSTRUMENT_LIMIT]
+        return {
+            "summary": {
+                "total_instruments": len(instruments),
+                "expected_trade_dates": expected_date_count,
+                "complete_instruments": complete_count,
+                "missing_instruments": len(instruments) - complete_count,
+                "complete_percent": _percent(complete_count, len(instruments)),
+                "missing_by_dimension": missing_by_dimension,
+            },
+            "rows": visible_rows,
+            "hidden_count": max(len(rows) - len(visible_rows), 0),
+        }
+
+    def _instrument_daily_counts(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        table: str,
+        silver_tables: set[str],
+        min_date: Any,
+        max_date: Any,
+    ) -> dict[str, int]:
+        if table not in silver_tables:
+            return {}
+        rows = conn.execute(
+            f"""
+            select instrument, count(distinct trade_date) as date_count
+            from {SILVER_SCHEMA}.{table}
+            where trade_date between ? and ?
+            group by instrument
+            order by instrument
+            """,
+            [min_date, max_date],
+        ).fetchall()
+        return {str(instrument): int(date_count) for instrument, date_count in rows}
+
+    def _count_distinct_daily_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        table: str,
+        instruments: list[str],
+        min_date: Any,
+        max_date: Any,
+    ) -> int:
+        instrument_filter = ""
+        params: list[Any] = [min_date, max_date]
+        if instruments:
+            placeholders = ", ".join("?" for _ in instruments)
+            instrument_filter = f"and instrument in ({placeholders})"
+            params.extend(instruments)
+        value = conn.execute(
+            f"""
+            select count(*)
+            from (
+              select distinct trade_date, instrument
+              from {SILVER_SCHEMA}.{table}
+              where trade_date between ? and ?
+                {instrument_filter}
+            ) daily_rows
+            """,
+            params,
+        ).fetchone()[0]
+        return int(value or 0)
+
     def _columns(
         self,
         conn: duckdb.DuckDBPyConnection,
@@ -747,6 +1182,85 @@ def _clamp_limit(value: int | None, *, default: int = DEFAULT_LIMIT) -> int:
     if value is None or value <= 0:
         return default
     return min(value, MAX_LIMIT)
+
+
+def _empty_data_coverage() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "reference": {
+            "instrument_source": "none",
+            "trade_date_source": "none",
+            "instrument_count": 0,
+            "trade_date_count": 0,
+            "min_trade_date": None,
+            "max_trade_date": None,
+        },
+        "required_dimensions": list(REQUIRED_DAILY_COVERAGE_DATASETS),
+        "dataset_rows": [
+            _empty_dataset_coverage_row(table, "missing_database") for table in SILVER_TABLES
+        ],
+        "instrument_summary": {
+            "total_instruments": 0,
+            "expected_trade_dates": 0,
+            "complete_instruments": 0,
+            "missing_instruments": 0,
+            "complete_percent": 0,
+            "missing_by_dimension": {
+                dataset: 0 for dataset in REQUIRED_DAILY_COVERAGE_DATASETS
+            },
+        },
+        "instrument_rows": [],
+        "hidden_instrument_count": 0,
+    }
+
+
+def _empty_dataset_coverage_row(dataset: str, coverage_kind: str) -> dict[str, Any]:
+    return {
+        "dataset": dataset,
+        "coverage_kind": coverage_kind,
+        "row_count": 0,
+        "source_ids": [],
+        "date_column": None,
+        "min_date": None,
+        "max_date": None,
+        "date_count": None,
+        "instrument_count": None,
+        "reference_instrument_count": 0,
+        "instruments_with_rows": None,
+        "instruments_missing": None,
+        "instrument_coverage_percent": None,
+        "expected_daily_rows": None,
+        "present_daily_rows": None,
+        "missing_daily_rows": None,
+        "daily_coverage_percent": None,
+    }
+
+
+def _public_coverage_reference(reference: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "instrument_source": reference["instrument_source"],
+        "trade_date_source": reference["trade_date_source"],
+        "instrument_count": reference["instrument_count"],
+        "trade_date_count": reference["trade_date_count"],
+        "min_trade_date": reference["min_trade_date"],
+        "max_trade_date": reference["max_trade_date"],
+    }
+
+
+def _coverage_kind(dataset: str) -> str:
+    if dataset in REQUIRED_DAILY_COVERAGE_DATASETS:
+        return "required_daily"
+    if dataset in {"trade_status", "announcement", "news"}:
+        return "sparse_source"
+    if dataset in {"daily_news_factor", "daily_announcement_factor"}:
+        return "sparse_factor"
+    return "metadata"
+
+
+def _percent(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0
+    return round((numerator / denominator) * 100, 2)
 
 
 def _now_for_console_minutes_ago(minutes: int) -> str:

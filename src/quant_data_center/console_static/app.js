@@ -96,6 +96,15 @@ const statusDescriptions = {
   closed: "问题已经关闭，只作历史记录。",
 };
 
+const coverageKindLabels = {
+  required_daily: "核心日频维度",
+  sparse_source: "事件明细维度",
+  sparse_factor: "事件因子维度",
+  metadata: "基础资料维度",
+  missing_table: "表未创建",
+  missing_database: "数据库未初始化",
+};
+
 const layerLabels = {
   raw: "原始留档层",
   bronze: "上游快照层",
@@ -177,6 +186,16 @@ const fieldLabels = {
   announcement_count: "公告数量",
   news_sentiment_mean: "新闻情绪均值",
   announcement_sentiment_mean: "公告情绪均值",
+  row_count: "行数",
+  source_ids: "数据源",
+  min_date: "最早日期",
+  max_date: "最晚日期",
+  date_count: "日期数",
+  instruments_with_rows: "有数据标的",
+  instruments_missing: "缺失标的",
+  missing_daily_rows: "缺失日频行",
+  daily_coverage_percent: "日频覆盖率",
+  coverage_kind: "维度类型",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -252,6 +271,11 @@ function tokenLabel(value) {
     return `${datasetLabels[key]} (${key})`;
   }
   return key;
+}
+
+function coverageKindLabel(value) {
+  const key = String(value ?? "").trim();
+  return coverageKindLabels[key] || key || "-";
 }
 
 function statusDescription(value) {
@@ -432,6 +456,7 @@ function renderOverview(payload) {
   ].join("");
 
   renderProgress(progressRows);
+  renderDataCoverage(payload.data_coverage || {});
   renderWatermarks(payload.watermarks || []);
   renderRecentJobs(payload.latest_job_runs || []);
   renderQlibJobs(payload.latest_qlib_exports || []);
@@ -533,6 +558,157 @@ function statusBars(label, counts) {
       ${rows}
     </div>
   `;
+}
+
+function renderDataCoverage(coverage) {
+  const reference = coverage.reference || {};
+  const instrumentSummary = coverage.instrument_summary || {};
+  const datasetRows = coverage.dataset_rows || [];
+  const instrumentRows = coverage.instrument_rows || [];
+  const requiredDimensions = coverage.required_dimensions || [];
+  const referenceRange = [reference.min_trade_date, reference.max_trade_date]
+    .filter(Boolean)
+    .join(" - ");
+
+  $("coverage-summary").innerHTML = [
+    coverageCard(
+      "参考标的",
+      number(reference.instrument_count || 0),
+      `来源：${reference.instrument_source || "none"}`,
+    ),
+    coverageCard(
+      "参考交易日",
+      number(reference.trade_date_count || 0),
+      referenceRange || `来源：${reference.trade_date_source || "none"}`,
+    ),
+    coverageCard(
+      "核心完整标的",
+      `${number(instrumentSummary.complete_instruments || 0)} / ${number(instrumentSummary.total_instruments || 0)}`,
+      `完整率 ${number(instrumentSummary.complete_percent || 0)}%`,
+    ),
+    coverageCard(
+      "核心缺失标的",
+      number(instrumentSummary.missing_instruments || 0),
+      missingByDimensionText(instrumentSummary.missing_by_dimension || {}),
+    ),
+  ].join("");
+
+  $("dataset-coverage-table").innerHTML = tableSummary(
+    "核心日频维度会统计缺失日频行；新闻、公告、停牌状态等稀疏维度只统计有记录的标的和日期，不把没有事件直接判成缺失。",
+  ) + table(
+    [
+      { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel },
+      { key: "coverage_kind", label: fieldLabel("coverage_kind"), format: coverageKindLabel },
+      { key: "source_ids", label: fieldLabel("source_ids"), format: sourceSummary },
+      { key: "row_count", label: fieldLabel("row_count") },
+      { key: "min_date", label: "日期范围", value: dateRangeValue },
+      { key: "date_count", label: fieldLabel("date_count") },
+      { key: "instruments_with_rows", label: "标的覆盖", value: instrumentCoverageValue },
+      { key: "missing_daily_rows", label: "核心日频缺失", value: dailyMissingValue },
+    ],
+    datasetRows,
+    "暂无数据维度覆盖信息。",
+  );
+
+  const hidden = Number(coverage.hidden_instrument_count || 0);
+  $("instrument-coverage-summary").innerHTML = requiredDimensions.map((dataset) => {
+    const missing = instrumentSummary.missing_by_dimension?.[dataset] || 0;
+    const complete = Math.max(Number(instrumentSummary.total_instruments || 0) - missing, 0);
+    return coverageCard(
+      datasetLabel(dataset),
+      `${number(complete)} 完整`,
+      `缺失 ${number(missing)} 个标的`,
+    );
+  }).join("");
+  $("instrument-coverage-table").innerHTML = tableSummary(
+    hidden
+      ? `下表优先显示缺失最多的标的，另有 ${number(hidden)} 个标的未展示。`
+      : "下表优先显示缺失最多的标的；如果为空，说明当前没有参考标的或交易日。",
+  ) + table(
+    [
+      { key: "instrument", label: fieldLabel("instrument") },
+      { key: "complete", label: "核心状态", format: (value) => value ? "完整" : "缺失" },
+      {
+        key: "missing_dimensions",
+        label: "缺失维度",
+        value: (row) => missingDimensionsValue(row.missing_dimensions),
+      },
+      {
+        key: "dimension_counts",
+        label: "各维度覆盖天数",
+        value: (row) => dimensionCountsValue(row.dimension_counts, row.expected_trade_dates),
+        maxLength: 180,
+      },
+    ],
+    instrumentRows,
+    "暂无标的完整度明细。",
+  );
+}
+
+function coverageCard(label, value, foot) {
+  return `
+    <div class="coverage-card">
+      <div class="coverage-label">${escapeHtml(label)}</div>
+      <div class="coverage-value">${escapeHtml(value)}</div>
+      <div class="coverage-foot">${escapeHtml(foot || "")}</div>
+    </div>
+  `;
+}
+
+function sourceSummary(sources) {
+  if (!Array.isArray(sources) || !sources.length) {
+    return "-";
+  }
+  return sources
+    .map((source) => `${sourceLabel(source.source_id)} ${number(source.row_count)}`)
+    .join("；");
+}
+
+function dateRangeValue(row) {
+  const range = [row.min_date, row.max_date].filter(Boolean).join(" - ");
+  return range || "-";
+}
+
+function instrumentCoverageValue(row) {
+  if (row.instruments_with_rows === null || row.instruments_with_rows === undefined) {
+    return "-";
+  }
+  const total = row.reference_instrument_count || 0;
+  const missing = row.instruments_missing || 0;
+  return `${number(row.instruments_with_rows)} / ${number(total)}，缺失 ${number(missing)}`;
+}
+
+function dailyMissingValue(row) {
+  if (row.missing_daily_rows === null || row.missing_daily_rows === undefined) {
+    return "不按交易日判定";
+  }
+  return `${number(row.missing_daily_rows)} / ${number(row.expected_daily_rows)}，覆盖 ${number(row.daily_coverage_percent)}%`;
+}
+
+function missingByDimensionText(missingByDimension) {
+  const entries = Object.entries(missingByDimension || {});
+  if (!entries.length) {
+    return "暂无核心维度统计";
+  }
+  return entries
+    .map(([dataset, count]) => `${datasetLabel(dataset)} 缺 ${number(count)}`)
+    .join("；");
+}
+
+function missingDimensionsValue(dimensions) {
+  if (!Array.isArray(dimensions) || !dimensions.length) {
+    return "无";
+  }
+  return dimensions.map(datasetLabel).join("；");
+}
+
+function dimensionCountsValue(counts, expectedTradeDates) {
+  if (!counts || !expectedTradeDates) {
+    return "-";
+  }
+  return Object.entries(counts)
+    .map(([dataset, count]) => `${datasetLabel(dataset)} ${number(count)}/${number(expectedTradeDates)}`)
+    .join("；");
 }
 
 function renderWatermarks(rows) {

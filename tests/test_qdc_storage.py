@@ -353,6 +353,125 @@ def test_qdc_console_overview_reads_collection_state(tmp_path: Path) -> None:
     assert overview["backfill_progress"][0]["state"] == "pending"
 
 
+def test_qdc_console_overview_reports_data_coverage(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    silver = SilverStore(settings)
+    silver.upsert_trade_calendar(
+        [
+            {
+                "calendar_id": "XSHG",
+                "trade_date": "2026-05-11",
+                "is_open": True,
+                "source_id": "unit_test",
+            },
+            {
+                "calendar_id": "XSHG",
+                "trade_date": "2026-05-12",
+                "is_open": True,
+                "source_id": "unit_test",
+            },
+        ]
+    )
+    silver.upsert_daily_bar(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SH600000",
+                "close": 10.2,
+                "source_id": "unit_test",
+            },
+            {
+                "trade_date": "2026-05-12",
+                "instrument": "SH600000",
+                "close": 10.4,
+                "source_id": "unit_test",
+            },
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SZ000001",
+                "close": 9.2,
+                "source_id": "unit_test",
+            },
+            {
+                "trade_date": "2026-05-12",
+                "instrument": "SZ000001",
+                "close": 9.4,
+                "source_id": "unit_test",
+            },
+        ]
+    )
+    silver.upsert_adj_factor(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SH600000",
+                "adj_factor": 1.0,
+                "source_id": "unit_test",
+            },
+            {
+                "trade_date": "2026-05-12",
+                "instrument": "SH600000",
+                "adj_factor": 1.0,
+                "source_id": "unit_test",
+            },
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SZ000001",
+                "adj_factor": 1.0,
+                "source_id": "unit_test",
+            },
+        ]
+    )
+    silver.upsert_price_limit(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SH600000",
+                "limit_up": 11.0,
+                "limit_down": 9.0,
+                "source_id": "unit_test",
+            },
+            {
+                "trade_date": "2026-05-12",
+                "instrument": "SH600000",
+                "limit_up": 11.2,
+                "limit_down": 9.2,
+                "source_id": "unit_test",
+            },
+        ]
+    )
+
+    coverage = QdcConsoleData(settings).overview()["data_coverage"]
+
+    assert coverage["reference"]["instrument_count"] == 3
+    assert coverage["reference"]["trade_date_count"] == 2
+    dataset_rows = {row["dataset"]: row for row in coverage["dataset_rows"]}
+    assert dataset_rows["daily_bar"]["missing_daily_rows"] == 2
+    assert dataset_rows["adj_factor"]["missing_daily_rows"] == 3
+    assert dataset_rows["price_limit"]["missing_daily_rows"] == 4
+    assert dataset_rows["daily_bar"]["instruments_with_rows"] == 2
+    assert dataset_rows["daily_bar"]["instruments_missing"] == 1
+    summary = coverage["instrument_summary"]
+    assert summary["complete_instruments"] == 1
+    assert summary["missing_instruments"] == 2
+    assert summary["missing_by_dimension"] == {
+        "daily_bar": 1,
+        "adj_factor": 2,
+        "price_limit": 2,
+    }
+    rows = {row["instrument"]: row for row in coverage["instrument_rows"]}
+    assert rows["SH600000"]["complete"] is True
+    assert rows["SZ000001"]["missing_dimensions"] == ["adj_factor", "price_limit"]
+    assert rows["SZ300750"]["missing_dimensions"] == [
+        "daily_bar",
+        "adj_factor",
+        "price_limit",
+    ]
+
+
 def test_qdc_console_dataset_preview_filters_silver_rows(tmp_path: Path) -> None:
     config_path, _database = _seed_research_rows(tmp_path)
     settings = QdcSettings.from_yaml(config_path)

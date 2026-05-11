@@ -229,14 +229,16 @@ select {
 }
 
 .guide-grid,
-.health-grid {
+.health-grid,
+.coverage-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
 .guide-card,
-.health-card {
+.health-card,
+.coverage-card {
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--border-soft);
@@ -286,6 +288,35 @@ select {
   font-size: 18px;
   font-weight: 700;
   line-height: 1.2;
+}
+
+.coverage-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.coverage-card {
+  display: grid;
+  gap: 6px;
+}
+
+.coverage-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.coverage-value {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.coverage-foot {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .kpi-card,
@@ -683,7 +714,8 @@ select {
   .progress-list,
   .guide-panel,
   .guide-grid,
-  .health-grid {
+  .health-grid,
+  .coverage-grid {
     grid-template-columns: 1fr 1fr;
   }
 }
@@ -711,6 +743,7 @@ select {
   .guide-panel,
   .guide-grid,
   .health-grid,
+  .coverage-grid,
   .progress-facts {
     grid-template-columns: 1fr;
   }
