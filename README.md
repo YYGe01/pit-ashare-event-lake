@@ -42,20 +42,20 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 
 当前真实 AkShare 回补已支持：
 
-- `stock_basic`
-- `trade_calendar`
-- `daily_bar`
-- `adj_factor`
-- `price_limit`
-- `trade_status`
-- `announcement`
-- `news`
+- 证券主数据 `stock_basic`
+- 交易日历 `trade_calendar`
+- 日线行情 `daily_bar`
+- 复权因子 `adj_factor`
+- 涨跌停价格 `price_limit`
+- 交易状态 `trade_status`
+- 公告 `announcement`
+- 新闻 `news`
 
-`daily_bar`、`adj_factor`、`price_limit`、`news` 可用 `--universe` 展开 symbol，也可以显式传入 `--symbols` 覆盖。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
+日线行情 `daily_bar`、复权因子 `adj_factor`、涨跌停价格 `price_limit`、新闻 `news` 可用 `--universe` 展开上游代码 `symbol`，也可以显式传入 `--symbols` 覆盖。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
 
 当前回补链路会写入原始 JSON、上游快照 Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 默认用规则引擎生成新闻/公告日频 count、标题级情绪和事件因子，覆盖增长、风险、融资、合同、回购、股东增减持、监管、诉讼、业绩、质押和担保等事件；`qdc sync-parquet` 可同步统一研究层/研究宽表层 Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day 数据目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的数据目录做数据读取层冒烟验证。
 
-LLM 抽取接口已预留为单条 smoke 命令，不参与 `build-factors` 全量构建。模型切换和 provider 默认值统一放在 `config/quant_data_center.yaml` 的 `llm.text_event` 段：
+LLM 抽取接口已预留为单条冒烟验证 `smoke` 命令，不参与 `build-factors` 全量构建。模型切换和数据提供方 `provider` 默认值统一放在 `config/quant_data_center.yaml` 的 `llm.text_event` 段：
 
 ```yaml
 llm:
@@ -74,9 +74,9 @@ llm:
 qdc classify-text-event --provider llm --document-type announcement --title "公司拟回购股份"
 ```
 
-长时间回补时，`qdc recover-running` 可把陈旧的 `running` 任务标记为 `failed` 以便后续重试；`qdc split-backfill` 可把一个大 symbol 批次任务拆成更小的 pending 子任务。
+长时间回补时，`qdc recover-running` 可把陈旧的运行中 `running` 任务标记为失败 `failed` 以便后续重试；`qdc split-backfill` 可把一个大的上游代码 `symbol` 批次任务拆成更小的待执行 `pending` 子任务。
 
-`qdc console` 会启动一个本地只读 Web 控制台，默认访问 `http://127.0.0.1:8765/`。当前轻量版直接读取 DuckDB，展示总览、回补任务、silver 数据预览、质量问题、Qlib 导出记录和导出文件索引，不会触发采集或写库。
+`qdc console` 会启动一个本地只读 Web 控制台，默认访问 `http://127.0.0.1:8765/`。当前轻量版直接读取 DuckDB，展示总览、回补任务、统一研究层 `silver` 数据预览、质量问题、Qlib 导出记录和导出文件索引，不会触发采集或写库。
 
 `qdc` 默认读取仓库内 `config/quant_data_center.yaml`；需要从其他目录运行或切换配置时，可设置 `QDC_CONFIG` 或传入 `--config`。
 
@@ -103,7 +103,7 @@ data/quant_data_center/             本地运行数据，已 gitignored
 conda run -n ai-trader python -m pip install -e /root/code/qlib -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://mirrors.aliyun.com/pypi/simple
 ```
 
-当前已用本地 `/root/code/qlib` 验证 `D.calendar`、`D.list_instruments` 和 `D.features` 能读取 `qdc export-qlib` 产物。导出字段包含 Alpha158 默认需要的 `$vwap`，并包含 `$news_count`、`$news_sentiment_mean`、`$news_risk_count`、`$announcement_financing_count` 等 QDC 外部日频因子；`--market-name` 可写出 Qlib 命名 market 文件。`config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml` 可用当前 provider 跑通 LightGBM Alpha158 qrun smoke；`config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml` 使用当前仓库的 `QdcAlpha158WithExternal` handler 追加 QDC 外部因子。正式评估仍需要完整 universe 和稳定 train/valid/test 切分。
+当前已用本地 `/root/code/qlib` 验证交易日历读取 `D.calendar`、标的列表读取 `D.list_instruments` 和特征读取 `D.features` 能读取 `qdc export-qlib` 产物。导出字段包含 Alpha158 默认需要的成交均价 `$vwap`，并包含新闻数量 `$news_count`、新闻情绪均值 `$news_sentiment_mean`、风险类新闻数量 `$news_risk_count`、融资类公告数量 `$announcement_financing_count` 等 QDC 外部日频因子；`--market-name` 可写出 Qlib 命名市场 `market` 文件。`config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml` 可用当前 Qlib 数据目录 `provider` 跑通 LightGBM Alpha158 qrun 冒烟验证 `smoke`；`config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml` 使用当前仓库的 `QdcAlpha158WithExternal` 处理器 `handler` 追加 QDC 外部因子。正式评估仍需要完整股票池 `universe` 和稳定训练/验证/测试 `train/valid/test` 切分。
 
 ## 验证
 
