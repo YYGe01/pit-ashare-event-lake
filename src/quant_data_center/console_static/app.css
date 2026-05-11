@@ -190,7 +190,7 @@ select {
 }
 
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 .page-section {
@@ -440,6 +440,130 @@ select {
   padding: 16px;
 }
 
+#coverage-preview-mode {
+  display: grid;
+  gap: 16px;
+}
+
+#coverage-preview-mode.hidden {
+  display: none;
+}
+
+.factor-category-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.factor-category-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.factor-category-title {
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.factor-category-card p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.factor-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.factor-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: #334155;
+  background: var(--surface);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface);
+}
+
+.pagination-bar .btn:disabled {
+  color: #a8b1c2;
+  background: #f3f4f6;
+  cursor: not-allowed;
+}
+
+.pagination-info {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.document-details {
+  min-width: 220px;
+}
+
+.document-details summary {
+  color: var(--primary);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.document-detail-list {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  min-width: 360px;
+  margin-top: 8px;
+  overflow: auto;
+  white-space: normal;
+}
+
+.document-detail-item {
+  padding: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.document-detail-title {
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.document-detail-title a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.document-detail-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .subsection-title {
   margin-bottom: 8px;
   font-size: 13px;
@@ -456,6 +580,10 @@ select {
 
 .table-wrap {
   overflow: auto;
+}
+
+.client-page-hidden {
+  display: none;
 }
 
 .data-table {
@@ -761,7 +889,8 @@ select {
   .guide-panel,
   .guide-grid,
   .health-grid,
-  .coverage-grid {
+  .coverage-grid,
+  .factor-category-grid {
     grid-template-columns: 1fr 1fr;
   }
 }
@@ -790,6 +919,7 @@ select {
   .guide-grid,
   .health-grid,
   .coverage-grid,
+  .factor-category-grid,
   .progress-facts {
     grid-template-columns: 1fr;
   }

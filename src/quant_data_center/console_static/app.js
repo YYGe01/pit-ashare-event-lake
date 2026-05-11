@@ -23,6 +23,8 @@ const rawPreviewDatasets = [
   "news",
 ];
 
+const CLIENT_TABLE_PAGE_SIZE = 5;
+
 const pageTitles = {
   dashboard: "总览",
   backfill: "回补任务",
@@ -32,9 +34,9 @@ const pageTitles = {
 };
 
 const pageSummaries = {
-  dashboard: "先判断当前采集是否正常，再查看卡住的数据集和最近运行记录。",
+  dashboard: "先判断当前采集是否正常，再查看卡住的数据集、队列进度和最近运行记录。",
   backfill: "查看历史回补队列，定位哪些日期、标的和数据集还在等待、运行或失败。",
-  dataset: "按标的查看原始采集记录和处理后的日频因子，确认数据从采集到研究层的变化。",
+  dataset: "查看采集源表覆盖、原始日频缺口、单标的原始记录和处理后的日频因子。",
   quality: "集中查看质量问题，优先处理未关闭和高严重级别异常。",
   qlib: "确认研究数据是否已经导出为 Qlib 可读 provider，并检查最近导出结果。",
 };
@@ -108,15 +110,27 @@ const statusDescriptions = {
 };
 
 const coverageKindLabels = {
-  required_daily: "核心日频维度",
-  sparse_source: "事件明细维度",
-  sparse_factor: "事件因子维度",
-  metadata: "基础资料维度",
+  required_daily: "原始日频",
+  sparse_source: "原始事件",
+  sparse_factor: "处理后因子",
+  metadata: "基础资料",
   missing_table: "表未创建",
   missing_database: "数据库未初始化",
 };
 
-const instrumentCoverageDimensions = [
+const overviewSourceDatasets = [
+  "stock_basic",
+  "universe_constituent",
+  "trade_calendar",
+  "daily_bar",
+  "adj_factor",
+  "price_limit",
+  "trade_status",
+  "announcement",
+  "news",
+];
+
+const overviewInstrumentDimensions = [
   "stock_basic",
   "universe_constituent",
   "daily_bar",
@@ -125,8 +139,6 @@ const instrumentCoverageDimensions = [
   "trade_status",
   "news",
   "announcement",
-  "daily_news_factor",
-  "daily_announcement_factor",
 ];
 
 const fixedExpectedInstrumentDimensions = new Set([
@@ -171,9 +183,12 @@ const fieldLabels = {
   error_message: "错误信息",
   function: "上游函数",
   params: "采集参数",
+  parameter_summary: "采集参数",
+  record_count: "原始记录数",
   record_set: "记录集",
   row_index: "原始行号",
   value: "原始值",
+  factor_input: "后续用途",
   symbols: "标的",
   symbol_batch_json: "标的批次",
   attempt: "尝试次数",
@@ -215,14 +230,23 @@ const fieldLabels = {
   pre_trade_date: "上一交易日",
   next_trade_date: "下一交易日",
   publish_date: "发布日期",
+  snapshot_date: "快照日期",
+  list_date: "上市日期",
+  delist_date: "退市日期",
   title: "标题",
   url: "链接",
+  source: "来源",
+  weight: "权重",
   announcement_id: "公告编号",
   news_id: "新闻编号",
   news_count: "新闻数量",
   announcement_count: "公告数量",
   news_sentiment_mean: "新闻情绪均值",
   announcement_sentiment_mean: "公告情绪均值",
+  news_weighted_sentiment_sum: "新闻加权情绪和",
+  news_importance_sum: "新闻重要性和",
+  announcement_weighted_sentiment_sum: "公告加权情绪和",
+  announcement_importance_sum: "公告重要性和",
   news_positive_count: "新闻正面数",
   news_negative_count: "新闻负面数",
   news_growth_count: "新闻增长类",
@@ -267,7 +291,8 @@ const fieldLabels = {
   universes: "股票池",
   stock_basic_present: "证券主数据",
   universe_constituent_present: "股票池成分",
-  core_missing_days: "核心缺失天数",
+  raw_missing_daily_rows: "原始日频缺口",
+  core_missing_days: "原始日频缺口",
   trade_status_days: "交易状态天数",
   news_rows: "新闻明细",
   announcement_rows: "公告明细",
@@ -277,7 +302,130 @@ const fieldLabels = {
   factor_announcement_count: "公告因子计数",
 };
 
+const factorColumnGroups = [
+  {
+    title: "行情价格",
+    description: "Qlib 基础价格和成交字段，几乎每个交易日都应该有。",
+    fields: ["open", "high", "low", "close", "pre_close", "volume", "amount", "vwap"],
+  },
+  {
+    title: "复权和交易限制",
+    description: "处理价格连续性、涨跌停约束和停牌状态。",
+    fields: [
+      "adj_factor",
+      "factor_type",
+      "limit_up",
+      "limit_down",
+      "prev_close",
+      "limit_rule",
+      "trade_status",
+      "halt_reason",
+      "source_update_time",
+    ],
+  },
+  {
+    title: "新闻相关因子",
+    description: "由新闻标题按交易日聚合得到，天然可能稀疏。",
+    fields: [
+      "news_count",
+      "news_sentiment_mean",
+      "news_positive_count",
+      "news_negative_count",
+      "news_weighted_sentiment_sum",
+      "news_importance_sum",
+      "news_growth_count",
+      "news_risk_count",
+      "news_financing_count",
+      "news_contract_count",
+      "news_buyback_count",
+      "news_shareholder_change_count",
+      "news_regulatory_count",
+      "news_litigation_count",
+      "news_performance_count",
+    ],
+  },
+  {
+    title: "公告相关因子",
+    description: "由公告标题按交易日聚合得到，重点看事件类型和情绪。",
+    fields: [
+      "announcement_count",
+      "announcement_sentiment_mean",
+      "announcement_positive_count",
+      "announcement_negative_count",
+      "announcement_weighted_sentiment_sum",
+      "announcement_importance_sum",
+      "announcement_growth_count",
+      "announcement_risk_count",
+      "announcement_financing_count",
+      "announcement_operation_count",
+      "announcement_contract_count",
+      "announcement_buyback_count",
+      "announcement_shareholder_change_count",
+      "announcement_regulatory_count",
+      "announcement_litigation_count",
+      "announcement_performance_count",
+    ],
+  },
+  {
+    title: "来源追踪",
+    description: "不是训练因子，用来确认每列来自哪个采集源。",
+    fields: [
+      "daily_bar_source_id",
+      "adj_factor_source_id",
+      "price_limit_source_id",
+      "trade_status_source_id",
+      "daily_news_factor_source_id",
+      "daily_announcement_factor_source_id",
+    ],
+  },
+];
+
+const factorWideColumns = [
+  "trade_date",
+  ...factorColumnGroups.flatMap((group) => group.fields),
+];
+
+const rawWideColumnOrder = [
+  "dataset",
+  "factor_input",
+  "trade_date",
+  "publish_date",
+  "snapshot_date",
+  "instrument",
+  "symbol",
+  "name",
+  "exchange",
+  "industry",
+  "list_date",
+  "delist_date",
+  "open",
+  "high",
+  "low",
+  "close",
+  "volume",
+  "amount",
+  "adj_factor",
+  "limit_up",
+  "limit_down",
+  "prev_close",
+  "limit_rule",
+  "trade_status",
+  "halt_reason",
+  "source_update_time",
+  "title",
+  "url",
+  "source",
+  "weight",
+];
+
 const $ = (id) => document.getElementById(id);
+
+function setHtml(id, html) {
+  const target = $(id);
+  if (target) {
+    target.innerHTML = html;
+  }
+}
 
 let overview = null;
 let activeSection = "dashboard";
@@ -285,6 +433,8 @@ let activePreviewMode = "raw";
 let autoRefreshTimer = null;
 let instrumentSearchTimer = null;
 let instrumentOptions = [];
+let factorPreviewPage = 1;
+let tableRenderSequence = 0;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -395,30 +545,102 @@ function tag(value) {
   return `<span class="tag tag-${type}">${label}</span>`;
 }
 
-function table(columns, rows, emptyText = "暂无数据") {
+function table(columns, rows, emptyText = "暂无数据", options = {}) {
   if (!rows || rows.length === 0) {
     return `<div class="empty">${escapeHtml(emptyText)}</div>`;
   }
+  const pageSize = Number(options.pageSize || CLIENT_TABLE_PAGE_SIZE);
+  const shouldPaginate = options.paginate !== false && rows.length > pageSize;
+  const tableId = `client-table-${++tableRenderSequence}`;
+  const totalPages = Math.ceil(rows.length / pageSize);
   const head = columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("");
   const body = rows
-    .map((row) => {
+    .map((row, index) => {
       const cells = columns
         .map((column) => {
           const raw = column.value ? column.value(row) : row[column.key];
           const display = column.format ? column.format(raw, row) : raw;
-          const value = column.status ? tag(raw) : escapeHtml(compact(display, column.maxLength));
+          const value = column.html
+            ? column.html(row, raw)
+            : column.status
+              ? tag(raw)
+              : escapeHtml(compact(display, column.maxLength));
           const title = escapeHtml(compact(display, 400));
           return `<td title="${title}">${value}</td>`;
         })
         .join("");
-      return `<tr>${cells}</tr>`;
+      const rowClass = shouldPaginate && index >= pageSize ? ' class="client-page-hidden"' : "";
+      return `<tr data-client-row-index="${index}"${rowClass}>${cells}</tr>`;
     })
     .join("");
-  return `<div class="table-wrap"><table class="data-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  const pagination = shouldPaginate
+    ? clientTablePagination({ tableId, page: 1, totalPages, totalRows: rows.length, pageSize })
+    : "";
+  return `
+    <div id="${tableId}" class="client-table" data-current-page="1" data-page-size="${pageSize}" data-total-rows="${rows.length}">
+      <div class="table-wrap"><table class="data-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>
+      ${pagination}
+    </div>
+  `;
 }
 
 function tableSummary(text) {
   return `<div class="table-summary">${escapeHtml(text)}</div>`;
+}
+
+function clientTablePagination({ tableId, page, totalPages, totalRows, pageSize }) {
+  const start = totalRows ? (page - 1) * pageSize + 1 : 0;
+  const end = Math.min(page * pageSize, totalRows);
+  return `
+    <div class="pagination-bar client-table-pagination">
+      <button class="btn" data-table-page-action="previous" data-table-id="${tableId}" type="button" disabled>上一页</button>
+      <span class="pagination-info" data-table-page-info="${tableId}">第 ${number(page)} / ${number(totalPages)} 页，${number(start)}-${number(end)} / ${number(totalRows)} 行</span>
+      <button class="btn" data-table-page-action="next" data-table-id="${tableId}" type="button">下一页</button>
+    </div>
+  `;
+}
+
+function bindTablePagination() {
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-table-page-action]");
+    if (!button) {
+      return;
+    }
+    updateClientTablePage(button.dataset.tableId, button.dataset.tablePageAction);
+  });
+}
+
+function updateClientTablePage(tableId, action) {
+  const root = $(tableId);
+  if (!root) {
+    return;
+  }
+  const pageSize = Number(root.dataset.pageSize || CLIENT_TABLE_PAGE_SIZE);
+  const totalRows = Number(root.dataset.totalRows || 0);
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  const currentPage = Number(root.dataset.currentPage || 1);
+  const nextPage = action === "next"
+    ? Math.min(totalPages, currentPage + 1)
+    : Math.max(1, currentPage - 1);
+  const startIndex = (nextPage - 1) * pageSize;
+  const endIndex = startIndex + pageSize;
+  root.dataset.currentPage = String(nextPage);
+  root.querySelectorAll("[data-client-row-index]").forEach((row) => {
+    const index = Number(row.dataset.clientRowIndex || 0);
+    row.classList.toggle("client-page-hidden", index < startIndex || index >= endIndex);
+  });
+  root.querySelectorAll("[data-table-page-action='previous']").forEach((button) => {
+    button.disabled = nextPage <= 1;
+  });
+  root.querySelectorAll("[data-table-page-action='next']").forEach((button) => {
+    button.disabled = nextPage >= totalPages;
+  });
+  const info = root.querySelector(`[data-table-page-info="${tableId}"]`);
+  if (info) {
+    const start = totalRows ? startIndex + 1 : 0;
+    const end = Math.min(endIndex, totalRows);
+    info.textContent = `第 ${number(nextPage)} / ${number(totalPages)} 页，${number(start)}-${number(end)} / ${number(totalRows)} 行`;
+  }
 }
 
 function populateSelect(selectId, options, allLabel, labelFn = (option) => option) {
@@ -459,15 +681,17 @@ function bindPreviewMode() {
 }
 
 function setPreviewMode(mode) {
-  activePreviewMode = mode === "factor" ? "factor" : "raw";
+  activePreviewMode = ["coverage", "raw", "factor"].includes(mode) ? mode : "coverage";
   document.querySelectorAll("[data-preview-mode]").forEach((button) => {
     button.classList.toggle("active", button.dataset.previewMode === activePreviewMode);
   });
+  $("coverage-preview-mode").classList.toggle("hidden", activePreviewMode !== "coverage");
+  $("instrument-preview-panel").classList.toggle("hidden", activePreviewMode === "coverage");
   $("raw-preview-mode").classList.toggle("hidden", activePreviewMode !== "raw");
   $("factor-preview-mode").classList.toggle("hidden", activePreviewMode !== "factor");
   if (activePreviewMode === "raw") {
     loadRawInstrumentPreview();
-  } else {
+  } else if (activePreviewMode === "factor") {
     loadFactorPreview();
   }
 }
@@ -486,9 +710,15 @@ function bindFilters() {
       250,
     );
   });
-  $("preview-instrument").addEventListener("change", loadActivePreview);
+  $("preview-instrument").addEventListener("change", () => {
+    factorPreviewPage = 1;
+    loadActivePreview();
+  });
   ["preview-start", "preview-end", "preview-limit"].forEach((id) => {
-    $(id).addEventListener("change", loadActivePreview);
+    $(id).addEventListener("change", () => {
+      factorPreviewPage = 1;
+      loadActivePreview();
+    });
   });
   $("refresh-btn").addEventListener("click", refreshAll);
 }
@@ -673,63 +903,66 @@ function renderDataCoverage(coverage) {
   const reference = coverage.reference || {};
   const instrumentSummary = coverage.instrument_summary || {};
   const datasetRows = coverage.dataset_rows || [];
+  const sourceDatasetRows = datasetRows.filter((row) => overviewSourceDatasets.includes(row.dataset));
   const instrumentRows = coverage.instrument_rows || [];
   const referenceRange = [reference.min_trade_date, reference.max_trade_date]
     .filter(Boolean)
     .join(" - ");
 
-  $("coverage-summary").innerHTML = [
+  const coverageSummaryHtml = [
+    coverageCard(
+      "当前日期范围",
+      referenceRange || "-",
+      `${number(reference.trade_date_count || 0)} 个交易日，来源：${reference.trade_date_source || "none"}`,
+    ),
     coverageCard(
       "参考标的",
       number(reference.instrument_count || 0),
       `来源：${reference.instrument_source || "none"}`,
     ),
     coverageCard(
-      "参考交易日",
-      number(reference.trade_date_count || 0),
-      referenceRange || `来源：${reference.trade_date_source || "none"}`,
-    ),
-    coverageCard(
-      "核心完整标的",
+      "原始日频完整",
       `${number(instrumentSummary.complete_instruments || 0)} / ${number(instrumentSummary.total_instruments || 0)}`,
       `完整率 ${number(instrumentSummary.complete_percent || 0)}%`,
     ),
     coverageCard(
-      "核心缺失标的",
-      number(instrumentSummary.missing_instruments || 0),
+      "原始日频缺口",
+      `${number(instrumentSummary.missing_daily_rows || 0)} 行`,
       missingByDimensionText(instrumentSummary.missing_by_dimension || {}),
     ),
   ].join("");
+  setHtml("coverage-summary", coverageSummaryHtml);
 
-  $("dataset-coverage-table").innerHTML = tableSummary(
-    "核心日频维度会统计缺失日频行；新闻、公告、停牌状态等稀疏维度只统计有记录的标的和日期，不把没有事件直接判成缺失。",
+  const datasetCoverageHtml = tableSummary(
+    "这里只展示采集得到的基础、行情和事件源表；处理后的新闻/公告日频因子不放在覆盖表。日线、复权、涨跌停按当前日期范围判断缺口。",
   ) + table(
     [
       { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel },
       { key: "coverage_kind", label: fieldLabel("coverage_kind"), format: coverageKindLabel },
-      { key: "source_ids", label: fieldLabel("source_ids"), format: sourceSummary },
       { key: "row_count", label: fieldLabel("row_count") },
       { key: "min_date", label: "日期范围", value: dateRangeValue },
       { key: "date_count", label: fieldLabel("date_count") },
       { key: "instruments_with_rows", label: "标的覆盖", value: instrumentCoverageValue },
-      { key: "missing_daily_rows", label: "核心日频缺失", value: dailyMissingValue },
+      { key: "missing_daily_rows", label: "日频缺口", value: dailyMissingValue },
+      { key: "source_ids", label: fieldLabel("source_ids"), format: sourceSummary },
     ],
-    datasetRows,
+    sourceDatasetRows,
     "暂无数据维度覆盖信息。",
   );
+  setHtml("dataset-coverage-table", datasetCoverageHtml);
 
   const hidden = Number(coverage.hidden_instrument_count || 0);
-  $("instrument-coverage-summary").innerHTML = instrumentCoverageDimensions.map((dataset) => {
+  const instrumentCoverageSummaryHtml = overviewInstrumentDimensions.map((dataset) => {
     const total = Number(instrumentSummary.total_instruments || 0);
     const available = Number(instrumentSummary.available_by_dimension?.[dataset] || 0);
     const missing = fixedExpectedInstrumentDimensions.has(dataset)
       ? instrumentMissingCount(dataset, instrumentSummary, total, available)
       : null;
     const value = missing === null
-      ? `${number(available)} 有记录`
+      ? `${number(available)} 个标的`
       : `${number(Math.max(total - missing, 0))} 完整`;
     const foot = missing === null
-      ? "事件或稀疏维度，不按无记录判缺失"
+      ? "有记录，不按无事件判缺失"
       : `缺失 ${number(missing)} 个标的`;
     return coverageCard(
       datasetLabel(dataset),
@@ -737,10 +970,12 @@ function renderDataCoverage(coverage) {
       foot,
     );
   }).join("");
-  $("instrument-coverage-table").innerHTML = tableSummary(
+  setHtml("instrument-coverage-summary", instrumentCoverageSummaryHtml);
+
+  const instrumentCoverageTableHtml = tableSummary(
     hidden
-      ? `下表按核心缺失天数优先展示；每个数据维度独立成列，显示已采集量、预期量和缺失量，另有 ${number(hidden)} 个标的未展示。`
-      : "下表按核心缺失天数优先展示；每个数据维度独立成列，显示已采集量、预期量和缺失量。如果为空，说明当前没有参考标的或交易日。",
+      ? `下表只展示原始维度。原始日频缺口是日线、复权、涨跌停在当前日期范围内缺了多少行，另有 ${number(hidden)} 个标的未展示。`
+      : "下表只展示原始维度。原始日频缺口是日线、复权、涨跌停在当前日期范围内缺了多少行。",
   ) + table(
     [
       { key: "instrument", label: fieldLabel("instrument") },
@@ -750,11 +985,11 @@ function renderDataCoverage(coverage) {
       { key: "industry", label: fieldLabel("industry"), format: (value) => value || "-" },
       { key: "universes", label: fieldLabel("universes"), value: universesValue, maxLength: 120 },
       {
-        key: "core_missing_days",
-        label: fieldLabel("core_missing_days"),
-        value: (row) => `${number(row.core_missing_days || 0)} 天`,
+        key: "raw_missing_daily_rows",
+        label: fieldLabel("raw_missing_daily_rows"),
+        value: (row) => `${number(row.raw_missing_daily_rows ?? row.core_missing_days ?? 0)} 行`,
       },
-      ...instrumentCoverageDimensions.map((dataset) => ({
+      ...overviewInstrumentDimensions.map((dataset) => ({
         key: dataset,
         label: datasetLabel(dataset),
         value: (row) => dimensionStatusValue(row.dimension_statuses?.[dataset]),
@@ -764,6 +999,7 @@ function renderDataCoverage(coverage) {
     instrumentRows,
     "暂无标的完整度明细。",
   );
+  setHtml("instrument-coverage-table", instrumentCoverageTableHtml);
 }
 
 function coverageCard(label, value, foot) {
@@ -795,15 +1031,16 @@ function instrumentCoverageValue(row) {
     return "-";
   }
   const total = row.reference_instrument_count || 0;
-  const missing = row.instruments_missing || 0;
-  return `${number(row.instruments_with_rows)} / ${number(total)}，缺失 ${number(missing)}`;
+  return total
+    ? `${number(row.instruments_with_rows)} / ${number(total)}`
+    : number(row.instruments_with_rows);
 }
 
 function dailyMissingValue(row) {
   if (row.missing_daily_rows === null || row.missing_daily_rows === undefined) {
-    return "不按交易日判定";
+    return "-";
   }
-  return `${number(row.missing_daily_rows)} / ${number(row.expected_daily_rows)}，覆盖 ${number(row.daily_coverage_percent)}%`;
+  return `缺 ${number(row.missing_daily_rows)} 行`;
 }
 
 function missingByDimensionText(missingByDimension) {
@@ -835,21 +1072,12 @@ function dimensionStatusValue(status) {
     return "-";
   }
   const unit = status.unit || "";
-  const observed = `${number(status.observed || 0)}${unit}`;
+  const observed = `${number(status.observed || 0)} ${unit}`.trim();
   if (status.expected !== null && status.expected !== undefined) {
-    const state = status.complete ? "完整" : "缺失";
-    return [
-      state,
-      `${observed}/${number(status.expected)}${unit}`,
-      `缺 ${number(status.missing || 0)}${unit}`,
-    ].join("；");
+    const expected = `${number(status.expected)} ${unit}`.trim();
+    return `${observed}/${expected}`;
   }
-  const state = status.status === "observed" ? "有记录" : "无记录";
-  const parts = [state, observed, "缺失不判定"];
-  if (status.event_count !== null && status.event_count !== undefined) {
-    parts.push(`计数 ${number(status.event_count)}${status.event_unit || ""}`);
-  }
-  return parts.join("；");
+  return observed;
 }
 
 function renderWatermarks(rows) {
@@ -996,7 +1224,13 @@ async function loadBackfillTasks() {
 }
 
 function loadActivePreview() {
-  return activePreviewMode === "raw" ? loadRawInstrumentPreview() : loadFactorPreview();
+  if (activePreviewMode === "raw") {
+    return loadRawInstrumentPreview();
+  }
+  if (activePreviewMode === "factor") {
+    return loadFactorPreview();
+  }
+  return Promise.resolve();
 }
 
 async function loadInstrumentOptions(query = "") {
@@ -1043,8 +1277,8 @@ async function loadRawInstrumentPreview() {
     const instrument = selectedPreviewInstrument();
     if (!instrument) {
       $("preview-selected").innerHTML = "<strong>先选择标的：</strong>可输入代码、名称或行业搜索。";
-      $("raw-preview-explanation").innerHTML = "";
-      $("raw-preview-summary").innerHTML = "";
+      $("raw-preview-explanation").classList.add("hidden");
+      $("raw-preview-summary").classList.add("hidden");
       $("raw-preview-table").innerHTML = '<div class="empty">请输入标的后查看原始采集数据。</div>';
       return;
     }
@@ -1062,51 +1296,42 @@ async function loadRawInstrumentPreview() {
 }
 
 function renderRawInstrumentPreview(payload) {
-  const summary = payload.summary || {};
   $("preview-selected").innerHTML = `<strong>当前标的：</strong>${escapeHtml(payload.instrument)}。筛选日期 ${escapeHtml(payload.start || "-")} 到 ${escapeHtml(payload.end || "-")}。`;
-  $("raw-preview-explanation").innerHTML = "<strong>原始数据：</strong>这里读取 raw JSON 文件，字段尽量保持上游原样；同一个标的可能有行情、复权、公告、新闻等多个采集对象。";
-  $("raw-preview-summary").innerHTML = [
-    coverageCard("原始数据集", number(summary.dataset_count || 0), (summary.datasets || []).map(datasetLabel).join("；") || "暂无"),
-    coverageCard("raw 文件", number(summary.object_count || 0), "来自 qdc_meta.source_object"),
-    coverageCard("原始记录", number(summary.row_count || 0), `每个数据集最多显示 ${number(payload.limit || 0)} 行`),
-    coverageCard("预览口径", "按标的", "优先用 raw 参数匹配，必要时按原始行代码匹配"),
-  ].join("");
-  $("raw-preview-table").innerHTML = renderRawSections(payload.sections || []);
+  $("raw-preview-explanation").classList.add("hidden");
+  $("raw-preview-summary").classList.add("hidden");
+  $("raw-preview-table").innerHTML = renderRawWideTable(payload.sections || []);
 }
 
-function renderRawSections(sections) {
-  if (!sections.length) {
+function renderRawWideTable(sections) {
+  const rows = flattenRawRows(sections);
+  if (!rows.length) {
     return '<div class="empty">当前标的和日期范围没有匹配的 raw 采集记录。</div>';
   }
-  return sections.map(renderRawSection).join("");
+  const columns = rawVisibleColumns(rows);
+  return table(columns, rows, "当前标的和日期范围没有匹配的 raw 采集记录。", {
+    pageSize: Number($("preview-limit").value || CLIENT_TABLE_PAGE_SIZE),
+  });
 }
 
-function renderRawSection(section) {
-  const columns = (section.columns || []).slice(0, 22).map((column) => ({
-    key: column,
-    label: fieldLabel(column),
-    maxLength: 140,
+function flattenRawRows(sections) {
+  return sections.flatMap((section) =>
+    (section.rows || []).map((row) => ({
+      dataset: section.dataset,
+      ...row,
+    })),
+  );
+}
+
+function rawVisibleColumns(rows) {
+  const seen = new Set(rows.flatMap((row) => Object.keys(row)));
+  const ordered = rawWideColumnOrder.filter((key) => seen.has(key));
+  const extras = [...seen].filter((key) => !rawWideColumnOrder.includes(key)).sort();
+  return [...ordered, ...extras].map((key) => ({
+    key,
+    label: fieldLabel(key),
+    format: key === "dataset" ? datasetLabel : undefined,
+    maxLength: key === "title" ? 180 : 120,
   }));
-  const objectRows = (section.objects || []).slice(0, 8);
-  return `
-    <section class="timeline-group">
-      <div class="subsection-title">${escapeHtml(datasetLabel(section.dataset))}</div>
-      ${tableSummary(`匹配 ${number(section.object_count || 0)} 个 raw 文件，显示 ${number(section.row_count || 0)} 条原始记录。`)}
-      ${table(
-        [
-          { key: "source_id", label: fieldLabel("source_id"), format: sourceLabel },
-          { key: "function", label: "上游函数" },
-          { key: "params", label: "采集参数", maxLength: 180 },
-          { key: "row_count", label: fieldLabel("row_count") },
-          { key: "error", label: fieldLabel("error"), maxLength: 160 },
-          { key: "created_at", label: fieldLabel("created_at") },
-        ],
-        objectRows,
-        "暂无 raw 文件索引。",
-      )}
-      ${table(columns, section.rows || [], "当前数据集没有匹配的原始记录。")}
-    </section>
-  `;
 }
 
 async function loadFactorPreview() {
@@ -1120,8 +1345,6 @@ async function loadFactorPreview() {
       $("factor-preview-explanation").innerHTML = "";
       $("factor-preview-summary").innerHTML = "";
       $("factor-preview-table").innerHTML = '<div class="empty">请输入标的后查看处理后因子。</div>';
-      $("factor-preview-news").innerHTML = "";
-      $("factor-preview-announcements").innerHTML = "";
       return;
     }
     setLoading("factor-preview-table");
@@ -1130,6 +1353,8 @@ async function loadFactorPreview() {
     appendQuery(query, "start", $("preview-start").value.trim());
     appendQuery(query, "end", $("preview-end").value.trim());
     appendQuery(query, "limit", $("preview-limit").value);
+    const pageSize = Number($("preview-limit").value || CLIENT_TABLE_PAGE_SIZE);
+    appendQuery(query, "offset", String(Math.max(factorPreviewPage - 1, 0) * pageSize));
     const payload = await api(`/api/factor-preview?${query.toString()}`);
     renderFactorPreview(payload);
   } catch (error) {
@@ -1143,127 +1368,151 @@ function renderFactorPreview(payload) {
   $("preview-selected").innerHTML = `<strong>当前标的：</strong>${escapeHtml(payload.instrument)}。筛选日期 ${escapeHtml(payload.start || "-")} 到 ${escapeHtml(payload.end || "-")}。`;
   $("factor-preview-explanation").innerHTML = "<strong>处理后因子：</strong>这里展示按交易日对齐后的研究字段，会进入 gold 宽表或 Qlib 外部因子。";
   $("factor-preview-summary").innerHTML = [
-    coverageCard("时间线交易日", number(summary.trade_date_count || 0), range || "当前筛选无日频记录"),
+    coverageCard("当前页交易日", number(summary.trade_date_count || 0), range || "当前筛选无日频记录"),
     coverageCard("核心完整天数", number(summary.core_complete_days || 0), "同时有行情、复权因子和涨跌停"),
     coverageCard("新闻记录", number(summary.news_rows || 0), `日频新闻计数 ${number(summary.factor_news_count || 0)}`),
     coverageCard("公告记录", number(summary.announcement_rows || 0), `日频公告计数 ${number(summary.factor_announcement_count || 0)}`),
   ].join("");
-  $("factor-preview-table").innerHTML = renderTimelineGroups(payload.timeline_rows || []);
-  $("factor-preview-news").innerHTML = renderDocumentList(payload.news_rows || [], "news_id");
-  $("factor-preview-announcements").innerHTML = renderDocumentList(
-    payload.announcement_rows || [],
-    "announcement_id",
-  );
+  $("factor-preview-table").innerHTML = renderFactorWidePreview(payload);
+  bindFactorPagination(payload);
 }
 
-function renderTimelineGroups(rows) {
-  const rowCount = number(rows.length);
+function renderFactorWidePreview(payload) {
+  const rows = payload.timeline_rows || [];
+  const newsByDate = groupDocumentsByTradeDate(payload.news_rows || []);
+  const announcementsByDate = groupDocumentsByTradeDate(payload.announcement_rows || []);
+  const page = Number(payload.page || 1);
+  const pageSize = Number(payload.page_size || payload.limit || rows.length || 0);
+  const offset = Number(payload.offset || 0);
+  const rangeStart = rows.length ? offset + 1 : 0;
+  const rangeEnd = offset + rows.length;
+  const columns = factorWideColumns.map((key) => ({
+    key,
+    label: fieldLabel(key),
+    format: key.endsWith("_source_id") ? sourceLabel : undefined,
+    html: factorDocumentCellRenderer(key, newsByDate, announcementsByDate),
+    maxLength: key === "halt_reason" ? 120 : 90,
+  }));
   return [
-    tableSummary(`当前显示 ${rowCount} 个交易日。下面按数据维度拆开，方便检查每一天缺了哪类数据。`),
-    renderTimelineGroup(
-      "行情价格",
-      [
-        { key: "trade_date", label: fieldLabel("trade_date") },
-        { key: "open", label: fieldLabel("open") },
-        { key: "high", label: fieldLabel("high") },
-        { key: "low", label: fieldLabel("low") },
-        { key: "close", label: fieldLabel("close") },
-        { key: "pre_close", label: fieldLabel("pre_close") },
-        { key: "volume", label: fieldLabel("volume") },
-        { key: "amount", label: fieldLabel("amount") },
-        { key: "vwap", label: fieldLabel("vwap") },
-        { key: "daily_bar_source_id", label: fieldLabel("daily_bar_source_id"), format: sourceLabel },
-      ],
-      rows,
+    renderFactorCategories(),
+    tableSummary(
+      `第 ${number(page)} 页，每页 ${number(pageSize)} 个交易日；当前显示第 ${number(rangeStart)}-${number(rangeEnd)} 条。横向滚动可查看全部因子列。`,
     ),
-    renderTimelineGroup(
-      "复权、涨跌停和交易状态",
-      [
-        { key: "trade_date", label: fieldLabel("trade_date") },
-        { key: "adj_factor", label: fieldLabel("adj_factor") },
-        { key: "factor_type", label: fieldLabel("factor_type") },
-        { key: "limit_up", label: fieldLabel("limit_up") },
-        { key: "limit_down", label: fieldLabel("limit_down") },
-        { key: "prev_close", label: fieldLabel("prev_close") },
-        { key: "limit_rule", label: fieldLabel("limit_rule") },
-        { key: "trade_status", label: fieldLabel("trade_status") },
-        { key: "halt_reason", label: fieldLabel("halt_reason"), maxLength: 120 },
-        { key: "source_update_time", label: fieldLabel("source_update_time") },
-        { key: "adj_factor_source_id", label: fieldLabel("adj_factor_source_id"), format: sourceLabel },
-        { key: "price_limit_source_id", label: fieldLabel("price_limit_source_id"), format: sourceLabel },
-        { key: "trade_status_source_id", label: fieldLabel("trade_status_source_id"), format: sourceLabel },
-      ],
-      rows,
-    ),
-    renderTimelineGroup(
-      "新闻日频因子拆解",
-      [
-        { key: "trade_date", label: fieldLabel("trade_date") },
-        { key: "news_count", label: fieldLabel("news_count") },
-        { key: "news_sentiment_mean", label: fieldLabel("news_sentiment_mean") },
-        { key: "news_positive_count", label: fieldLabel("news_positive_count") },
-        { key: "news_negative_count", label: fieldLabel("news_negative_count") },
-        { key: "news_growth_count", label: fieldLabel("news_growth_count") },
-        { key: "news_risk_count", label: fieldLabel("news_risk_count") },
-        { key: "news_financing_count", label: fieldLabel("news_financing_count") },
-        { key: "news_contract_count", label: fieldLabel("news_contract_count") },
-        { key: "news_buyback_count", label: fieldLabel("news_buyback_count") },
-        { key: "news_shareholder_change_count", label: fieldLabel("news_shareholder_change_count") },
-        { key: "news_regulatory_count", label: fieldLabel("news_regulatory_count") },
-        { key: "news_litigation_count", label: fieldLabel("news_litigation_count") },
-        { key: "news_performance_count", label: fieldLabel("news_performance_count") },
-        { key: "daily_news_factor_source_id", label: fieldLabel("daily_news_factor_source_id"), format: sourceLabel },
-      ],
-      rows,
-    ),
-    renderTimelineGroup(
-      "公告日频因子拆解",
-      [
-        { key: "trade_date", label: fieldLabel("trade_date") },
-        { key: "announcement_count", label: fieldLabel("announcement_count") },
-        { key: "announcement_sentiment_mean", label: fieldLabel("announcement_sentiment_mean") },
-        { key: "announcement_positive_count", label: fieldLabel("announcement_positive_count") },
-        { key: "announcement_negative_count", label: fieldLabel("announcement_negative_count") },
-        { key: "announcement_growth_count", label: fieldLabel("announcement_growth_count") },
-        { key: "announcement_risk_count", label: fieldLabel("announcement_risk_count") },
-        { key: "announcement_financing_count", label: fieldLabel("announcement_financing_count") },
-        { key: "announcement_operation_count", label: fieldLabel("announcement_operation_count") },
-        { key: "announcement_contract_count", label: fieldLabel("announcement_contract_count") },
-        { key: "announcement_buyback_count", label: fieldLabel("announcement_buyback_count") },
-        { key: "announcement_shareholder_change_count", label: fieldLabel("announcement_shareholder_change_count") },
-        { key: "announcement_regulatory_count", label: fieldLabel("announcement_regulatory_count") },
-        { key: "announcement_litigation_count", label: fieldLabel("announcement_litigation_count") },
-        { key: "announcement_performance_count", label: fieldLabel("announcement_performance_count") },
-        {
-          key: "daily_announcement_factor_source_id",
-          label: fieldLabel("daily_announcement_factor_source_id"),
-          format: sourceLabel,
-        },
-      ],
-      rows,
-    ),
+    renderFactorPagination(payload),
+    table(columns, rows, "当前筛选条件下没有处理后因子。", { paginate: false }),
+    renderFactorPagination(payload),
   ].join("");
 }
 
-function renderTimelineGroup(title, columns, rows) {
-  return `<section class="timeline-group"><div class="subsection-title">${escapeHtml(title)}</div>${table(
-    columns,
-    rows,
-    "当前筛选条件下没有日频时间线。",
-  )}</section>`;
+function factorDocumentCellRenderer(key, newsByDate, announcementsByDate) {
+  if (key === "news_count") {
+    return (row) => documentCountCell(row, "news_count", newsByDate, "news_id");
+  }
+  if (key === "announcement_count") {
+    return (row) =>
+      documentCountCell(row, "announcement_count", announcementsByDate, "announcement_id");
+  }
+  return undefined;
 }
 
-function renderDocumentList(rows, idField) {
-  return table(
-    [
-      { key: "publish_date", label: fieldLabel("publish_date") },
-      { key: "title", label: fieldLabel("title"), maxLength: 160 },
-      { key: "source_id", label: fieldLabel("source_id"), format: sourceLabel },
-      { key: idField, label: fieldLabel(idField), maxLength: 80 },
-    ],
-    rows,
-    "当前筛选条件下没有明细。",
-  );
+function groupDocumentsByTradeDate(rows) {
+  return rows.reduce((groups, row) => {
+    const tradeDate = String(row.trade_date || row.publish_date || "");
+    if (!tradeDate) {
+      return groups;
+    }
+    groups[tradeDate] = groups[tradeDate] || [];
+    groups[tradeDate].push(row);
+    return groups;
+  }, {});
+}
+
+function documentCountCell(row, countKey, documentsByDate, idField) {
+  const count = Number(row[countKey] || 0);
+  if (!count) {
+    return "0";
+  }
+  const documents = documentsByDate[String(row.trade_date || "")] || [];
+  if (!documents.length) {
+    return escapeHtml(number(count));
+  }
+  return `
+    <details class="document-details">
+      <summary>${escapeHtml(number(count))} 条</summary>
+      <div class="document-detail-list">
+        ${documents.map((document) => renderDocumentDetail(document, idField)).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function renderDocumentDetail(document, idField) {
+  const title = escapeHtml(document.title || "-");
+  const publishDate = escapeHtml(document.publish_date || "-");
+  const source = escapeHtml(sourceLabel(document.source_id));
+  const idText = escapeHtml(document[idField] || "");
+  const url = document.url ? String(document.url) : "";
+  const link = url
+    ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${title}</a>`
+    : title;
+  return `
+    <div class="document-detail-item">
+      <div class="document-detail-title">${link}</div>
+      <div class="document-detail-meta">${publishDate} / ${source}${idText ? ` / ${idText}` : ""}</div>
+    </div>
+  `;
+}
+
+function renderFactorCategories() {
+  return `
+    <div class="factor-category-grid">
+      ${factorColumnGroups.map(renderFactorCategory).join("")}
+    </div>
+  `;
+}
+
+function renderFactorCategory(group) {
+  const fields = group.fields
+    .map((field) => `<span class="factor-chip">${escapeHtml(fieldLabel(field))}</span>`)
+    .join("");
+  return `
+    <section class="factor-category-card">
+      <div class="factor-category-title">${escapeHtml(group.title)}</div>
+      <p>${escapeHtml(group.description)}</p>
+      <div class="factor-chip-list">${fields}</div>
+    </section>
+  `;
+}
+
+function renderFactorPagination(payload) {
+  const page = Number(payload.page || 1);
+  const hasPrevious = Boolean(payload.has_previous);
+  const hasNext = Boolean(payload.has_next);
+  return `
+    <div class="pagination-bar">
+      <button class="btn factor-prev-page" type="button" ${hasPrevious ? "" : "disabled"}>上一页</button>
+      <span class="pagination-info">第 ${number(page)} 页</span>
+      <button class="btn factor-next-page" type="button" ${hasNext ? "" : "disabled"}>下一页</button>
+    </div>
+  `;
+}
+
+function bindFactorPagination(payload) {
+  factorPreviewPage = Number(payload.page || factorPreviewPage || 1);
+  const previousButtons = document.querySelectorAll(".factor-prev-page");
+  const nextButtons = document.querySelectorAll(".factor-next-page");
+  previousButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      factorPreviewPage = Math.max(1, factorPreviewPage - 1);
+      loadFactorPreview();
+    });
+  });
+  nextButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      factorPreviewPage += 1;
+      loadFactorPreview();
+    });
+  });
 }
 
 async function loadQualityIssues() {
@@ -1386,7 +1635,9 @@ function init() {
   $("preview-instrument").value = "SH600000";
   bindNav();
   bindPreviewMode();
+  bindTablePagination();
   bindFilters();
+  bindTablePagination();
   refreshAll();
   autoRefreshTimer = window.setInterval(refreshAll, 15000);
   window.addEventListener("beforeunload", () => window.clearInterval(autoRefreshTimer));

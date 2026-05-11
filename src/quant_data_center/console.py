@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import duckdb
 
+from quant_data_center.factor_engine.calendar_align import TradeDayAligner, date_minus_days
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.schema import (
     CONTROL_SCHEMA,
@@ -28,7 +29,10 @@ from quant_data_center.utils.instruments import instrument_to_symbol, normalize_
 STATIC_ROOT = Path(__file__).with_name("console_static")
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 500
+MAX_OFFSET = 10000
 RAW_OBJECT_SCAN_LIMIT = 1000
+DOCUMENT_DETAIL_LOOKBACK_DAYS = 15
+DOCUMENT_DETAIL_LIMIT = 1000
 STALE_RUNNING_MINUTES = 15
 COVERAGE_INSTRUMENT_LIMIT = 500
 REQUIRED_DAILY_COVERAGE_DATASETS = ("daily_bar", "adj_factor", "price_limit")
@@ -85,6 +89,8 @@ INSTRUMENT_TIMELINE_TABLES = {
         "news_sentiment_mean",
         "news_positive_count",
         "news_negative_count",
+        "news_weighted_sentiment_sum",
+        "news_importance_sum",
         "news_growth_count",
         "news_risk_count",
         "news_financing_count",
@@ -100,6 +106,8 @@ INSTRUMENT_TIMELINE_TABLES = {
         "announcement_sentiment_mean",
         "announcement_positive_count",
         "announcement_negative_count",
+        "announcement_weighted_sentiment_sum",
+        "announcement_importance_sum",
         "announcement_growth_count",
         "announcement_risk_count",
         "announcement_financing_count",
@@ -111,6 +119,16 @@ INSTRUMENT_TIMELINE_TABLES = {
         "announcement_litigation_count",
         "announcement_performance_count",
     ],
+}
+RAW_FACTOR_INPUT_PURPOSES = {
+    "stock_basic": "标的基础资料，用来识别代码、名称、交易所和行业",
+    "universe_constituent": "股票池成分，用来确定研究范围和参考标的",
+    "daily_bar": "行情价格输入，用来生成开高低收、成交量和成交额因子",
+    "adj_factor": "复权输入，用来处理分红送转后的价格连续性",
+    "price_limit": "涨跌停输入，用来生成涨停价、跌停价和交易限制特征",
+    "trade_status": "交易状态输入，用来识别正常交易、停牌和异常状态",
+    "announcement": "公告文本输入，用来生成公告数量、情绪和事件类型因子",
+    "news": "新闻文本输入，用来生成新闻数量、情绪和事件类型因子",
 }
 
 
@@ -435,30 +453,38 @@ class QdcConsoleData:
         table: str,
         silver_tables: set[str],
         instrument: str,
-        start: str | None,
-        end: str | None,
-        limit: int,
+        trade_dates: list[str],
     ) -> list[dict[str, Any]]:
-        if table not in silver_tables:
+        if table not in silver_tables or not trade_dates:
             return []
         id_field = "news_id" if table == "news" else "announcement_id"
-        date_clause, params = _instrument_date_filter(
-            instrument=instrument,
-            date_column="publish_date",
-            start=start,
-            end=end,
-        )
-        return _query_dicts(
+        target_trade_dates = {str(trade_date) for trade_date in trade_dates if trade_date}
+        if not target_trade_dates:
+            return []
+        publish_start = date_minus_days(min(target_trade_dates), DOCUMENT_DETAIL_LOOKBACK_DAYS)
+        publish_end = max(target_trade_dates)
+        aligner = TradeDayAligner.from_connection(conn)
+        rows = _query_dicts(
             conn,
             f"""
             select {id_field}, publish_date, instrument, title, url, source_id
             from {SILVER_SCHEMA}.{table}
-            where {date_clause}
+            where instrument = ?
+              and publish_date >= ?
+              and publish_date <= ?
             order by publish_date desc, {id_field}
             limit ?
             """,
-            [*params, limit],
+            [instrument, publish_start, publish_end, DOCUMENT_DETAIL_LIMIT],
         )
+        aligned_rows = []
+        for row in rows:
+            trade_date = aligner.align(row["publish_date"])
+            if trade_date not in target_trade_dates:
+                continue
+            row["trade_date"] = trade_date
+            aligned_rows.append(row)
+        return aligned_rows
 
     def dataset_preview(
         self,
@@ -543,39 +569,45 @@ class QdcConsoleData:
         start: str | None = None,
         end: str | None = None,
         limit: int | None = None,
+        offset: int | None = None,
     ) -> dict[str, Any]:
         instrument = _normalize_preview_instrument(instrument)
         if not self.settings.database_path.exists():
-            return _empty_instrument_timeline(instrument, start=start, end=end)
+            return _empty_instrument_timeline(
+                instrument,
+                start=start,
+                end=end,
+                limit=_clamp_limit(limit),
+                offset=_clamp_offset(offset),
+            )
 
         with self._connect() as conn:
             silver_tables = self._existing_tables(conn, SILVER_SCHEMA)
             row_limit = _clamp_limit(limit)
-            timeline_rows = self._timeline_rows(
+            row_offset = _clamp_offset(offset)
+            timeline_candidates = self._timeline_rows(
                 conn,
                 silver_tables=silver_tables,
                 instrument=instrument,
                 start=start,
                 end=end,
-                limit=row_limit,
+                limit=row_limit + row_offset + 1,
             )
+            timeline_rows = timeline_candidates[row_offset : row_offset + row_limit]
+            current_trade_dates = [str(row["trade_date"]) for row in timeline_rows]
             news_rows = self._document_rows(
                 conn,
                 table="news",
                 silver_tables=silver_tables,
                 instrument=instrument,
-                start=start,
-                end=end,
-                limit=row_limit,
+                trade_dates=current_trade_dates,
             )
             announcement_rows = self._document_rows(
                 conn,
                 table="announcement",
                 silver_tables=silver_tables,
                 instrument=instrument,
-                start=start,
-                end=end,
-                limit=row_limit,
+                trade_dates=current_trade_dates,
             )
         return {
             "status": "ok",
@@ -583,6 +615,11 @@ class QdcConsoleData:
             "start": start,
             "end": end,
             "limit": row_limit,
+            "offset": row_offset,
+            "page": (row_offset // row_limit) + 1,
+            "page_size": row_limit,
+            "has_previous": row_offset > 0,
+            "has_next": len(timeline_candidates) > row_offset + row_limit,
             "summary": _instrument_timeline_summary(
                 timeline_rows=timeline_rows,
                 news_rows=news_rows,
@@ -1305,6 +1342,7 @@ class QdcConsoleData:
                     "expected_trade_dates": expected_date_count,
                     "complete_instruments": 0,
                     "missing_instruments": len(instruments),
+                    "missing_daily_rows": 0,
                     "complete_percent": 0,
                     "missing_by_dimension": {
                         dataset: len(instruments)
@@ -1512,6 +1550,7 @@ class QdcConsoleData:
                 max(expected_date_count - count, 0)
                 for count in dimension_counts.values()
             )
+            raw_missing_daily_rows = core_missing_days
             rows.append(
                 {
                     "instrument": instrument,
@@ -1532,6 +1571,7 @@ class QdcConsoleData:
                     "all_dimension_counts": all_dimension_counts,
                     "available_dimensions": available_dimensions,
                     "observed_dimension_count": len(available_dimensions),
+                    "raw_missing_daily_rows": raw_missing_daily_rows,
                     "core_missing_days": core_missing_days,
                     "trade_status_days": trade_status_days,
                     "news_rows": news_rows,
@@ -1544,10 +1584,11 @@ class QdcConsoleData:
                 }
             )
 
+        missing_daily_rows = sum(int(row["raw_missing_daily_rows"]) for row in rows)
         rows.sort(
             key=lambda row: (
                 row["complete"],
-                -row["core_missing_days"],
+                -row["raw_missing_daily_rows"],
                 -len(row["missing_dimensions"]),
                 -row["observed_dimension_count"],
                 row["instrument"],
@@ -1560,6 +1601,7 @@ class QdcConsoleData:
                 "expected_trade_dates": expected_date_count,
                 "complete_instruments": complete_count,
                 "missing_instruments": len(instruments) - complete_count,
+                "missing_daily_rows": missing_daily_rows,
                 "complete_percent": _percent(complete_count, len(instruments)),
                 "missing_by_dimension": missing_by_dimension,
                 "available_by_dimension": available_by_dimension,
@@ -1872,6 +1914,7 @@ def _make_handler(
                             start=_query_value(query, "start"),
                             end=_query_value(query, "end"),
                             limit=_query_limit(query),
+                            offset=_query_offset(query),
                         )
                     )
                 else:
@@ -1995,10 +2038,23 @@ def _query_limit(query: dict[str, list[str]]) -> int | None:
     return int(value)
 
 
+def _query_offset(query: dict[str, list[str]]) -> int | None:
+    value = _query_value(query, "offset")
+    if value is None:
+        return None
+    return int(value)
+
+
 def _clamp_limit(value: int | None, *, default: int = DEFAULT_LIMIT) -> int:
     if value is None or value <= 0:
         return default
     return min(value, MAX_LIMIT)
+
+
+def _clamp_offset(value: int | None) -> int:
+    if value is None or value <= 0:
+        return 0
+    return min(value, MAX_OFFSET)
 
 
 def _normalize_preview_instrument(instrument: str) -> str:
@@ -2119,6 +2175,7 @@ def _raw_preview_sections(
         )
         rows, columns = _raw_rows_from_payload(
             payload,
+            dataset=dataset,
             instrument=instrument,
             start=start,
             end=end,
@@ -2199,6 +2256,7 @@ def _raw_payload_matches_instrument(
 def _raw_rows_from_payload(
     payload: dict[str, Any],
     *,
+    dataset: str,
     instrument: str,
     start: str | None,
     end: str | None,
@@ -2214,11 +2272,15 @@ def _raw_rows_from_payload(
                 continue
             if not _raw_record_matches_date(raw_record, start=start, end=end):
                 continue
-            public_row = {
-                "record_set": record_set,
-                "row_index": row_index,
-                **raw_record,
-            }
+            public_row = _raw_factor_input_row(
+                dataset=dataset,
+                record_set=record_set,
+                row_index=row_index,
+                record=raw_record,
+                instrument=instrument,
+            )
+            if not public_row:
+                continue
             for column in public_row:
                 if column not in columns:
                     columns.append(column)
@@ -2226,6 +2288,173 @@ def _raw_rows_from_payload(
             if len(rows) >= limit:
                 return rows, columns
     return rows, columns
+
+
+def _raw_factor_input_row(
+    *,
+    dataset: str,
+    record_set: str,
+    row_index: int,
+    record: dict[str, Any],
+    instrument: str,
+) -> dict[str, Any]:
+    if dataset == "stock_basic":
+        row = {
+            "factor_input": RAW_FACTOR_INPUT_PURPOSES[dataset],
+            "instrument": _raw_record_instrument(record) or instrument,
+            "symbol": _raw_first_value(record, _raw_symbol_keys()),
+            "exchange": _raw_first_value(record, ("exchange", "市场", "交易所")),
+            "name": _raw_first_value(
+                record,
+                ("name", "名称", "股票简称", "证券简称", "成分券名称"),
+            ),
+            "industry": _raw_first_value(record, ("industry", "行业", "所属行业")),
+            "list_date": _raw_date_from_keys(record, ("list_date", "上市日期")),
+            "delist_date": _raw_date_from_keys(record, ("delist_date", "退市日期")),
+        }
+    elif dataset == "universe_constituent":
+        row = {
+            "factor_input": RAW_FACTOR_INPUT_PURPOSES[dataset],
+            "snapshot_date": _raw_date_from_keys(record, ("snapshot_date", "日期", "调整日期")),
+            "instrument": _raw_record_instrument(record) or instrument,
+            "symbol": _raw_first_value(record, _raw_symbol_keys()),
+            "name": _raw_first_value(record, ("name", "成分券名称", "证券简称", "股票简称")),
+            "weight": _raw_first_value(record, ("weight", "权重", "权重(%)")),
+        }
+    elif dataset in {"daily_bar", "adj_factor", "price_limit", "trade_status"}:
+        row = _raw_daily_input_row(dataset, record, instrument)
+    elif dataset in {"news", "announcement"}:
+        row = _raw_document_input_row(dataset, record, instrument)
+    else:
+        row = {
+            "factor_input": RAW_FACTOR_INPUT_PURPOSES.get(dataset, "后续因子加工输入"),
+            "record_set": record_set,
+            "row_index": row_index,
+        }
+    public_row = _drop_empty_values(row)
+    useful_keys = set(public_row) - {"factor_input", "instrument", "symbol"}
+    return public_row if useful_keys else {}
+
+
+def _raw_daily_input_row(
+    dataset: str,
+    record: dict[str, Any],
+    instrument: str,
+) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "factor_input": RAW_FACTOR_INPUT_PURPOSES[dataset],
+        "trade_date": _raw_record_date(record),
+        "instrument": _raw_record_instrument(record) or instrument,
+        "symbol": _raw_first_value(record, _raw_symbol_keys()),
+    }
+    if dataset in {"daily_bar", "adj_factor"}:
+        row.update(
+            {
+                "open": _raw_first_value(record, ("open", "开盘", "开盘价")),
+                "high": _raw_first_value(record, ("high", "最高", "最高价")),
+                "low": _raw_first_value(record, ("low", "最低", "最低价")),
+                "close": _raw_first_value(record, ("close", "收盘", "收盘价", "最新价")),
+                "volume": _raw_first_value(record, ("volume", "成交量")),
+                "amount": _raw_first_value(record, ("amount", "成交额")),
+                "adj_factor": _raw_first_value(record, ("adj_factor", "复权因子", "factor")),
+            }
+        )
+    if dataset == "price_limit":
+        row.update(
+            {
+                "limit_up": _raw_first_value(record, ("limit_up", "涨停价")),
+                "limit_down": _raw_first_value(record, ("limit_down", "跌停价")),
+                "prev_close": _raw_first_value(record, ("prev_close", "pre_close", "前收盘价", "昨收")),
+                "limit_rule": _raw_first_value(record, ("limit_rule", "涨跌停规则", "规则")),
+            }
+        )
+    if dataset == "trade_status":
+        row.update(
+            {
+                "trade_status": _raw_first_value(record, ("trade_status", "交易状态", "停牌状态")),
+                "halt_reason": _raw_first_value(record, ("halt_reason", "停牌原因", "原因")),
+                "source_update_time": _raw_first_value(
+                    record,
+                    ("source_update_time", "更新时间", "最新公告日期"),
+                ),
+            }
+        )
+    return row
+
+
+def _raw_document_input_row(
+    dataset: str,
+    record: dict[str, Any],
+    instrument: str,
+) -> dict[str, Any]:
+    return {
+        "factor_input": RAW_FACTOR_INPUT_PURPOSES[dataset],
+        "publish_date": _raw_record_date(record),
+        "instrument": _raw_record_instrument(record) or instrument,
+        "symbol": _raw_first_value(record, _raw_symbol_keys()),
+        "title": _raw_first_value(record, ("title", "新闻标题", "公告标题", "标题")),
+        "url": _raw_first_value(record, ("url", "链接", "公告链接", "URL")),
+        "source": _raw_first_value(record, ("source", "来源", "新闻来源")),
+    }
+
+
+def _raw_record_instrument(record: dict[str, Any]) -> str | None:
+    value = _raw_first_value(record, _raw_symbol_keys())
+    if value is None:
+        return None
+    try:
+        return normalize_instrument(str(value))
+    except ValueError:
+        return None
+
+
+def _raw_symbol_keys() -> tuple[str, ...]:
+    return (
+        "instrument",
+        "symbol",
+        "code",
+        "股票代码",
+        "证券代码",
+        "代码",
+        "成分券代码",
+        "样本代码",
+        "SECURITY_CODE",
+    )
+
+
+def _raw_first_value(record: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if key not in record:
+            continue
+        value = _raw_public_value(record.get(key))
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _raw_date_from_keys(record: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        if key in record:
+            return _normalize_date_text(record.get(key))
+    return None
+
+
+def _raw_public_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (dict, list, tuple, set)):
+        return None
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def _drop_empty_values(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in row.items()
+        if value is not None and value != ""
+    }
 
 
 def _raw_record_sets(payload: dict[str, Any]) -> list[tuple[str, list[Any]]]:
@@ -2323,7 +2552,8 @@ def _raw_object_meta(
         "dataset": source_object.get("dataset"),
         "source_id": source_object.get("source_id"),
         "function": payload.get("function"),
-        "params": payload.get("params") or {},
+        "parameter_summary": _raw_parameter_summary(payload.get("params") or {}),
+        "record_count": _raw_payload_record_count(payload),
         "error": payload.get("error"),
         "row_count": row_count,
         "uri": source_object.get("uri"),
@@ -2331,6 +2561,39 @@ def _raw_object_meta(
         "observed_at": source_object.get("observed_at"),
         "size_bytes": source_object.get("size_bytes"),
     }
+
+
+def _raw_parameter_summary(params: Any) -> str:
+    if not isinstance(params, dict) or not params:
+        return "-"
+    pairs = []
+    for key, value in params.items():
+        display = _raw_parameter_value(value)
+        if display:
+            pairs.append(f"{key}={display}")
+        if len(pairs) >= 6:
+            break
+    return "；".join(pairs) if pairs else "-"
+
+
+def _raw_parameter_value(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, (str, int, float, bool)):
+        return str(value)
+    if isinstance(value, (list, tuple, set)):
+        scalars = [
+            str(item)
+            for item in list(value)[:5]
+            if isinstance(item, (str, int, float, bool))
+        ]
+        suffix = "..." if len(value) > 5 else ""
+        return ",".join(scalars) + suffix
+    return type(value).__name__
+
+
+def _raw_payload_record_count(payload: dict[str, Any]) -> int:
+    return sum(len(records) for _record_set, records in _raw_record_sets(payload))
 
 
 def _raw_preview_summary(sections: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2374,13 +2637,20 @@ def _empty_instrument_timeline(
     *,
     start: str | None,
     end: str | None,
+    limit: int = DEFAULT_LIMIT,
+    offset: int = 0,
 ) -> dict[str, Any]:
     return {
         "status": "ok",
         "instrument": instrument,
         "start": start,
         "end": end,
-        "limit": DEFAULT_LIMIT,
+        "limit": limit,
+        "offset": offset,
+        "page": (offset // limit) + 1 if limit else 1,
+        "page_size": limit,
+        "has_previous": offset > 0,
+        "has_next": False,
         "summary": _instrument_timeline_summary(
             timeline_rows=[],
             news_rows=[],
@@ -2526,6 +2796,7 @@ def _empty_data_coverage() -> dict[str, Any]:
             "expected_trade_dates": 0,
             "complete_instruments": 0,
             "missing_instruments": 0,
+            "missing_daily_rows": 0,
             "complete_percent": 0,
             "missing_by_dimension": {
                 dataset: 0 for dataset in REQUIRED_DAILY_COVERAGE_DATASETS

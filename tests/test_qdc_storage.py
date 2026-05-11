@@ -569,6 +569,7 @@ def test_qdc_console_overview_reports_data_coverage(tmp_path: Path) -> None:
     summary = coverage["instrument_summary"]
     assert summary["complete_instruments"] == 1
     assert summary["missing_instruments"] == 2
+    assert summary["missing_daily_rows"] == 9
     assert summary["missing_by_dimension"] == {
         "daily_bar": 1,
         "adj_factor": 2,
@@ -580,6 +581,7 @@ def test_qdc_console_overview_reports_data_coverage(tmp_path: Path) -> None:
     assert rows["SH600000"]["industry"] == "银行"
     assert rows["SH600000"]["stock_basic_present"] is True
     assert rows["SH600000"]["universe_constituent_present"] is True
+    assert rows["SH600000"]["raw_missing_daily_rows"] == 0
     assert rows["SH600000"]["trade_status_days"] == 1
     assert rows["SH600000"]["news_rows"] == 1
     assert rows["SH600000"]["daily_news_factor_days"] == 1
@@ -593,6 +595,7 @@ def test_qdc_console_overview_reports_data_coverage(tmp_path: Path) -> None:
     assert sh_dimensions["news"]["expected"] is None
     assert sh_dimensions["daily_news_factor"]["event_count"] == 2
     assert rows["SZ000001"]["missing_dimensions"] == ["adj_factor", "price_limit"]
+    assert rows["SZ000001"]["raw_missing_daily_rows"] == 3
     assert rows["SZ000001"]["announcement_rows"] == 1
     assert rows["SZ000001"]["daily_announcement_factor_days"] == 1
     assert rows["SZ000001"]["factor_announcement_count"] == 1
@@ -607,6 +610,7 @@ def test_qdc_console_overview_reports_data_coverage(tmp_path: Path) -> None:
         "adj_factor",
         "price_limit",
     ]
+    assert rows["SZ300750"]["raw_missing_daily_rows"] == 6
     sz300_dimensions = rows["SZ300750"]["dimension_statuses"]
     assert sz300_dimensions["stock_basic"]["status"] == "missing"
     assert sz300_dimensions["stock_basic"]["missing"] == 1
@@ -722,9 +726,18 @@ def test_qdc_console_raw_instrument_preview_reads_raw_records(tmp_path: Path) ->
     section = preview["sections"][0]
     assert section["dataset"] == "news"
     assert section["objects"][0]["function"] == "stock_news_em"
-    assert "新闻标题" in section["columns"]
-    assert section["rows"][0]["record_set"] == "records"
-    assert section["rows"][0]["新闻标题"] == "浦发银行订单增长"
+    assert section["objects"][0]["parameter_summary"] == "symbol=600000；start_date=2026-05-11"
+    assert section["objects"][0]["record_count"] == 2
+    assert "params" not in section["objects"][0]
+    assert section["columns"] == ["factor_input", "publish_date", "instrument", "title", "url"]
+    assert "新闻标题" not in section["columns"]
+    assert section["rows"][0] == {
+        "factor_input": "新闻文本输入，用来生成新闻数量、情绪和事件类型因子",
+        "publish_date": "2026-05-11",
+        "instrument": "SH600000",
+        "title": "浦发银行订单增长",
+        "url": "https://example.com/news/1",
+    }
 
 
 def test_qdc_console_instrument_timeline_merges_daily_and_documents(
@@ -766,6 +779,8 @@ def test_qdc_console_instrument_timeline_merges_daily_and_documents(
                 "news_sentiment_mean": 0.6,
                 "news_positive_count": 1,
                 "news_negative_count": 0,
+                "news_weighted_sentiment_sum": 0.48,
+                "news_importance_sum": 0.8,
                 "news_growth_count": 1,
                 "news_risk_count": 0,
                 "news_financing_count": 0,
@@ -779,6 +794,11 @@ def test_qdc_console_instrument_timeline_merges_daily_and_documents(
                 "trade_date": "2026-05-11",
                 "instrument": "SH600000",
                 "announcement_count": 1,
+                "announcement_sentiment_mean": 0.4,
+                "announcement_positive_count": 1,
+                "announcement_negative_count": 0,
+                "announcement_weighted_sentiment_sum": 0.36,
+                "announcement_importance_sum": 0.9,
                 "announcement_growth_count": 0,
                 "announcement_risk_count": 0,
                 "announcement_financing_count": 1,
@@ -806,9 +826,30 @@ def test_qdc_console_instrument_timeline_merges_daily_and_documents(
     assert rows["2026-05-11"]["adj_factor"] == 1.0
     assert rows["2026-05-11"]["limit_up"] == 11.11
     assert rows["2026-05-11"]["news_count"] == 1
+    assert rows["2026-05-11"]["news_weighted_sentiment_sum"] == 0.48
+    assert rows["2026-05-11"]["news_importance_sum"] == 0.8
     assert rows["2026-05-11"]["announcement_count"] == 1
+    assert rows["2026-05-11"]["announcement_sentiment_mean"] == 0.4
+    assert rows["2026-05-11"]["announcement_weighted_sentiment_sum"] == 0.36
+    assert rows["2026-05-11"]["announcement_importance_sum"] == 0.9
+    assert timeline["news_rows"][0]["trade_date"] == "2026-05-11"
     assert timeline["news_rows"][0]["title"] == "公司订单增长"
+    assert timeline["announcement_rows"][0]["trade_date"] == "2026-05-11"
     assert timeline["announcement_rows"][0]["title"] == "公司发布回购公告"
+
+    second_page = QdcConsoleData(settings).instrument_timeline(
+        instrument="SH600000",
+        start="2026-05-11",
+        end="2026-05-12",
+        limit=1,
+        offset=1,
+    )
+
+    assert second_page["page"] == 2
+    assert second_page["page_size"] == 1
+    assert second_page["has_previous"] is True
+    assert second_page["has_next"] is False
+    assert [row["trade_date"] for row in second_page["timeline_rows"]] == ["2026-05-11"]
 
 
 def test_qdc_console_dataset_preview_rejects_unknown_dataset(tmp_path: Path) -> None:
