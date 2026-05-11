@@ -383,6 +383,7 @@ qdc build-factors 生成 news_v1 / announcement_v1 count 因子
 qdc sync-parquet 同步 silver/gold Parquet
 qdc quality 基础质量检查
 qdc export-qlib 基础 day provider 导出
+qdc verify-qlib 使用本地 Qlib 读取导出的 provider
 ```
 
 `run-backfill --control-only` 只用于验证任务状态流和水位表，不采集真实数据。当前 `run-backfill` 已支持 AkShare 的 `stock_basic`、`trade_calendar`、`daily_bar`、`adj_factor`、`price_limit`、`trade_status`、`announcement`、`news`；其他 dataset/source 会在 `plan-backfill` 或 `run-backfill` 阶段明确拒绝。
@@ -411,6 +412,7 @@ qdc build-factors --factor-set all --start 2026-05-01 --end 2026-05-03
 qdc sync-parquet --layer all
 qdc quality --dataset daily_bar --start 2026-05-01 --end 2026-05-03
 qdc export-qlib --start 2026-05-01 --end 2026-05-03 --provider-uri data/quant_data_center/qlib/cn_data
+qdc verify-qlib --start 2026-05-01 --end 2026-05-03 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
 pytest tests/test_qdc_storage.py
 ```
 
@@ -477,12 +479,19 @@ qdc quality --dataset daily_bar --start 2015-01-01 --end 2026-05-11
 在 /root/code/qlib 中跑通 LightGBM Alpha158 基线
 ```
 
-基础导出命令已实现；外部 Qlib baseline 尚未联调：
+基础导出和 Qlib data-layer verify 命令已实现；Alpha158 baseline 需要更长历史区间和更完整 universe，不使用 1 个交易日、2 个标的的 smoke provider：
 
 ```bash
 qdc export-qlib --start 2015-01-01 --end 2026-05-11 --provider-uri data/quant_data_center/qlib/cn_data
+qdc verify-qlib --start 2015-01-01 --end 2026-05-11 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
 cd /root/code/qlib/examples
 qrun benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_2026.yaml
+```
+
+本地 Qlib 源码联调安装命令：
+
+```bash
+conda run -n ai-trader python -m pip install -e /root/code/qlib -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://mirrors.aliyun.com/pypi/simple
 ```
 
 ### 阶段 4：公告和新闻入库
@@ -566,9 +575,11 @@ LightGBM Alpha158 + news + announcement
 已实现：silver/gold Parquet 派生同步
 已实现：qdc quality 基础质量命令
 已实现：qdc export-qlib 基础 day provider 导出，包含行情、复权、涨跌停和新闻/公告 count 因子
+已实现：qdc verify-qlib 通过本地 Qlib 校验 provider，可发现缺失 instrument / 空 feature，并输出严格 JSON
 待实现：Qlib Alpha158 baseline 外部联调
 已验证：真实 AkShare 小样本 smoke，覆盖 csi300 成分快照、stock_basic、daily、公告、基础因子、Parquet、quality 和 Qlib 导出
-待增强：历史成分变更追溯、更细质量规则、显式 retry failed CLI 和更大样本运行记录
+已验证：本地 /root/code/qlib 以 editable 方式安装到 ai-trader，并读取 QDC 导出的 Qlib provider
+待增强：历史成分变更追溯、更细质量规则、显式 retry failed CLI、更长历史 Qlib 导出和 Alpha158 baseline 配置
 ```
 
 ## 14. 真实数据 smoke 记录
@@ -582,6 +593,7 @@ qdc build-factors --factor-set all --start 2024-01-02 --end 2024-01-02
 qdc sync-parquet --layer all
 qdc quality --start 2024-01-02 --end 2024-01-02
 qdc export-qlib --start 2024-01-02 --end 2024-01-02 --provider-uri data/quant_data_center/qlib/cn_data
+qdc verify-qlib --start 2024-01-02 --end 2024-01-02 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
 qdc plan-backfill --dataset stock_basic --source-id akshare --start 2024-01-02 --end 2024-01-02
 qdc run-backfill --dataset stock_basic --limit-tasks 1
 qdc sync-parquet --layer silver --dataset stock_basic
@@ -599,6 +611,7 @@ announcement: 852 rows
 daily_announcement_factor: 454 rows
 quality: 0 issue
 Qlib export: 2 instruments, 1 calendar date, 24 files
+Qlib verify: D.calendar / D.list_instruments / D.features 可读取 2 条 feature 行，issues=[]
 ```
 
 真实源修复：

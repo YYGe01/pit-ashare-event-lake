@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import json
+import math
 import sys
 import struct
+from datetime import datetime
 from types import SimpleNamespace
 from pathlib import Path
 
 import pandas as pd
 
-from quant_data_center.cli import main
+from quant_data_center.cli import _print_json, main
 from quant_data_center.jobs.backfill import parse_date, plan_backfill_tasks
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.database import QdcDatabase
@@ -154,6 +157,13 @@ def test_qdc_smoke_records_job_run(tmp_path: Path) -> None:
     counts = database.table_counts()
     assert counts["job_run"] == 1
     assert counts["backfill_task"] == 0
+
+
+def test_cli_print_json_replaces_non_finite_floats(capsys) -> None:
+    _print_json({"status": "ok", "value": math.nan, "rows": [{"value": math.inf}]})
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"rows": [{"value": None}], "status": "ok", "value": None}
 
 
 def test_plan_backfill_tasks_splits_dates_and_symbols() -> None:
@@ -1146,3 +1156,69 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path) -> None:
     assert struct.unpack("<fff", close_bin) == (0.0, 10.199999809265137, 10.600000381469727)
     qlib_objects = database.list_source_objects(dataset="qlib_export", layer="qlib")
     assert len(qlib_objects) == 13
+
+
+def test_qdc_verify_qlib_reports_missing_instrument_without_db_side_effect(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    config_path = _write_config(tmp_path)
+    provider_uri = tmp_path / "qlib_provider"
+    (provider_uri / "features" / "sh600000").mkdir(parents=True)
+    (provider_uri / "features" / "sh600000" / "close.day.bin").write_bytes(b"")
+
+    class FakeD:
+        @staticmethod
+        def calendar(**kwargs):
+            return [datetime(2026, 5, 11)]
+
+        @staticmethod
+        def instruments(name):
+            assert name == "all"
+            return name
+
+        @staticmethod
+        def list_instruments(pool, **kwargs):
+            assert pool == "all"
+            return ["sh600000"]
+
+        @staticmethod
+        def features(instruments, fields, **kwargs):
+            assert instruments == ["SZ000001"]
+            assert fields == ["$close"]
+            return pd.DataFrame(columns=fields)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "qlib",
+        SimpleNamespace(init=lambda **kwargs: None),
+    )
+    monkeypatch.setitem(sys.modules, "qlib.data", SimpleNamespace(D=FakeD))
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "verify-qlib",
+                "--provider-uri",
+                str(provider_uri),
+                "--start",
+                "2026-05-11",
+                "--end",
+                "2026-05-11",
+                "--instruments",
+                "SZ000001",
+                "--fields",
+                "$close",
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "fail"
+    assert [issue["issue_type"] for issue in payload["issues"]] == [
+        "missing_instruments",
+        "empty_features",
+    ]
+    assert not QdcSettings.from_yaml(config_path).database_path.exists()

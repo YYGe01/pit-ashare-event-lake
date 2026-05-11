@@ -28,6 +28,7 @@ qdc build-factors --factor-set all --start 2026-05-01 --end 2026-05-03
 qdc sync-parquet --layer all
 qdc quality --dataset daily_bar --start 2026-05-01 --end 2026-05-03
 qdc export-qlib --start 2026-05-01 --end 2026-05-03 --provider-uri data/quant_data_center/qlib/cn_data
+qdc verify-qlib --start 2026-05-01 --end 2026-05-03 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
 ```
 
 `run-backfill --control-only` 只验证任务状态流和水位表，不采集真实数据。
@@ -45,7 +46,7 @@ qdc export-qlib --start 2026-05-01 --end 2026-05-03 --provider-uri data/quant_da
 
 `daily_bar`、`adj_factor`、`price_limit`、`news` 可用 `--universe` 展开 symbol，也可以显式传入 `--symbols` 覆盖。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
 
-当前回补链路会写入 raw JSON、bronze Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc build-factors` 可生成新闻/公告日频 count 因子，`qdc sync-parquet` 可同步 silver/gold Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day provider 目录。
+当前回补链路会写入 raw JSON、bronze Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc build-factors` 可生成新闻/公告日频 count 因子，`qdc sync-parquet` 可同步 silver/gold Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day provider 目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的 provider 做 data-layer smoke。
 
 `qdc` 默认读取仓库内 `config/quant_data_center.yaml`；需要从其他目录运行或切换配置时，可设置 `QDC_CONFIG` 或传入 `--config`。
 
@@ -62,6 +63,16 @@ data/quant_data_center/             本地运行数据，已 gitignored
 
 当前主线只保留 QDC 代码、配置、测试和文档。
 
+## Qlib 联调
+
+如需要在当前环境直接验证 Qlib provider，可安装本地 Qlib 源码和依赖。网络慢时优先使用国内 PyPI 源：
+
+```bash
+conda run -n ai-trader python -m pip install -e /root/code/qlib -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://mirrors.aliyun.com/pypi/simple
+```
+
+当前已用本地 `/root/code/qlib` 验证 `D.calendar`、`D.list_instruments` 和 `D.features` 能读取 `qdc export-qlib` 产物。Alpha158 训练需要更长历史区间和更完整 universe，不使用只有 1 个交易日、2 个标的的 smoke provider。
+
 ## 验证
 
 ```powershell
@@ -69,6 +80,7 @@ qdc validate-config
 qdc daily --date 2026-05-11 --universe csi300 --control-only
 qdc sync-parquet --layer all
 qdc quality --dataset daily_bar
+qdc verify-qlib --start 2024-01-02 --end 2024-01-02 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
 pytest
 ruff check .
 ```

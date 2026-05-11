@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import struct
 from pathlib import Path
@@ -179,6 +180,88 @@ class QlibExporter:
         )
 
 
+class QlibProviderVerifier:
+    """Verify that a QDC exported provider can be read through Qlib."""
+
+    def __init__(self, settings: QdcSettings) -> None:
+        self.settings = settings
+
+    def verify(
+        self,
+        *,
+        provider_uri: str | Path | None = None,
+        start_date: str,
+        end_date: str,
+        instruments: list[str],
+        fields: list[str] | None = None,
+    ) -> dict[str, Any]:
+        root = Path(provider_uri).expanduser() if provider_uri else self.settings.qlib_root / "cn_data"
+        if not root.is_absolute():
+            root = (self.settings.project_root / root).resolve()
+        qlib_fields = fields or ["$close", "$volume", "$announcement_count", "$news_count"]
+        result: dict[str, Any] = {
+            "status": "ok",
+            "provider_uri": str(root),
+            "requested_instruments": instruments,
+            "fields": qlib_fields,
+        }
+        if not root.exists():
+            return {
+                **result,
+                "status": "fail",
+                "error_type": "missing_provider",
+                "message": f"Qlib provider_uri does not exist: {root}",
+            }
+        try:
+            qlib = __import__("qlib")
+            data_module = __import__("qlib.data", fromlist=["D"])
+        except ImportError as exc:
+            return {
+                **result,
+                "status": "fail",
+                "error_type": "missing_dependency",
+                "message": (
+                    "Qlib is not installed. Install local Qlib with "
+                    "`python -m pip install -e /root/code/qlib "
+                    "-i https://pypi.tuna.tsinghua.edu.cn/simple "
+                    "--extra-index-url https://mirrors.aliyun.com/pypi/simple`."
+                ),
+                "error_message": str(exc),
+            }
+        D = data_module.D
+        qlib.init(provider_uri=str(root), region="cn", logging_level=logging.WARNING)
+        calendar = D.calendar(start_time=start_date, end_time=end_date, freq="day")
+        instrument_pool = D.list_instruments(
+            D.instruments("all"),
+            start_time=start_date,
+            end_time=end_date,
+            as_list=True,
+        )
+        features = D.features(
+            instruments,
+            qlib_fields,
+            start_time=start_date,
+            end_time=end_date,
+            freq="day",
+        )
+        issues = _verify_provider_coverage(
+            root=root,
+            instrument_pool=[str(item) for item in instrument_pool],
+            requested_instruments=instruments,
+            fields=qlib_fields,
+            feature_row_count=len(features),
+        )
+        return {
+            **result,
+            "status": "fail" if issues else "ok",
+            "calendar_count": int(len(calendar)),
+            "instrument_count": int(len(instrument_pool)),
+            "feature_row_count": int(len(features)),
+            "issues": issues,
+            "preview": _dataframe_preview(features),
+        }
+
+
 def _as_float(value: Any) -> float:
     if value is None:
         return math.nan
@@ -189,3 +272,57 @@ def _as_float(value: Any) -> float:
     if math.isnan(result):
         return math.nan
     return result
+
+
+def _dataframe_preview(frame: Any) -> list[dict[str, Any]]:
+    reset = frame.reset_index().head(10)
+    return [
+        {
+            str(key): value.isoformat() if hasattr(value, "isoformat") else value
+            for key, value in row.items()
+        }
+        for row in reset.to_dict("records")
+    ]
+
+
+def _verify_provider_coverage(
+    *,
+    root: Path,
+    instrument_pool: list[str],
+    requested_instruments: list[str],
+    fields: list[str],
+    feature_row_count: int,
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    pool = {instrument.lower() for instrument in instrument_pool}
+    requested = [instrument.lower() for instrument in requested_instruments]
+    missing_instruments = [instrument for instrument in requested if instrument not in pool]
+    if missing_instruments:
+        issues.append({"issue_type": "missing_instruments", "instruments": missing_instruments})
+    if feature_row_count == 0:
+        issues.append({"issue_type": "empty_features"})
+
+    available_requested = [instrument for instrument in requested if instrument in pool]
+    missing_feature_files = []
+    for field in fields:
+        feature_name = _raw_qlib_feature_name(field)
+        if not feature_name:
+            continue
+        for instrument in available_requested:
+            path = root / "features" / instrument / f"{feature_name}.day.bin"
+            if not path.exists():
+                missing_feature_files.append(str(path.relative_to(root)))
+    if missing_feature_files:
+        issues.append(
+            {
+                "issue_type": "missing_feature_files",
+                "paths": sorted(missing_feature_files),
+            }
+        )
+    return issues
+
+
+def _raw_qlib_feature_name(field: str) -> str:
+    if not field.startswith("$"):
+        return ""
+    return field[1:].strip()

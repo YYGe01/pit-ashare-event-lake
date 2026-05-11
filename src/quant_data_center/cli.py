@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from quant_data_center.collectors.akshare import AkshareSilverCollector
-from quant_data_center.exports.qlib import QlibExporter
+from quant_data_center.exports.qlib import QlibExporter, QlibProviderVerifier
 from quant_data_center.factors import FactorBuilder
 from quant_data_center.jobs.backfill import parse_date, parse_symbols, plan_backfill_tasks
 from quant_data_center.quality import QualityChecker
@@ -56,7 +58,23 @@ def load_settings(config_path: str | Path) -> QdcSettings:
 
 
 def _print_json(payload: dict[str, object]) -> None:
-    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    print(json.dumps(_json_safe(payload), ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False))
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if hasattr(value, "item"):
+        return _json_safe(value.item())
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    return value
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -144,6 +162,24 @@ def cmd_export_qlib(args: argparse.Namespace) -> int:
     )
     _print_json(result)
     return 0
+
+
+def cmd_verify_qlib(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    instruments = parse_symbols(args.instruments)
+    if not instruments:
+        instruments = settings.universe_symbols(args.universe)
+    if not instruments:
+        raise ValueError("verify-qlib requires --instruments or a non-empty --universe")
+    result = QlibProviderVerifier(settings).verify(
+        provider_uri=args.provider_uri,
+        start_date=args.start,
+        end_date=args.end,
+        instruments=instruments,
+        fields=parse_symbols(args.fields),
+    )
+    _print_json(result)
+    return 0 if result["status"] == "ok" else 1
 
 
 def cmd_build_factors(args: argparse.Namespace) -> int:
@@ -591,6 +627,22 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--start", help="YYYY-MM-DD")
     export_parser.add_argument("--end", help="YYYY-MM-DD")
     export_parser.set_defaults(func=cmd_export_qlib)
+
+    verify_qlib_parser = subparsers.add_parser(
+        "verify-qlib",
+        help="Verify that Qlib can read a QDC exported provider",
+    )
+    verify_qlib_parser.add_argument("--provider-uri")
+    verify_qlib_parser.add_argument("--start", required=True, help="YYYY-MM-DD")
+    verify_qlib_parser.add_argument("--end", required=True, help="YYYY-MM-DD")
+    verify_qlib_parser.add_argument("--instruments", help="Comma-separated instruments")
+    verify_qlib_parser.add_argument("--universe", default="csi300")
+    verify_qlib_parser.add_argument(
+        "--fields",
+        default="$close,$volume,$announcement_count,$news_count",
+        help="Comma-separated Qlib fields",
+    )
+    verify_qlib_parser.set_defaults(func=cmd_verify_qlib)
 
     factor_parser = subparsers.add_parser(
         "build-factors",
