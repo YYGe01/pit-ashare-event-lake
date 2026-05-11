@@ -42,6 +42,64 @@ INSTRUMENT_COVERAGE_DATASETS = (
     "daily_news_factor",
     "daily_announcement_factor",
 )
+ALL_INSTRUMENT_COVERAGE_DIMENSIONS = (
+    "stock_basic",
+    "universe_constituent",
+    "daily_bar",
+    "adj_factor",
+    "price_limit",
+    "trade_status",
+    "news",
+    "announcement",
+    "daily_news_factor",
+    "daily_announcement_factor",
+)
+INSTRUMENT_TIMELINE_TABLES = {
+    "daily_bar": [
+        "open",
+        "high",
+        "low",
+        "close",
+        "pre_close",
+        "volume",
+        "amount",
+        "vwap",
+    ],
+    "adj_factor": ["adj_factor", "factor_type"],
+    "price_limit": ["limit_up", "limit_down", "prev_close", "limit_rule"],
+    "trade_status": ["trade_status", "halt_reason", "source_update_time"],
+    "daily_news_factor": [
+        "news_count",
+        "news_sentiment_mean",
+        "news_positive_count",
+        "news_negative_count",
+        "news_growth_count",
+        "news_risk_count",
+        "news_financing_count",
+        "news_contract_count",
+        "news_buyback_count",
+        "news_shareholder_change_count",
+        "news_regulatory_count",
+        "news_litigation_count",
+        "news_performance_count",
+    ],
+    "daily_announcement_factor": [
+        "announcement_count",
+        "announcement_sentiment_mean",
+        "announcement_positive_count",
+        "announcement_negative_count",
+        "announcement_growth_count",
+        "announcement_risk_count",
+        "announcement_financing_count",
+        "announcement_operation_count",
+        "announcement_contract_count",
+        "announcement_buyback_count",
+        "announcement_shareholder_change_count",
+        "announcement_regulatory_count",
+        "announcement_litigation_count",
+        "announcement_performance_count",
+    ],
+}
 
 
 class QdcConsoleData:
@@ -172,6 +230,166 @@ class QdcConsoleData:
             )
         return {"status": "ok", "object_count": len(objects), "objects": objects}
 
+    def _dataset_preview_summary(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        dataset: str,
+        columns: list[str],
+        date_column: str | None,
+        where_clause: str,
+        params: list[Any],
+    ) -> dict[str, Any]:
+        total_row_count = int(
+            conn.execute(f"select count(*) from {SILVER_SCHEMA}.{dataset}").fetchone()[0]
+            or 0
+        )
+        filtered_row_count = int(
+            conn.execute(
+                f"select count(*) from {SILVER_SCHEMA}.{dataset} {where_clause}",
+                params,
+            ).fetchone()[0]
+            or 0
+        )
+        summary: dict[str, Any] = {
+            "total_row_count": total_row_count,
+            "filtered_row_count": filtered_row_count,
+            "date_column": date_column,
+            "supports_instrument_filter": "instrument" in columns,
+            "supports_date_filter": date_column is not None,
+            "min_date": None,
+            "max_date": None,
+            "date_count": None,
+            "instrument_count": None,
+            "source_ids": [],
+        }
+        if date_column:
+            row = conn.execute(
+                f"""
+                select min({date_column}), max({date_column}), count(distinct {date_column})
+                from {SILVER_SCHEMA}.{dataset}
+                {where_clause}
+                """,
+                params,
+            ).fetchone()
+            summary.update(
+                {
+                    "min_date": row[0],
+                    "max_date": row[1],
+                    "date_count": int(row[2] or 0),
+                }
+            )
+        if "instrument" in columns:
+            summary["instrument_count"] = int(
+                conn.execute(
+                    f"""
+                    select count(distinct instrument)
+                    from {SILVER_SCHEMA}.{dataset}
+                    {where_clause}
+                    """,
+                    params,
+                ).fetchone()[0]
+                or 0
+            )
+        if "source_id" in columns:
+            summary["source_ids"] = _query_dicts(
+                conn,
+                f"""
+                select source_id, count(*) as row_count
+                from {SILVER_SCHEMA}.{dataset}
+                {where_clause}
+                group by source_id
+                order by row_count desc, source_id
+                limit 8
+                """,
+                params,
+            )
+        return summary
+
+    def _timeline_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        silver_tables: set[str],
+        instrument: str,
+        start: str | None,
+        end: str | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        rows_by_date: dict[str, dict[str, Any]] = {}
+        for table, configured_fields in INSTRUMENT_TIMELINE_TABLES.items():
+            if table not in silver_tables:
+                continue
+            columns = self._columns(conn, SILVER_SCHEMA, table)
+            fields = [field for field in configured_fields if field in columns]
+            if "trade_date" not in columns or "instrument" not in columns or not fields:
+                continue
+            select_fields = ", ".join(fields)
+            source_expr = ", source_id" if "source_id" in columns else ""
+            date_clause, params = _instrument_date_filter(
+                instrument=instrument,
+                date_column="trade_date",
+                start=start,
+                end=end,
+            )
+            table_rows = _query_dicts(
+                conn,
+                f"""
+                select trade_date, instrument, {select_fields}{source_expr}
+                from {SILVER_SCHEMA}.{table}
+                where {date_clause}
+                order by trade_date desc
+                limit ?
+                """,
+                [*params, limit],
+            )
+            for table_row in table_rows:
+                trade_date = str(table_row["trade_date"])
+                target = rows_by_date.setdefault(
+                    trade_date,
+                    {"trade_date": trade_date, "instrument": instrument},
+                )
+                for field in fields:
+                    target[field] = table_row.get(field)
+                if "source_id" in table_row:
+                    target[f"{table}_source_id"] = table_row.get("source_id")
+        return [
+            rows_by_date[trade_date]
+            for trade_date in sorted(rows_by_date, reverse=True)[:limit]
+        ]
+
+    def _document_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        table: str,
+        silver_tables: set[str],
+        instrument: str,
+        start: str | None,
+        end: str | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if table not in silver_tables:
+            return []
+        id_field = "news_id" if table == "news" else "announcement_id"
+        date_clause, params = _instrument_date_filter(
+            instrument=instrument,
+            date_column="publish_date",
+            start=start,
+            end=end,
+        )
+        return _query_dicts(
+            conn,
+            f"""
+            select {id_field}, publish_date, instrument, title, url, source_id
+            from {SILVER_SCHEMA}.{table}
+            where {date_clause}
+            order by publish_date desc, {id_field}
+            limit ?
+            """,
+            [*params, limit],
+        )
+
     def dataset_preview(
         self,
         *,
@@ -185,24 +403,12 @@ class QdcConsoleData:
             supported = ", ".join(SILVER_TABLES)
             raise ValueError(f"unsupported preview dataset: {dataset}; supported: {supported}")
         if not self.settings.database_path.exists():
-            return {
-                "status": "ok",
-                "dataset": dataset,
-                "columns": [],
-                "row_count": 0,
-                "rows": [],
-            }
+            return _empty_dataset_preview(dataset)
 
         with self._connect() as conn:
             silver_tables = self._existing_tables(conn, SILVER_SCHEMA)
             if dataset not in silver_tables:
-                return {
-                    "status": "ok",
-                    "dataset": dataset,
-                    "columns": [],
-                    "row_count": 0,
-                    "rows": [],
-                }
+                return _empty_dataset_preview(dataset)
 
             columns = self._columns(conn, SILVER_SCHEMA, dataset)
             date_column = _preferred_date_column(columns)
@@ -238,12 +444,85 @@ class QdcConsoleData:
                 """,
                 [*params, row_limit],
             )
+            summary = self._dataset_preview_summary(
+                conn,
+                dataset=dataset,
+                columns=columns,
+                date_column=date_column,
+                where_clause=where_clause,
+                params=params,
+            )
         return {
             "status": "ok",
             "dataset": dataset,
             "columns": columns,
+            "date_column": date_column,
+            "supports_instrument_filter": "instrument" in columns,
+            "supports_date_filter": date_column is not None,
             "row_count": len(rows),
+            "filtered_row_count": summary["filtered_row_count"],
+            "total_row_count": summary["total_row_count"],
+            "summary": summary,
             "rows": rows,
+        }
+
+    def instrument_timeline(
+        self,
+        *,
+        instrument: str,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        instrument = instrument.strip()
+        if not instrument:
+            raise ValueError("instrument timeline requires instrument")
+        if not self.settings.database_path.exists():
+            return _empty_instrument_timeline(instrument, start=start, end=end)
+
+        with self._connect() as conn:
+            silver_tables = self._existing_tables(conn, SILVER_SCHEMA)
+            row_limit = _clamp_limit(limit)
+            timeline_rows = self._timeline_rows(
+                conn,
+                silver_tables=silver_tables,
+                instrument=instrument,
+                start=start,
+                end=end,
+                limit=row_limit,
+            )
+            news_rows = self._document_rows(
+                conn,
+                table="news",
+                silver_tables=silver_tables,
+                instrument=instrument,
+                start=start,
+                end=end,
+                limit=row_limit,
+            )
+            announcement_rows = self._document_rows(
+                conn,
+                table="announcement",
+                silver_tables=silver_tables,
+                instrument=instrument,
+                start=start,
+                end=end,
+                limit=row_limit,
+            )
+        return {
+            "status": "ok",
+            "instrument": instrument,
+            "start": start,
+            "end": end,
+            "limit": row_limit,
+            "summary": _instrument_timeline_summary(
+                timeline_rows=timeline_rows,
+                news_rows=news_rows,
+                announcement_rows=announcement_rows,
+            ),
+            "timeline_rows": timeline_rows,
+            "news_rows": news_rows,
+            "announcement_rows": announcement_rows,
         }
 
     def _empty_payload(self) -> dict[str, Any]:
@@ -845,11 +1124,19 @@ class QdcConsoleData:
                         dataset: len(instruments)
                         for dataset in REQUIRED_DAILY_COVERAGE_DATASETS
                     },
+                    "available_by_dimension": {
+                        dataset: 0 for dataset in ALL_INSTRUMENT_COVERAGE_DIMENSIONS
+                    },
                 },
                 "rows": [],
                 "hidden_count": 0,
             }
 
+        identity_by_instrument = self._instrument_identity_by_instrument(
+            conn,
+            silver_tables=silver_tables,
+            instruments=instruments,
+        )
         counts_by_dataset = {
             dataset: self._instrument_daily_counts(
                 conn,
@@ -860,10 +1147,70 @@ class QdcConsoleData:
             )
             for dataset in REQUIRED_DAILY_COVERAGE_DATASETS
         }
+        trade_status_counts = self._instrument_daily_counts(
+            conn,
+            table="trade_status",
+            silver_tables=silver_tables,
+            min_date=trade_dates[0],
+            max_date=trade_dates[-1],
+        )
+        news_row_counts = self._instrument_record_counts(
+            conn,
+            table="news",
+            silver_tables=silver_tables,
+            date_column="publish_date",
+            min_date=trade_dates[0],
+            max_date=trade_dates[-1],
+        )
+        announcement_row_counts = self._instrument_record_counts(
+            conn,
+            table="announcement",
+            silver_tables=silver_tables,
+            date_column="publish_date",
+            min_date=trade_dates[0],
+            max_date=trade_dates[-1],
+        )
+        news_factor_day_counts = self._instrument_daily_counts(
+            conn,
+            table="daily_news_factor",
+            silver_tables=silver_tables,
+            min_date=trade_dates[0],
+            max_date=trade_dates[-1],
+        )
+        announcement_factor_day_counts = self._instrument_daily_counts(
+            conn,
+            table="daily_announcement_factor",
+            silver_tables=silver_tables,
+            min_date=trade_dates[0],
+            max_date=trade_dates[-1],
+        )
+        news_factor_sums = self._instrument_numeric_sums(
+            conn,
+            table="daily_news_factor",
+            field="news_count",
+            silver_tables=silver_tables,
+            min_date=trade_dates[0],
+            max_date=trade_dates[-1],
+        )
+        announcement_factor_sums = self._instrument_numeric_sums(
+            conn,
+            table="daily_announcement_factor",
+            field="announcement_count",
+            silver_tables=silver_tables,
+            min_date=trade_dates[0],
+            max_date=trade_dates[-1],
+        )
         missing_by_dimension = {dataset: 0 for dataset in REQUIRED_DAILY_COVERAGE_DATASETS}
+        available_by_dimension = {
+            dataset: 0 for dataset in ALL_INSTRUMENT_COVERAGE_DIMENSIONS
+        }
         rows = []
         complete_count = 0
         for instrument in instruments:
+            identity = identity_by_instrument.get(
+                instrument,
+                _default_instrument_identity(instrument),
+            )
             dimension_counts = {
                 dataset: min(int(counts.get(instrument, 0)), expected_date_count)
                 for dataset, counts in counts_by_dataset.items()
@@ -877,12 +1224,74 @@ class QdcConsoleData:
                 missing_by_dimension[dataset] += 1
             complete = not missing_dimensions
             complete_count += 1 if complete else 0
+            trade_status_days = min(
+                int(trade_status_counts.get(instrument, 0)),
+                expected_date_count,
+            )
+            daily_news_factor_days = min(
+                int(news_factor_day_counts.get(instrument, 0)),
+                expected_date_count,
+            )
+            daily_announcement_factor_days = min(
+                int(announcement_factor_day_counts.get(instrument, 0)),
+                expected_date_count,
+            )
+            news_rows = int(news_row_counts.get(instrument, 0))
+            announcement_rows = int(announcement_row_counts.get(instrument, 0))
+            factor_news_count = float(news_factor_sums.get(instrument, 0))
+            factor_announcement_count = float(
+                announcement_factor_sums.get(instrument, 0)
+            )
+            all_dimension_counts = {
+                "stock_basic": 1 if identity.get("stock_basic_present") else 0,
+                "universe_constituent": 1
+                if identity.get("universe_constituent_present")
+                else 0,
+                **dimension_counts,
+                "trade_status": trade_status_days,
+                "news": news_rows,
+                "announcement": announcement_rows,
+                "daily_news_factor": daily_news_factor_days,
+                "daily_announcement_factor": daily_announcement_factor_days,
+            }
+            available_dimensions = [
+                dataset
+                for dataset in ALL_INSTRUMENT_COVERAGE_DIMENSIONS
+                if all_dimension_counts.get(dataset, 0) > 0
+            ]
+            for dataset in available_dimensions:
+                available_by_dimension[dataset] += 1
+            core_missing_days = sum(
+                max(expected_date_count - count, 0)
+                for count in dimension_counts.values()
+            )
             rows.append(
                 {
                     "instrument": instrument,
+                    "symbol": identity.get("symbol"),
+                    "exchange": identity.get("exchange"),
+                    "name": identity.get("name"),
+                    "industry": identity.get("industry"),
+                    "is_active": identity.get("is_active"),
+                    "universes": identity.get("universes", []),
+                    "stock_basic_present": bool(identity.get("stock_basic_present")),
+                    "universe_constituent_present": bool(
+                        identity.get("universe_constituent_present")
+                    ),
                     "complete": complete,
                     "missing_dimensions": missing_dimensions,
                     "dimension_counts": dimension_counts,
+                    "all_dimension_counts": all_dimension_counts,
+                    "available_dimensions": available_dimensions,
+                    "observed_dimension_count": len(available_dimensions),
+                    "core_missing_days": core_missing_days,
+                    "trade_status_days": trade_status_days,
+                    "news_rows": news_rows,
+                    "announcement_rows": announcement_rows,
+                    "daily_news_factor_days": daily_news_factor_days,
+                    "daily_announcement_factor_days": daily_announcement_factor_days,
+                    "factor_news_count": factor_news_count,
+                    "factor_announcement_count": factor_announcement_count,
                     "expected_trade_dates": expected_date_count,
                 }
             )
@@ -890,7 +1299,9 @@ class QdcConsoleData:
         rows.sort(
             key=lambda row: (
                 row["complete"],
+                -row["core_missing_days"],
                 -len(row["missing_dimensions"]),
+                -row["observed_dimension_count"],
                 row["instrument"],
             )
         )
@@ -903,10 +1314,89 @@ class QdcConsoleData:
                 "missing_instruments": len(instruments) - complete_count,
                 "complete_percent": _percent(complete_count, len(instruments)),
                 "missing_by_dimension": missing_by_dimension,
+                "available_by_dimension": available_by_dimension,
             },
             "rows": visible_rows,
             "hidden_count": max(len(rows) - len(visible_rows), 0),
         }
+
+    def _instrument_identity_by_instrument(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        silver_tables: set[str],
+        instruments: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        identity = {
+            instrument: _default_instrument_identity(instrument)
+            for instrument in instruments
+        }
+        if not instruments:
+            return identity
+
+        placeholders = ", ".join("?" for _ in instruments)
+        if "stock_basic" in silver_tables:
+            rows = _query_dicts(
+                conn,
+                f"""
+                select instrument, symbol, exchange, name, industry, is_active
+                from {SILVER_SCHEMA}.stock_basic
+                where instrument in ({placeholders})
+                order by instrument
+                """,
+                instruments,
+            )
+            for row in rows:
+                target = identity.setdefault(
+                    str(row["instrument"]),
+                    _default_instrument_identity(str(row["instrument"])),
+                )
+                target.update(
+                    {
+                        "symbol": row.get("symbol") or target["symbol"],
+                        "exchange": row.get("exchange") or target["exchange"],
+                        "name": row.get("name") or target["name"],
+                        "industry": row.get("industry"),
+                        "is_active": row.get("is_active"),
+                        "stock_basic_present": True,
+                    }
+                )
+
+        if "universe_constituent" in silver_tables:
+            rows = _query_dicts(
+                conn,
+                f"""
+                with latest as (
+                  select universe, max(snapshot_date) as snapshot_date
+                  from {SILVER_SCHEMA}.universe_constituent
+                  group by universe
+                )
+                select c.universe, c.snapshot_date, c.instrument, c.symbol,
+                       c.exchange, c.name, c.weight
+                from {SILVER_SCHEMA}.universe_constituent c
+                join latest l
+                  on c.universe = l.universe
+                 and c.snapshot_date = l.snapshot_date
+                where c.instrument in ({placeholders})
+                order by c.instrument, c.universe
+                """,
+                instruments,
+            )
+            for row in rows:
+                target = identity.setdefault(
+                    str(row["instrument"]),
+                    _default_instrument_identity(str(row["instrument"])),
+                )
+                target["symbol"] = row.get("symbol") or target.get("symbol")
+                target["exchange"] = row.get("exchange") or target.get("exchange")
+                target["name"] = target.get("name") or row.get("name")
+                target["universe_constituent_present"] = True
+                if row.get("universe"):
+                    universes = target.setdefault("universes", [])
+                    universe = str(row["universe"])
+                    if universe not in universes:
+                        universes.append(universe)
+        return identity
 
     def _instrument_daily_counts(
         self,
@@ -930,6 +1420,60 @@ class QdcConsoleData:
             [min_date, max_date],
         ).fetchall()
         return {str(instrument): int(date_count) for instrument, date_count in rows}
+
+    def _instrument_record_counts(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        table: str,
+        silver_tables: set[str],
+        date_column: str,
+        min_date: Any,
+        max_date: Any,
+    ) -> dict[str, int]:
+        if table not in silver_tables:
+            return {}
+        columns = self._columns(conn, SILVER_SCHEMA, table)
+        if "instrument" not in columns or date_column not in columns:
+            return {}
+        rows = conn.execute(
+            f"""
+            select instrument, count(*) as row_count
+            from {SILVER_SCHEMA}.{table}
+            where {date_column} between ? and ?
+            group by instrument
+            order by instrument
+            """,
+            [min_date, max_date],
+        ).fetchall()
+        return {str(instrument): int(row_count) for instrument, row_count in rows}
+
+    def _instrument_numeric_sums(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        table: str,
+        field: str,
+        silver_tables: set[str],
+        min_date: Any,
+        max_date: Any,
+    ) -> dict[str, float]:
+        if table not in silver_tables:
+            return {}
+        columns = self._columns(conn, SILVER_SCHEMA, table)
+        if "instrument" not in columns or "trade_date" not in columns or field not in columns:
+            return {}
+        rows = conn.execute(
+            f"""
+            select instrument, coalesce(sum({field}), 0) as field_sum
+            from {SILVER_SCHEMA}.{table}
+            where trade_date between ? and ?
+            group by instrument
+            order by instrument
+            """,
+            [min_date, max_date],
+        ).fetchall()
+        return {str(instrument): float(field_sum or 0) for instrument, field_sum in rows}
 
     def _count_distinct_daily_rows(
         self,
@@ -1052,6 +1596,15 @@ def _make_handler(
                         data.dataset_preview(
                             dataset=dataset,
                             instrument=_query_value(query, "instrument"),
+                            start=_query_value(query, "start"),
+                            end=_query_value(query, "end"),
+                            limit=_query_limit(query),
+                        )
+                    )
+                elif path == "/api/instrument-timeline":
+                    self._send_json(
+                        data.instrument_timeline(
+                            instrument=_query_value(query, "instrument") or "",
                             start=_query_value(query, "start"),
                             end=_query_value(query, "end"),
                             limit=_query_limit(query),
@@ -1184,6 +1737,136 @@ def _clamp_limit(value: int | None, *, default: int = DEFAULT_LIMIT) -> int:
     return min(value, MAX_LIMIT)
 
 
+def _empty_dataset_preview(dataset: str) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "dataset": dataset,
+        "columns": [],
+        "date_column": None,
+        "supports_instrument_filter": False,
+        "supports_date_filter": False,
+        "row_count": 0,
+        "filtered_row_count": 0,
+        "total_row_count": 0,
+        "summary": {
+            "total_row_count": 0,
+            "filtered_row_count": 0,
+            "date_column": None,
+            "supports_instrument_filter": False,
+            "supports_date_filter": False,
+            "min_date": None,
+            "max_date": None,
+            "date_count": None,
+            "instrument_count": None,
+            "source_ids": [],
+        },
+        "rows": [],
+    }
+
+
+def _empty_instrument_timeline(
+    instrument: str,
+    *,
+    start: str | None,
+    end: str | None,
+) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "instrument": instrument,
+        "start": start,
+        "end": end,
+        "limit": DEFAULT_LIMIT,
+        "summary": _instrument_timeline_summary(
+            timeline_rows=[],
+            news_rows=[],
+            announcement_rows=[],
+        ),
+        "timeline_rows": [],
+        "news_rows": [],
+        "announcement_rows": [],
+    }
+
+
+def _instrument_timeline_summary(
+    *,
+    timeline_rows: list[dict[str, Any]],
+    news_rows: list[dict[str, Any]],
+    announcement_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    core_complete_days = sum(
+        1
+        for row in timeline_rows
+        if row.get("close") is not None
+        and row.get("adj_factor") is not None
+        and row.get("limit_up") is not None
+        and row.get("limit_down") is not None
+    )
+    trade_dates = [row.get("trade_date") for row in timeline_rows if row.get("trade_date")]
+    return {
+        "trade_date_count": len(timeline_rows),
+        "core_complete_days": core_complete_days,
+        "news_rows": len(news_rows),
+        "announcement_rows": len(announcement_rows),
+        "factor_news_count": _sum_numeric(timeline_rows, "news_count"),
+        "factor_announcement_count": _sum_numeric(timeline_rows, "announcement_count"),
+        "min_trade_date": min(trade_dates) if trade_dates else None,
+        "max_trade_date": max(trade_dates) if trade_dates else None,
+    }
+
+
+def _sum_numeric(rows: list[dict[str, Any]], field: str) -> float:
+    total = 0.0
+    for row in rows:
+        value = row.get(field)
+        if value is not None:
+            total += float(value)
+    return total
+
+
+def _instrument_date_filter(
+    *,
+    instrument: str,
+    date_column: str,
+    start: str | None,
+    end: str | None,
+) -> tuple[str, list[Any]]:
+    filters = ["instrument = ?"]
+    params: list[Any] = [instrument]
+    if start:
+        filters.append(f"{date_column} >= ?")
+        params.append(start)
+    if end:
+        filters.append(f"{date_column} <= ?")
+        params.append(end)
+    return " and ".join(filters), params
+
+
+def _default_instrument_identity(instrument: str) -> dict[str, Any]:
+    return {
+        "instrument": instrument,
+        "symbol": _instrument_symbol(instrument),
+        "exchange": _instrument_exchange(instrument),
+        "name": None,
+        "industry": None,
+        "is_active": None,
+        "universes": [],
+        "stock_basic_present": False,
+        "universe_constituent_present": False,
+    }
+
+
+def _instrument_symbol(instrument: str) -> str:
+    if len(instrument) > 2 and instrument[:2] in {"SH", "SZ", "BJ"}:
+        return instrument[2:]
+    return instrument
+
+
+def _instrument_exchange(instrument: str) -> str | None:
+    if len(instrument) > 2 and instrument[:2] in {"SH", "SZ", "BJ"}:
+        return instrument[:2]
+    return None
+
+
 def _empty_data_coverage() -> dict[str, Any]:
     return {
         "status": "ok",
@@ -1207,6 +1890,9 @@ def _empty_data_coverage() -> dict[str, Any]:
             "complete_percent": 0,
             "missing_by_dimension": {
                 dataset: 0 for dataset in REQUIRED_DAILY_COVERAGE_DATASETS
+            },
+            "available_by_dimension": {
+                dataset: 0 for dataset in ALL_INSTRUMENT_COVERAGE_DIMENSIONS
             },
         },
         "instrument_rows": [],

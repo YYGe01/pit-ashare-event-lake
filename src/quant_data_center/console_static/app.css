@@ -408,6 +408,48 @@ select {
   gap: 8px;
 }
 
+.segmented-control {
+  display: inline-flex;
+  width: fit-content;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.segment-button {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.segment-button.active {
+  color: #ffffff;
+  background: var(--primary);
+}
+
+.preview-detail-grid {
+  padding: 16px;
+}
+
+.subsection-title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.timeline-group {
+  margin-top: 16px;
+}
+
+.timeline-group:first-child {
+  margin-top: 0;
+}
+
 .table-wrap {
   overflow: auto;
 }

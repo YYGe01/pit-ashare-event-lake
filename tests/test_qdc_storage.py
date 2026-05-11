@@ -359,6 +359,62 @@ def test_qdc_console_overview_reports_data_coverage(tmp_path: Path) -> None:
     database = QdcDatabase(settings)
     database.init_schema()
     silver = SilverStore(settings)
+    silver.upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "industry": "银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+            {
+                "instrument": "SZ000001",
+                "symbol": "000001",
+                "exchange": "SZ",
+                "name": "平安银行",
+                "industry": "银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+        ]
+    )
+    silver.upsert_universe_constituents(
+        [
+            {
+                "universe": "csi300",
+                "snapshot_date": "2026-05-10",
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "weight": 1.1,
+                "source_id": "unit_test",
+            },
+            {
+                "universe": "csi300",
+                "snapshot_date": "2026-05-10",
+                "instrument": "SZ000001",
+                "symbol": "000001",
+                "exchange": "SZ",
+                "name": "平安银行",
+                "weight": 0.9,
+                "source_id": "unit_test",
+            },
+            {
+                "universe": "csi300",
+                "snapshot_date": "2026-05-10",
+                "instrument": "SZ300750",
+                "symbol": "300750",
+                "exchange": "SZ",
+                "name": "宁德时代",
+                "weight": 2.3,
+                "source_id": "unit_test",
+            },
+        ]
+    )
     silver.upsert_trade_calendar(
         [
             {
@@ -443,6 +499,62 @@ def test_qdc_console_overview_reports_data_coverage(tmp_path: Path) -> None:
             },
         ]
     )
+    silver.upsert_trade_status(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SH600000",
+                "trade_status": "normal",
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    silver.upsert_news(
+        [
+            {
+                "news_id": "n1",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "浦发银行新闻",
+                "url": "https://example.com/news/1",
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    silver.upsert_announcements(
+        [
+            {
+                "announcement_id": "a1",
+                "publish_date": "2026-05-12",
+                "instrument": "SZ000001",
+                "title": "平安银行公告",
+                "url": "https://example.com/announcement/1",
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    silver.upsert_daily_news_factor(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SH600000",
+                "news_count": 2,
+                "news_sentiment_mean": 0.5,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    silver.upsert_daily_announcement_factor(
+        [
+            {
+                "trade_date": "2026-05-12",
+                "instrument": "SZ000001",
+                "announcement_count": 1,
+                "announcement_sentiment_mean": 0.2,
+                "source_id": "unit_test",
+            }
+        ]
+    )
 
     coverage = QdcConsoleData(settings).overview()["data_coverage"]
 
@@ -464,12 +576,25 @@ def test_qdc_console_overview_reports_data_coverage(tmp_path: Path) -> None:
     }
     rows = {row["instrument"]: row for row in coverage["instrument_rows"]}
     assert rows["SH600000"]["complete"] is True
+    assert rows["SH600000"]["name"] == "浦发银行"
+    assert rows["SH600000"]["industry"] == "银行"
+    assert rows["SH600000"]["stock_basic_present"] is True
+    assert rows["SH600000"]["universe_constituent_present"] is True
+    assert rows["SH600000"]["trade_status_days"] == 1
+    assert rows["SH600000"]["news_rows"] == 1
+    assert rows["SH600000"]["daily_news_factor_days"] == 1
+    assert rows["SH600000"]["factor_news_count"] == 2
     assert rows["SZ000001"]["missing_dimensions"] == ["adj_factor", "price_limit"]
+    assert rows["SZ000001"]["announcement_rows"] == 1
+    assert rows["SZ000001"]["daily_announcement_factor_days"] == 1
+    assert rows["SZ000001"]["factor_announcement_count"] == 1
+    assert rows["SZ300750"]["name"] == "宁德时代"
     assert rows["SZ300750"]["missing_dimensions"] == [
         "daily_bar",
         "adj_factor",
         "price_limit",
     ]
+    assert rows["SZ300750"]["available_dimensions"] == ["universe_constituent"]
 
 
 def test_qdc_console_dataset_preview_filters_silver_rows(tmp_path: Path) -> None:
@@ -486,8 +611,98 @@ def test_qdc_console_dataset_preview_filters_silver_rows(tmp_path: Path) -> None
     assert preview["dataset"] == "daily_bar"
     assert preview["columns"][:2] == ["trade_date", "instrument"]
     assert preview["row_count"] == 1
+    assert preview["filtered_row_count"] == 1
+    assert preview["total_row_count"] == 2
+    assert preview["date_column"] == "trade_date"
+    assert preview["supports_instrument_filter"] is True
+    assert preview["summary"]["instrument_count"] == 1
+    assert preview["summary"]["source_ids"] == [{"source_id": "unit_test", "row_count": 1}]
     assert preview["rows"][0]["trade_date"] == "2026-05-12"
     assert preview["rows"][0]["close"] == 10.6
+
+
+def test_qdc_console_instrument_timeline_merges_daily_and_documents(
+    tmp_path: Path,
+) -> None:
+    config_path, _database = _seed_research_rows(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    silver = SilverStore(settings)
+    silver.upsert_news(
+        [
+            {
+                "news_id": "n1",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "公司订单增长",
+                "url": "https://example.com/news",
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    silver.upsert_announcements(
+        [
+            {
+                "announcement_id": "a1",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "公司发布回购公告",
+                "url": "https://example.com/announcement",
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    silver.upsert_daily_news_factor(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SH600000",
+                "news_count": 1,
+                "news_sentiment_mean": 0.6,
+                "news_positive_count": 1,
+                "news_negative_count": 0,
+                "news_growth_count": 1,
+                "news_risk_count": 0,
+                "news_financing_count": 0,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    silver.upsert_daily_announcement_factor(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SH600000",
+                "announcement_count": 1,
+                "announcement_growth_count": 0,
+                "announcement_risk_count": 0,
+                "announcement_financing_count": 1,
+                "announcement_operation_count": 0,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+
+    timeline = QdcConsoleData(settings).instrument_timeline(
+        instrument="SH600000",
+        start="2026-05-11",
+        end="2026-05-12",
+    )
+
+    assert timeline["status"] == "ok"
+    assert timeline["summary"]["trade_date_count"] == 2
+    assert timeline["summary"]["core_complete_days"] == 2
+    assert timeline["summary"]["news_rows"] == 1
+    assert timeline["summary"]["announcement_rows"] == 1
+    assert timeline["summary"]["factor_news_count"] == 1
+    assert timeline["summary"]["factor_announcement_count"] == 1
+    rows = {row["trade_date"]: row for row in timeline["timeline_rows"]}
+    assert rows["2026-05-11"]["close"] == 10.2
+    assert rows["2026-05-11"]["adj_factor"] == 1.0
+    assert rows["2026-05-11"]["limit_up"] == 11.11
+    assert rows["2026-05-11"]["news_count"] == 1
+    assert rows["2026-05-11"]["announcement_count"] == 1
+    assert timeline["news_rows"][0]["title"] == "公司订单增长"
+    assert timeline["announcement_rows"][0]["title"] == "公司发布回购公告"
 
 
 def test_qdc_console_dataset_preview_rejects_unknown_dataset(tmp_path: Path) -> None:

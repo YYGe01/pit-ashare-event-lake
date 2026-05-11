@@ -67,8 +67,8 @@
           <section class="panel">
             <div class="panel-header">
               <div>
-                <h2>标的核心完整度</h2>
-                <p class="panel-subtitle">按标的检查日线行情、复权因子、涨跌停价格三个核心维度是否覆盖所有参考交易日。</p>
+                <h2>标的维度明细</h2>
+                <p class="panel-subtitle">按标的展示中文名称、核心日频完整度、交易状态、新闻、公告和文本因子覆盖。</p>
               </div>
             </div>
             <div id="instrument-coverage-summary" class="coverage-grid"></div>
@@ -168,34 +168,76 @@
           <section class="guide-panel">
             <div>
               <h2>数据预览怎么看</h2>
-              <p>这里直接看统一研究层 `qdc_silver` 表，适合确认某个标的某天有没有行情、新闻因子或公告因子。</p>
+              <p>这里直接看统一研究层 `qdc_silver` 表。按数据集看表结构和样例，按标的看一只股票的日频时间线。</p>
             </div>
             <div class="guide-grid">
-              <div class="guide-card"><b>1. 选数据集</b><span>例如日线行情、新闻日频因子、公告日频因子。</span></div>
-              <div class="guide-card"><b>2. 输入标的</b><span>使用 Qlib 风格代码，例如 SH600000 或 SZ000001。</span></div>
-              <div class="guide-card"><b>3. 限定日期</b><span>用 YYYY-MM-DD 缩小范围，避免一次看太多行。</span></div>
+              <div class="guide-card"><b>按数据集看</b><span>适合确认某张表的数据源、日期范围、字段含义和原始行。</span></div>
+              <div class="guide-card"><b>按标的看</b><span>适合确认 SH600000 这类标的每天的行情、因子、新闻和公告。</span></div>
+              <div class="guide-card"><b>限定日期</b><span>用 YYYY-MM-DD 缩小范围，避免一次看太多历史。</span></div>
             </div>
           </section>
+
+          <div class="segmented-control" aria-label="数据预览模式">
+            <button class="segment-button active" data-preview-mode="dataset" type="button">按数据集看</button>
+            <button class="segment-button" data-preview-mode="instrument" type="button">按标的看</button>
+          </div>
+
           <section class="panel">
-            <div class="panel-header">
-              <div>
-                <h2>数据预览</h2>
-                <p class="panel-subtitle">这是研究和 Qlib 导出的来源表，不是原始 JSON。</p>
+            <div id="dataset-preview-mode">
+              <div class="panel-header">
+                <div>
+                  <h2>数据集预览</h2>
+                  <p class="panel-subtitle">看一张 silver 表的覆盖摘要、字段解释和样例行。</p>
+                </div>
+                <div class="filters">
+                  <select id="preview-dataset" class="input"></select>
+                  <input id="preview-instrument" class="input" placeholder="标的 instrument" />
+                  <input id="preview-start" class="input" placeholder="开始日期 start" />
+                  <input id="preview-end" class="input" placeholder="结束日期 end" />
+                  <select id="preview-limit" class="input">
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="200">200</option>
+                  </select>
+                </div>
               </div>
-              <div class="filters">
-                <select id="preview-dataset" class="input"></select>
-                <input id="preview-instrument" class="input" placeholder="标的 instrument" />
-                <input id="preview-start" class="input" placeholder="开始日期 start" />
-                <input id="preview-end" class="input" placeholder="结束日期 end" />
-                <select id="preview-limit" class="input">
-                  <option value="50">50</option>
-                  <option value="100">100</option>
-                  <option value="200">200</option>
-                </select>
+              <div id="preview-explanation" class="panel-note"></div>
+              <div id="preview-summary" class="coverage-grid"></div>
+              <div id="preview-fields"></div>
+              <div id="preview-table"></div>
+            </div>
+
+            <div id="instrument-preview-mode" class="hidden">
+              <div class="panel-header">
+                <div>
+                  <h2>标的时间线</h2>
+                  <p class="panel-subtitle">按交易日合并行情、复权、涨跌停、交易状态、新闻因子和公告因子。</p>
+                </div>
+                <div class="filters">
+                  <input id="timeline-instrument" class="input" placeholder="标的 instrument" />
+                  <input id="timeline-start" class="input" placeholder="开始日期 start" />
+                  <input id="timeline-end" class="input" placeholder="结束日期 end" />
+                  <select id="timeline-limit" class="input">
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="200">200</option>
+                  </select>
+                </div>
+              </div>
+              <div id="timeline-explanation" class="panel-note"></div>
+              <div id="timeline-summary" class="coverage-grid"></div>
+              <div id="timeline-table"></div>
+              <div class="content-grid preview-detail-grid">
+                <section>
+                  <div class="subsection-title">新闻明细</div>
+                  <div id="timeline-news"></div>
+                </section>
+                <section>
+                  <div class="subsection-title">公告明细</div>
+                  <div id="timeline-announcements"></div>
+                </section>
               </div>
             </div>
-            <div id="preview-explanation" class="panel-note"></div>
-            <div id="preview-table"></div>
           </section>
         </section>
 
