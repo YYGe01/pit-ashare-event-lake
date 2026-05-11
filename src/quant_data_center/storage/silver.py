@@ -241,6 +241,11 @@ class SilverStore:
     def upsert_trade_status(self, records: list[dict[str, Any]]) -> int:
         if not records:
             return 0
+        deduped_records = {}
+        for record in records:
+            key = (str(_required(record, "trade_date")), str(_required(record, "instrument")))
+            deduped_records.setdefault(key, record)
+        records = list(deduped_records.values())
         now = _now()
         rows = [
             [
@@ -311,6 +316,7 @@ class SilverStore:
     ) -> int:
         if not records:
             return 0
+        deduped = {str(_required(record, id_field)): record for record in records}
         now = _now()
         rows = [
             [
@@ -322,7 +328,7 @@ class SilverStore:
                 _required(record, "source_id"),
                 record.get("updated_at") or now,
             ]
-            for record in records
+            for record in deduped.values()
         ]
         with self.database.connect() as conn:
             conn.executemany(

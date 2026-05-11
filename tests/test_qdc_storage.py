@@ -567,6 +567,24 @@ def test_qdc_run_backfill_real_stage2_market_tables_with_fake_akshare(
                     "停牌原因": "重大事项",
                     "所属市场": "沪市",
                     "预计复牌时间": pd.NaT,
+                },
+                {
+                    "序号": 2,
+                    "代码": "600001",
+                    "名称": "样例股份",
+                    "停牌时间": "2026-05-11",
+                    "停牌原因": "重复记录应去重",
+                    "所属市场": "沪市",
+                    "预计复牌时间": pd.NaT,
+                },
+                {
+                    "序号": 3,
+                    "代码": "200016",
+                    "名称": "非A股样例",
+                    "停牌时间": "2026-05-11",
+                    "停牌原因": "非A股代码应跳过",
+                    "所属市场": "深市",
+                    "预计复牌时间": pd.NaT,
                 }
             ]
         )
@@ -668,6 +686,12 @@ def test_qdc_run_backfill_announcement_news_and_build_factors_with_fake_akshare(
                     "公告日期": "2026-05-11",
                     "公告标题": "年度权益分派公告",
                     "公告链接": "https://example.test/notice/1",
+                },
+                {
+                    "代码": "600000",
+                    "公告日期": "2026-05-11",
+                    "公告标题": "年度权益分派公告",
+                    "公告链接": "https://example.test/notice/1",
                 }
             ]
         )
@@ -763,6 +787,46 @@ def test_qdc_run_backfill_announcement_news_and_build_factors_with_fake_akshare(
             """
         ).fetchone()
     assert row == (1.0, 1.0)
+
+
+def test_qdc_news_provider_error_is_recorded_without_failing_task(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def stock_news_em(symbol: str):
+        assert symbol == "600000"
+        raise ValueError(r"Invalid regular expression: invalid escape sequence: \u")
+
+    monkeypatch.setitem(sys.modules, "akshare", SimpleNamespace(stock_news_em=stock_news_em))
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "plan-backfill",
+                "--dataset",
+                "news",
+                "--source-id",
+                "akshare",
+                "--start",
+                "2024-01-02",
+                "--end",
+                "2024-01-02",
+                "--symbols",
+                "SH600000",
+            ]
+        )
+        == 0
+    )
+    assert main(["--config", str(config_path), "run-backfill", "--dataset", "news"]) == 0
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    assert database.silver_table_counts()["news"] == 0
+    assert database.list_backfill_tasks(dataset="news")[0]["status"] == "success"
+    source_objects = database.list_source_objects(dataset="news", layer="raw")
+    assert len(source_objects) == 1
 
 
 def test_silver_store_upserts_core_research_tables(tmp_path: Path) -> None:

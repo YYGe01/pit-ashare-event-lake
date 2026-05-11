@@ -378,7 +378,7 @@ def cmd_daily(args: argparse.Namespace) -> int:
     tasks = [
         task
         for task in database.fetch_backfill_tasks_by_ids([str(item["task_id"]) for item in planned])
-        if task["status"] == "pending"
+        if task["status"] in {"pending", "failed"}
     ]
     results, has_failures = _run_backfill_tasks(
         settings=settings,

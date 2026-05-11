@@ -567,5 +567,46 @@ LightGBM Alpha158 + news + announcement
 已实现：qdc quality 基础质量命令
 已实现：qdc export-qlib 基础 day provider 导出，包含行情、复权、涨跌停和新闻/公告 count 因子
 待实现：Qlib Alpha158 baseline 外部联调
-待增强：历史成分变更追溯、更细质量规则、失败重试策略和大样本运行记录
+已验证：真实 AkShare 小样本 smoke，覆盖 csi300 成分快照、stock_basic、daily、公告、基础因子、Parquet、quality 和 Qlib 导出
+待增强：历史成分变更追溯、更细质量规则、显式 retry failed CLI 和更大样本运行记录
+```
+
+## 14. 真实数据 smoke 记录
+
+2026-05-11 使用真实 AkShare 小样本跑通：
+
+```bash
+qdc refresh-universe --universe csi300 --snapshot-date 2026-05-11
+qdc daily --date 2024-01-02 --universe csi300 --symbols SH600000,SZ000001 --batch-size 2 --limit-tasks 20
+qdc build-factors --factor-set all --start 2024-01-02 --end 2024-01-02
+qdc sync-parquet --layer all
+qdc quality --start 2024-01-02 --end 2024-01-02
+qdc export-qlib --start 2024-01-02 --end 2024-01-02 --provider-uri data/quant_data_center/qlib/cn_data
+qdc plan-backfill --dataset stock_basic --source-id akshare --start 2024-01-02 --end 2024-01-02
+qdc run-backfill --dataset stock_basic --limit-tasks 1
+qdc sync-parquet --layer silver --dataset stock_basic
+qdc quality --dataset stock_basic
+```
+
+结果：
+
+```text
+csi300 universe_constituent: 300 rows
+stock_basic: 5515 rows
+daily_bar / adj_factor / price_limit: each 2 rows
+trade_status: 850 rows
+announcement: 852 rows
+daily_announcement_factor: 454 rows
+quality: 0 issue
+Qlib export: 2 instruments, 1 calendar date, 24 files
+```
+
+真实源修复：
+
+```text
+stock_news_em 上游正则异常：记录 raw error，任务返回 success 且 row_count=0
+stock_tfp_em 非 A 股代码：跳过
+stock_tfp_em 重复状态行：按 trade_date/instrument first-wins 去重
+announcement 重复公告行：按 announcement_id 去重
+daily 同一批 failed task：再次运行会重试 pending/failed task
 ```

@@ -416,7 +416,10 @@ class AkshareSilverCollector:
                 raw_symbol = _get_value(row, ("代码", "SECURITY_CODE", "symbol", "code"), 1)
                 if raw_symbol is None:
                     continue
-                instrument = normalize_instrument(str(raw_symbol))
+                try:
+                    instrument = normalize_instrument(str(raw_symbol))
+                except ValueError:
+                    continue
                 records.append(
                     {
                         "trade_date": query_date,
@@ -467,7 +470,10 @@ class AkshareSilverCollector:
                 raw_code = _first_present(row, ("代码", "股票代码", "证券代码", "code", "symbol"))
                 if raw_code is None:
                     continue
-                instrument = normalize_instrument(str(raw_code))
+                try:
+                    instrument = normalize_instrument(str(raw_code))
+                except ValueError:
+                    continue
                 if instrument_filter and instrument not in instrument_filter:
                     continue
                 publish_date = _optional_date_to_iso(
@@ -510,7 +516,26 @@ class AkshareSilverCollector:
         for raw_instrument in instruments:
             instrument = normalize_instrument(raw_instrument)
             symbol = instrument_to_symbol(instrument)
-            df = akshare.stock_news_em(symbol=symbol)
+            try:
+                df = akshare.stock_news_em(symbol=symbol)
+            except Exception as exc:
+                self._write_source_objects(
+                    dataset="news",
+                    source_id=source_id,
+                    partition_value=start_iso,
+                    stem=f"stock_news_em_{instrument}_{start_iso}_{end_iso}_error",
+                    raw_payload={
+                        "function": "stock_news_em",
+                        "params": {
+                            "symbol": symbol,
+                            "start_date": start_iso,
+                            "end_date": end_iso,
+                        },
+                        "error": str(exc),
+                    },
+                    bronze_records=[],
+                )
+                continue
             provider_records = _records(df)
             self._write_source_objects(
                 dataset="news",
