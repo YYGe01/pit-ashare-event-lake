@@ -103,7 +103,7 @@ class QlibExporter:
                 path.write_bytes(b"".join(struct.pack("<f", value) for value in values))
                 written_files.append(path)
 
-        object_ids = [self._index_file(path) for path in written_files]
+        object_ids = self._index_files(written_files)
         job_id = self.database.record_job_run(
             job_type="export_qlib",
             status="success",
@@ -195,16 +195,21 @@ class QlibExporter:
             for row in rows
         ]
 
-    def _index_file(self, path: Path) -> str:
-        content = path.read_bytes()
-        return self.database.insert_source_object(
-            dataset="qlib_export",
-            source_id="qdc",
-            layer="qlib",
-            uri=str(path),
-            content_hash=hashlib.sha256(content).hexdigest(),
-            size_bytes=len(content),
-        )
+    def _index_files(self, paths: list[Path]) -> list[str]:
+        objects = []
+        for path in paths:
+            content = path.read_bytes()
+            objects.append(
+                {
+                    "dataset": "qlib_export",
+                    "source_id": "qdc",
+                    "layer": "qlib",
+                    "uri": str(path),
+                    "content_hash": hashlib.sha256(content).hexdigest(),
+                    "size_bytes": len(content),
+                }
+            )
+        return self.database.insert_source_objects(objects)
 
 
 class QlibProviderVerifier:

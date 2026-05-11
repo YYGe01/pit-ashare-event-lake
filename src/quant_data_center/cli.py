@@ -78,6 +78,15 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _summarize_export_result(payload: dict[str, Any]) -> dict[str, Any]:
+    result = dict(payload)
+    object_ids = result.pop("object_ids", None)
+    if isinstance(object_ids, list):
+        result["object_id_count"] = len(object_ids)
+        result["object_id_sample"] = object_ids[:5]
+    return result
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     database = QdcDatabase(settings)
@@ -168,7 +177,7 @@ def cmd_export_qlib(args: argparse.Namespace) -> int:
         end_date=args.end,
         market_name=args.market_name,
     )
-    _print_json(result)
+    _print_json(_summarize_export_result(result))
     return 0
 
 

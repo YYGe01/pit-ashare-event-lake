@@ -1492,7 +1492,7 @@ def test_qdc_quality_records_issues_for_invalid_daily_bar(tmp_path: Path) -> Non
     ]
 
 
-def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path) -> None:
+def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> None:
     config_path, database = _seed_research_rows(tmp_path)
     silver = SilverStore(QdcSettings.from_yaml(config_path))
     silver.upsert_daily_news_factor(
@@ -1544,6 +1544,10 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path) -> None:
         )
         == 0
     )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["object_id_count"] == 24
+    assert len(payload["object_id_sample"]) == 5
+    assert "object_ids" not in payload
 
     assert (provider_uri / "calendars" / "day.txt").read_text(encoding="utf-8") == (
         "2026-05-11\n2026-05-12\n"

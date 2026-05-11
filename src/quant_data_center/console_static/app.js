@@ -37,6 +37,7 @@ const $ = (id) => document.getElementById(id);
 
 let overview = null;
 let activeSection = "dashboard";
+let autoRefreshTimer = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -69,7 +70,9 @@ async function api(path) {
   const response = await fetch(path, { cache: "no-store" });
   const payload = await response.json();
   if (!response.ok || payload.status === "fail") {
-    throw new Error(payload.error || `HTTP ${response.status}`);
+    const error = new Error(payload.error || `HTTP ${response.status}`);
+    error.httpStatus = response.status;
+    throw error;
   }
   return payload;
 }
@@ -81,7 +84,10 @@ function showError(error) {
 }
 
 function setLoading(targetId) {
-  $(targetId).innerHTML = '<div class="empty">加载中</div>';
+  const target = $(targetId);
+  if (!target.innerHTML.trim()) {
+    target.innerHTML = '<div class="empty">加载中</div>';
+  }
 }
 
 function tag(value) {
@@ -319,79 +325,98 @@ function renderRecentJobs(rows) {
 }
 
 async function loadBackfillTasks() {
-  setLoading("task-table");
-  const query = new URLSearchParams();
-  appendQuery(query, "dataset", $("task-dataset").value);
-  appendQuery(query, "status", $("task-status").value);
-  appendQuery(query, "limit", $("task-limit").value);
-  const payload = await api(`/api/backfill-tasks?${query.toString()}`);
-  $("task-table").innerHTML = table(
-    [
-      { key: "status", label: "status", status: true },
-      { key: "dataset", label: "dataset" },
-      { key: "source_id", label: "source_id" },
-      { key: "universe", label: "universe" },
-      { key: "start_date", label: "start" },
-      { key: "end_date", label: "end" },
-      { key: "symbol_batch_json", label: "symbols", maxLength: 80 },
-      { key: "attempt_count", label: "attempt" },
-      { key: "updated_at", label: "updated_at" },
-      { key: "last_error", label: "last_error", maxLength: 120 },
-    ],
-    payload.tasks,
-  );
+  try {
+    setLoading("task-table");
+    const query = new URLSearchParams();
+    appendQuery(query, "dataset", $("task-dataset").value);
+    appendQuery(query, "status", $("task-status").value);
+    appendQuery(query, "limit", $("task-limit").value);
+    const payload = await api(`/api/backfill-tasks?${query.toString()}`);
+    $("task-table").innerHTML = table(
+      [
+        { key: "status", label: "status", status: true },
+        { key: "dataset", label: "dataset" },
+        { key: "source_id", label: "source_id" },
+        { key: "universe", label: "universe" },
+        { key: "start_date", label: "start" },
+        { key: "end_date", label: "end" },
+        { key: "symbol_batch_json", label: "symbols", maxLength: 80 },
+        { key: "attempt_count", label: "attempt" },
+        { key: "updated_at", label: "updated_at" },
+        { key: "last_error", label: "last_error", maxLength: 120 },
+      ],
+      payload.tasks,
+    );
+  } catch (error) {
+    showError(friendlyError(error));
+  }
 }
 
 async function loadDatasetPreview() {
-  setLoading("preview-table");
-  const query = new URLSearchParams();
-  appendQuery(query, "dataset", $("preview-dataset").value);
-  appendQuery(query, "instrument", $("preview-instrument").value.trim());
-  appendQuery(query, "start", $("preview-start").value.trim());
-  appendQuery(query, "end", $("preview-end").value.trim());
-  appendQuery(query, "limit", $("preview-limit").value);
-  const payload = await api(`/api/dataset-preview?${query.toString()}`);
-  const columns = payload.columns.slice(0, 18).map((column) => ({ key: column, label: column }));
-  $("preview-table").innerHTML = table(columns, payload.rows);
+  try {
+    setLoading("preview-table");
+    const query = new URLSearchParams();
+    appendQuery(query, "dataset", $("preview-dataset").value);
+    appendQuery(query, "instrument", $("preview-instrument").value.trim());
+    appendQuery(query, "start", $("preview-start").value.trim());
+    appendQuery(query, "end", $("preview-end").value.trim());
+    appendQuery(query, "limit", $("preview-limit").value);
+    const payload = await api(`/api/dataset-preview?${query.toString()}`);
+    const columns = payload.columns.slice(0, 18).map((column) => ({
+      key: column,
+      label: column,
+    }));
+    $("preview-table").innerHTML = table(columns, payload.rows);
+  } catch (error) {
+    showError(friendlyError(error));
+  }
 }
 
 async function loadQualityIssues() {
-  setLoading("quality-table");
-  const query = new URLSearchParams();
-  appendQuery(query, "dataset", $("quality-dataset").value);
-  appendQuery(query, "status", $("quality-status").value);
-  appendQuery(query, "limit", $("quality-limit").value);
-  const payload = await api(`/api/quality-issues?${query.toString()}`);
-  $("quality-table").innerHTML = table(
-    [
-      { key: "status", label: "status", status: true },
-      { key: "severity", label: "severity", status: true },
-      { key: "dataset", label: "dataset" },
-      { key: "source_id", label: "source_id" },
-      { key: "issue_type", label: "issue_type" },
-      { key: "entity_key", label: "entity_key" },
-      { key: "message", label: "message", maxLength: 140 },
-      { key: "created_at", label: "created_at" },
-    ],
-    payload.issues,
-  );
+  try {
+    setLoading("quality-table");
+    const query = new URLSearchParams();
+    appendQuery(query, "dataset", $("quality-dataset").value);
+    appendQuery(query, "status", $("quality-status").value);
+    appendQuery(query, "limit", $("quality-limit").value);
+    const payload = await api(`/api/quality-issues?${query.toString()}`);
+    $("quality-table").innerHTML = table(
+      [
+        { key: "status", label: "status", status: true },
+        { key: "severity", label: "severity", status: true },
+        { key: "dataset", label: "dataset" },
+        { key: "source_id", label: "source_id" },
+        { key: "issue_type", label: "issue_type" },
+        { key: "entity_key", label: "entity_key" },
+        { key: "message", label: "message", maxLength: 140 },
+        { key: "created_at", label: "created_at" },
+      ],
+      payload.issues,
+    );
+  } catch (error) {
+    showError(friendlyError(error));
+  }
 }
 
 async function loadQlibObjects() {
-  setLoading("qlib-objects");
-  const query = new URLSearchParams();
-  appendQuery(query, "dataset", "qlib_export");
-  appendQuery(query, "limit", "80");
-  const payload = await api(`/api/source-objects?${query.toString()}`);
-  $("qlib-objects").innerHTML = table(
-    [
-      { key: "layer", label: "layer", status: true },
-      { key: "uri", label: "uri", maxLength: 120 },
-      { key: "size_bytes", label: "bytes" },
-      { key: "created_at", label: "created_at" },
-    ],
-    payload.objects,
-  );
+  try {
+    setLoading("qlib-objects");
+    const query = new URLSearchParams();
+    appendQuery(query, "dataset", "qlib_export");
+    appendQuery(query, "limit", "80");
+    const payload = await api(`/api/source-objects?${query.toString()}`);
+    $("qlib-objects").innerHTML = table(
+      [
+        { key: "layer", label: "layer", status: true },
+        { key: "uri", label: "uri", maxLength: 120 },
+        { key: "size_bytes", label: "bytes" },
+        { key: "created_at", label: "created_at" },
+      ],
+      payload.objects,
+    );
+  } catch (error) {
+    showError(friendlyError(error));
+  }
 }
 
 function renderQlibJobs(rows) {
@@ -426,9 +451,11 @@ function appendQuery(query, key, value) {
 async function refreshAll() {
   showError(null);
   try {
-    setLoading("recent-jobs");
-    setLoading("watermark-list");
-    setLoading("progress-list");
+    if (!overview) {
+      setLoading("recent-jobs");
+      setLoading("watermark-list");
+      setLoading("progress-list");
+    }
     const payload = await api("/api/overview");
     renderOverview(payload);
     await Promise.all([
@@ -438,8 +465,15 @@ async function refreshAll() {
       loadQlibObjects(),
     ]);
   } catch (error) {
-    showError(error);
+    showError(friendlyError(error));
   }
+}
+
+function friendlyError(error) {
+  if (error?.httpStatus === 503) {
+    return new Error("DuckDB 正在写入，页面已保留上次快照并会自动刷新。");
+  }
+  return error;
 }
 
 function init() {
@@ -450,6 +484,8 @@ function init() {
   bindNav();
   bindFilters();
   refreshAll();
+  autoRefreshTimer = window.setInterval(refreshAll, 15000);
+  window.addEventListener("beforeunload", () => window.clearInterval(autoRefreshTimer));
 }
 
 init();

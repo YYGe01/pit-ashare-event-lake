@@ -465,10 +465,45 @@ class QdcDatabase:
         size_bytes: int,
         job_id: str | None = None,
     ) -> str:
-        object_id = str(uuid4())
+        return self.insert_source_objects(
+            [
+                {
+                    "dataset": dataset,
+                    "source_id": source_id,
+                    "layer": layer,
+                    "uri": uri,
+                    "content_hash": content_hash,
+                    "size_bytes": size_bytes,
+                    "job_id": job_id,
+                }
+            ]
+        )[0]
+
+    def insert_source_objects(self, objects: list[dict[str, Any]]) -> list[str]:
+        if not objects:
+            return []
         now = _now()
+        rows = []
+        object_ids = []
+        for item in objects:
+            object_id = str(uuid4())
+            object_ids.append(object_id)
+            rows.append(
+                [
+                    object_id,
+                    item.get("job_id"),
+                    item["dataset"],
+                    item["source_id"],
+                    item["layer"],
+                    item["uri"],
+                    item["content_hash"],
+                    int(item["size_bytes"]),
+                    now,
+                    now,
+                ]
+            )
         with self.connect() as conn:
-            conn.execute(
+            conn.executemany(
                 """
                 insert into qdc_meta.source_object (
                   object_id, job_id, dataset, source_id, layer, uri,
@@ -476,20 +511,9 @@ class QdcDatabase:
                 )
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                [
-                    object_id,
-                    job_id,
-                    dataset,
-                    source_id,
-                    layer,
-                    uri,
-                    content_hash,
-                    size_bytes,
-                    now,
-                    now,
-                ],
+                rows,
             )
-        return object_id
+        return object_ids
 
     def insert_quality_issue(
         self,
