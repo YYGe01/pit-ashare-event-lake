@@ -159,6 +159,7 @@ def cmd_export_qlib(args: argparse.Namespace) -> int:
         provider_uri=args.provider_uri,
         start_date=args.start,
         end_date=args.end,
+        market_name=args.market_name,
     )
     _print_json(result)
     return 0
@@ -635,6 +636,10 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--provider-uri")
     export_parser.add_argument("--start", help="YYYY-MM-DD")
     export_parser.add_argument("--end", help="YYYY-MM-DD")
+    export_parser.add_argument(
+        "--market-name",
+        help="Optional Qlib instruments market file name, for example csi300 or qdc_smoke",
+    )
     export_parser.set_defaults(func=cmd_export_qlib)
 
     verify_qlib_parser = subparsers.add_parser(

@@ -413,7 +413,7 @@ qdc daily --date 2026-05-11 --universe csi300 --control-only
 qdc build-factors --factor-set all --start 2026-05-01 --end 2026-05-03
 qdc sync-parquet --layer all
 qdc quality --dataset daily_bar --start 2026-05-01 --end 2026-05-03
-qdc export-qlib --start 2026-05-01 --end 2026-05-03 --provider-uri data/quant_data_center/qlib/cn_data
+qdc export-qlib --start 2026-05-01 --end 2026-05-03 --provider-uri data/quant_data_center/qlib/cn_data --market-name qdc_smoke
 qdc verify-qlib --start 2026-05-01 --end 2026-05-03 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
 pytest tests/test_qdc_storage.py
 ```
@@ -484,7 +484,7 @@ qdc quality --dataset daily_bar --start 2015-01-01 --end 2026-05-11
 基础导出和 Qlib data-layer verify 命令已实现；导出字段已包含 Alpha158 默认需要的 `$vwap`。Alpha158 baseline 需要更长历史区间和更完整 universe，不使用 1 个交易日、2 个标的的 smoke provider：
 
 ```bash
-qdc export-qlib --start 2015-01-01 --end 2026-05-11 --provider-uri data/quant_data_center/qlib/cn_data
+qdc export-qlib --start 2015-01-01 --end 2026-05-11 --provider-uri data/quant_data_center/qlib/cn_data --market-name csi300
 qdc verify-qlib --start 2015-01-01 --end 2026-05-11 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
 cd /root/code/qlib/examples
 qrun benchmarks/LightGBM/workflow_config_lightgbm_Alpha158_2026.yaml
@@ -582,7 +582,7 @@ LightGBM Alpha158 + news + announcement
 已实现：qdc build-factors 基础新闻/公告 count 因子
 已实现：silver/gold Parquet 派生同步
 已实现：qdc quality 基础质量命令
-已实现：qdc export-qlib 基础 day provider 导出，包含行情、vwap、复权、涨跌停和新闻/公告 count 因子
+已实现：qdc export-qlib 基础 day provider 导出，包含行情、vwap、复权、涨跌停、新闻/公告 count 因子和可选 Qlib 命名 market 文件
 已实现：qdc verify-qlib 通过本地 Qlib 校验 provider，可发现缺失 instrument / 空 feature，并输出严格 JSON
 已验证：Qlib Alpha158 handler 可读取 QDC provider 并生成特征/label
 已验证：QDC 专用 LightGBM Alpha158 qrun smoke 可完成训练和信号记录
@@ -642,7 +642,7 @@ daily 同一批 failed task：再次运行会重试 pending/failed task
 qdc plan-backfill --dataset daily_bar --source-id akshare --start 2023-01-01 --end 2024-12-31 --symbols SH600000,SZ000001 --batch-size 2 --chunk-days 800
 qdc run-backfill --dataset daily_bar --limit-tasks 3
 qdc quality --dataset daily_bar --start 2023-01-01 --end 2024-12-31
-qdc export-qlib --start 2023-01-01 --end 2024-12-31 --provider-uri data/quant_data_center/qlib/cn_data
+qdc export-qlib --start 2023-01-01 --end 2024-12-31 --provider-uri data/quant_data_center/qlib/cn_data --market-name qdc_smoke
 qdc verify-qlib --start 2023-01-01 --end 2024-12-31 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
 ```
 
@@ -651,7 +651,7 @@ qdc verify-qlib --start 2023-01-01 --end 2024-12-31 --instruments SH600000,SZ000
 ```text
 daily_bar: 968 rows
 quality daily_bar: 0 issue
-Qlib export: 2 instruments, 484 calendar dates, 26 files
+Qlib export: 2 instruments, 484 calendar dates, 27 files, market=qdc_smoke
 Qlib verify: 968 feature rows, issues=[]
 Qlib Alpha158 handler: shape=(968, 159), non_null_label=964
 ```
@@ -677,7 +677,7 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml
 ```text
 qrun status: success
 provider_uri: data/quant_data_center/qlib/cn_data
-market: all
+market: qdc_smoke
 model: LGBModel
 handler: Alpha158
 records: SignalRecord / SigAnaRecord

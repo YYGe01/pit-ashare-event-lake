@@ -1205,6 +1205,8 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path) -> None:
                 "export-qlib",
                 "--provider-uri",
                 str(provider_uri),
+                "--market-name",
+                "qdc_smoke",
                 "--start",
                 "2026-05-11",
                 "--end",
@@ -1220,12 +1222,15 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path) -> None:
     assert (provider_uri / "instruments" / "all.txt").read_text(encoding="utf-8") == (
         "sh600000\t2026-05-11\t2026-05-12\n"
     )
+    assert (provider_uri / "instruments" / "qdc_smoke.txt").read_text(encoding="utf-8") == (
+        "sh600000\t2026-05-11\t2026-05-12\n"
+    )
     close_bin = (provider_uri / "features" / "sh600000" / "close.day.bin").read_bytes()
     assert struct.unpack("<fff", close_bin) == (0.0, 10.199999809265137, 10.600000381469727)
     vwap_bin = (provider_uri / "features" / "sh600000" / "vwap.day.bin").read_bytes()
     assert struct.unpack("<fff", vwap_bin) == (0.0, 10.199999809265137, 10.600000381469727)
     qlib_objects = database.list_source_objects(dataset="qlib_export", layer="qlib")
-    assert len(qlib_objects) == 14
+    assert len(qlib_objects) == 15
 
 
 def test_qdc_verify_qlib_reports_missing_instrument_without_db_side_effect(

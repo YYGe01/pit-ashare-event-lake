@@ -42,6 +42,7 @@ class QlibExporter:
         provider_uri: str | Path | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        market_name: str | None = None,
     ) -> dict[str, Any]:
         root = Path(provider_uri).expanduser() if provider_uri else self.settings.qlib_root / "cn_data"
         if not root.is_absolute():
@@ -64,14 +65,18 @@ class QlibExporter:
         calendar_path.write_text("\n".join(calendars) + "\n", encoding="utf-8")
         written_files.append(calendar_path)
 
-        instruments_path = root / "instruments" / "all.txt"
-        instruments_path.parent.mkdir(parents=True, exist_ok=True)
         instrument_lines = []
         for instrument in instruments:
             dates = sorted(rows_by_instrument[instrument])
             instrument_lines.append(f"{instrument}\t{dates[0]}\t{dates[-1]}")
+        instruments_path = root / "instruments" / "all.txt"
+        instruments_path.parent.mkdir(parents=True, exist_ok=True)
         instruments_path.write_text("\n".join(instrument_lines) + "\n", encoding="utf-8")
         written_files.append(instruments_path)
+        if market_name:
+            market_path = root / "instruments" / f"{market_name}.txt"
+            market_path.write_text("\n".join(instrument_lines) + "\n", encoding="utf-8")
+            written_files.append(market_path)
 
         for instrument in instruments:
             instrument_rows = rows_by_instrument[instrument]
@@ -99,6 +104,7 @@ class QlibExporter:
             end_date=end_date,
             parameters={
                 "provider_uri": str(root),
+                "market_name": market_name,
                 "calendar_count": len(calendars),
                 "instrument_count": len(instruments),
                 "file_count": len(written_files),
@@ -107,6 +113,7 @@ class QlibExporter:
         return {
             "status": "ok",
             "provider_uri": str(root),
+            "market_name": market_name,
             "job_id": job_id,
             "calendar_count": len(calendars),
             "instrument_count": len(instruments),

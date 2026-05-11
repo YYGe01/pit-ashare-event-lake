@@ -28,7 +28,7 @@ qdc daily --date 2026-05-11 --universe csi300 --control-only
 qdc build-factors --factor-set all --start 2026-05-01 --end 2026-05-03
 qdc sync-parquet --layer all
 qdc quality --dataset daily_bar --start 2026-05-01 --end 2026-05-03
-qdc export-qlib --start 2026-05-01 --end 2026-05-03 --provider-uri data/quant_data_center/qlib/cn_data
+qdc export-qlib --start 2026-05-01 --end 2026-05-03 --provider-uri data/quant_data_center/qlib/cn_data --market-name qdc_smoke
 qdc verify-qlib --start 2026-05-01 --end 2026-05-03 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data
 qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml
 ```
@@ -73,7 +73,7 @@ data/quant_data_center/             本地运行数据，已 gitignored
 conda run -n ai-trader python -m pip install -e /root/code/qlib -i https://pypi.tuna.tsinghua.edu.cn/simple --extra-index-url https://mirrors.aliyun.com/pypi/simple
 ```
 
-当前已用本地 `/root/code/qlib` 验证 `D.calendar`、`D.list_instruments` 和 `D.features` 能读取 `qdc export-qlib` 产物。导出字段包含 Alpha158 默认需要的 `$vwap`。`config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml` 可用当前 provider 跑通 LightGBM Alpha158 qrun smoke；正式评估仍需要完整 universe 和稳定 train/valid/test 切分。
+当前已用本地 `/root/code/qlib` 验证 `D.calendar`、`D.list_instruments` 和 `D.features` 能读取 `qdc export-qlib` 产物。导出字段包含 Alpha158 默认需要的 `$vwap`，`--market-name` 可写出 Qlib 命名 market 文件。`config/qlib/workflow_config_lightgbm_alpha158_qdc_smoke.yaml` 可用当前 provider 跑通 LightGBM Alpha158 qrun smoke；正式评估仍需要完整 universe 和稳定 train/valid/test 切分。
 
 ## 验证
 
