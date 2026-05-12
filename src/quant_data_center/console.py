@@ -4297,6 +4297,7 @@ def _empty_daily_collection_status(*, date: str, database_path: str) -> dict[str
         },
         "batch_rows": [],
         "dataset_rows": [],
+        "source_dimension_rows": [],
         "issue_rows": [],
     }
 

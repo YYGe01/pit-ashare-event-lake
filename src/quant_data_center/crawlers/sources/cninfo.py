@@ -95,19 +95,6 @@ class CninfoAnnouncementCrawler:
                 "pages": pages,
             },
         )
-        document_bundle = self.objects.put_document_bundle(
-            dataset="announcement",
-            source_id=source_id,
-            partition_value=crawl_date,
-            stem=f"cninfo_announcement_{crawl_date}",
-            manifest={
-                "function": "cninfo_his_announcement_query",
-                "url": CNINFO_QUERY_URL,
-                "accepted_date_rule": "query seDate is exactly crawl_date; publish_date comes from announcementTime when present",
-                "raw_object_id": raw_object_id,
-            },
-            records=announcements,
-        )
         bronze_object_id = self.objects.put_bronze_parquet(
             dataset="announcement",
             source_id=source_id,
@@ -133,6 +120,20 @@ class CninfoAnnouncementCrawler:
             enabled=download_pdfs,
             pdf_limit=pdf_limit,
             min_delay_seconds=min_delay_seconds,
+        )
+        document_bundle = self.objects.put_document_bundle(
+            dataset="announcement",
+            source_id=source_id,
+            partition_value=crawl_date,
+            stem=f"cninfo_announcement_{crawl_date}",
+            manifest={
+                "function": "cninfo_his_announcement_query",
+                "url": CNINFO_QUERY_URL,
+                "accepted_date_rule": "query seDate is exactly crawl_date; publish_date comes from announcementTime when present",
+                "raw_object_id": raw_object_id,
+                "instrument_filter": instrument_filter or [],
+            },
+            records=records,
         )
         row_count = self.silver.upsert_announcements(records)
         bundle_object_count = 1 + int(document_bundle["records_object_id"] is not None)
