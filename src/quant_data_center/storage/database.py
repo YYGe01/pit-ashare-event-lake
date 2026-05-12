@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -21,15 +23,23 @@ from quant_data_center.storage.schema import (
 )
 
 
+DEFAULT_DUCKDB_LOCK_TIMEOUT_SECONDS = 60.0
+DUCKDB_LOCK_RETRY_INTERVAL_SECONDS = 0.25
+
+
 class QdcDatabase:
     """Small DuckDB wrapper for migration-phase control tables."""
 
     def __init__(self, settings: QdcSettings) -> None:
         self.settings = settings
 
-    def connect(self) -> duckdb.DuckDBPyConnection:
+    def connect(self, *, read_only: bool = False) -> duckdb.DuckDBPyConnection:
         self.settings.database_path.parent.mkdir(parents=True, exist_ok=True)
-        return duckdb.connect(str(self.settings.database_path))
+        return _connect_duckdb_with_retry(
+            self.settings.database_path,
+            read_only=read_only,
+            timeout_seconds=_duckdb_lock_timeout_seconds(),
+        )
 
     def init_schema(self) -> None:
         for directory in self.settings.required_directories():
@@ -920,6 +930,49 @@ class QdcDatabase:
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _connect_duckdb_with_retry(
+    database_path: Any,
+    *,
+    read_only: bool,
+    timeout_seconds: float,
+) -> duckdb.DuckDBPyConnection:
+    deadline = time.monotonic() + max(timeout_seconds, 0)
+    interval = DUCKDB_LOCK_RETRY_INTERVAL_SECONDS
+    last_error: duckdb.Error | None = None
+    while True:
+        try:
+            return duckdb.connect(str(database_path), read_only=read_only)
+        except duckdb.Error as exc:
+            if not _is_duckdb_lock_error(exc):
+                raise
+            last_error = exc
+            if time.monotonic() >= deadline:
+                mode = "read-only" if read_only else "read-write"
+                raise RuntimeError(
+                    f"timed out waiting for DuckDB {mode} lock on {database_path}; "
+                    "another qdc process is still using the database"
+                ) from exc
+            time.sleep(interval)
+            interval = min(interval * 1.5, 2.0)
+
+    raise RuntimeError("unreachable DuckDB lock retry state") from last_error
+
+
+def _duckdb_lock_timeout_seconds() -> float:
+    raw = os.getenv("QDC_DUCKDB_LOCK_TIMEOUT_SECONDS")
+    if raw is None or not raw.strip():
+        return DEFAULT_DUCKDB_LOCK_TIMEOUT_SECONDS
+    try:
+        return float(raw)
+    except ValueError:
+        return DEFAULT_DUCKDB_LOCK_TIMEOUT_SECONDS
+
+
+def _is_duckdb_lock_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return "could not set lock" in message or "conflicting lock" in message
 
 
 def _now() -> datetime:

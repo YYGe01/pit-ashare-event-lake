@@ -34,9 +34,87 @@ MAX_INSTRUMENT_OPTION_LIMIT = 6000
 RAW_OBJECT_SCAN_LIMIT = 1000
 DOCUMENT_DETAIL_LOOKBACK_DAYS = 15
 DOCUMENT_DETAIL_LIMIT = 1000
+DAILY_DOCUMENT_DETAIL_LIMIT = 10000
 STALE_RUNNING_MINUTES = 15
 COVERAGE_INSTRUMENT_LIMIT = 500
+DAILY_PREVIEW_LIMIT = 6000
 REQUIRED_DAILY_COVERAGE_DATASETS = ("daily_bar", "adj_factor", "price_limit")
+DAILY_COLLECTION_DATASETS = (
+    "daily_bar",
+    "adj_factor",
+    "price_limit",
+    "trade_status",
+    "announcement",
+    "news",
+    "daily_news_factor",
+    "daily_announcement_factor",
+)
+DAILY_BATCH_DATASETS = ("daily_bar", "adj_factor", "price_limit", "news")
+DAILY_RAW_WIDE_TABLES = {
+    "daily_bar": [
+        "open",
+        "high",
+        "low",
+        "close",
+        "pre_close",
+        "volume",
+        "amount",
+        "vwap",
+    ],
+    "adj_factor": ["adj_factor", "factor_type"],
+    "price_limit": ["limit_up", "limit_down", "prev_close", "limit_rule"],
+    "trade_status": ["trade_status", "halt_reason", "source_update_time"],
+}
+DAILY_FACTOR_WIDE_TABLES = {
+    "daily_bar": [
+        "open",
+        "high",
+        "low",
+        "close",
+        "pre_close",
+        "volume",
+        "amount",
+        "vwap",
+    ],
+    "adj_factor": ["adj_factor", "factor_type"],
+    "price_limit": ["limit_up", "limit_down", "prev_close", "limit_rule"],
+    "trade_status": ["trade_status", "halt_reason", "source_update_time"],
+    "daily_news_factor": [
+        "news_count",
+        "news_sentiment_mean",
+        "news_positive_count",
+        "news_negative_count",
+        "news_weighted_sentiment_sum",
+        "news_importance_sum",
+        "news_growth_count",
+        "news_risk_count",
+        "news_financing_count",
+        "news_contract_count",
+        "news_buyback_count",
+        "news_shareholder_change_count",
+        "news_regulatory_count",
+        "news_litigation_count",
+        "news_performance_count",
+    ],
+    "daily_announcement_factor": [
+        "announcement_count",
+        "announcement_sentiment_mean",
+        "announcement_positive_count",
+        "announcement_negative_count",
+        "announcement_weighted_sentiment_sum",
+        "announcement_importance_sum",
+        "announcement_growth_count",
+        "announcement_risk_count",
+        "announcement_financing_count",
+        "announcement_operation_count",
+        "announcement_contract_count",
+        "announcement_buyback_count",
+        "announcement_shareholder_change_count",
+        "announcement_regulatory_count",
+        "announcement_litigation_count",
+        "announcement_performance_count",
+    ],
+}
 RAW_PREVIEW_DATASETS = (
     "stock_basic",
     "universe_constituent",
@@ -281,6 +359,531 @@ class QdcConsoleData:
                 limit=row_limit,
             )
         return {"status": "ok", "instrument_count": len(rows), "instruments": rows}
+
+    def daily_collection_status(self, *, date: str | None = None) -> dict[str, Any]:
+        if not self.settings.database_path.exists():
+            resolved_date = date or datetime.now().date().isoformat()
+            return _empty_daily_collection_status(
+                date=resolved_date,
+                database_path=str(self.settings.database_path),
+            )
+
+        with self._connect() as conn:
+            control_tables = self._existing_tables(conn, CONTROL_SCHEMA)
+            silver_tables = self._existing_tables(conn, SILVER_SCHEMA)
+            resolved_date = self._resolve_daily_status_date(
+                conn,
+                silver_tables=silver_tables,
+                control_tables=control_tables,
+                requested_date=date,
+            )
+            reference_rows, reference_source = self._daily_reference_rows(
+                conn,
+                silver_tables=silver_tables,
+                date=resolved_date,
+            )
+            dataset_rows = self._daily_dataset_rows(
+                conn,
+                silver_tables=silver_tables,
+                date=resolved_date,
+                expected_count=len(reference_rows),
+            )
+            required_sets = {
+                dataset: self._daily_instrument_set(
+                    conn,
+                    silver_tables=silver_tables,
+                    dataset=dataset,
+                    date=resolved_date,
+                )
+                for dataset in REQUIRED_DAILY_COVERAGE_DATASETS
+            }
+            batch_rows = self._daily_batch_rows(
+                conn,
+                control_tables=control_tables,
+                date=resolved_date,
+            )
+        issue_rows = _daily_issue_rows(reference_rows, required_sets)
+        daily_bar_count = len(required_sets.get("daily_bar", set()))
+        core_complete_count = len(set.intersection(*required_sets.values())) if required_sets else 0
+        expected_count = len(reference_rows)
+        batch_summary = _daily_batch_summary(batch_rows)
+        return {
+            "status": "ok",
+            "date": resolved_date,
+            "database_exists": True,
+            "database_path": str(self.settings.database_path),
+            "updated_at": datetime.now().replace(microsecond=0).isoformat(),
+            "reference": {
+                "source": reference_source,
+                "expected_instrument_count": expected_count,
+            },
+            "collection": {
+                "collected_instrument_count": daily_bar_count,
+                "remaining_instrument_count": max(expected_count - daily_bar_count, 0),
+                "collection_percent": _percent(daily_bar_count, expected_count),
+                "core_complete_instrument_count": core_complete_count,
+                "core_complete_percent": _percent(core_complete_count, expected_count),
+                "problem_instrument_count": len(issue_rows),
+            },
+            "batches": batch_summary,
+            "batch_rows": batch_rows,
+            "dataset_rows": dataset_rows,
+            "issue_rows": issue_rows,
+        }
+
+    def daily_wide_preview(
+        self,
+        *,
+        date: str | None = None,
+        mode: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        preview_mode = mode if mode in {"raw", "factor"} else "raw"
+        row_limit = _clamp_instrument_limit(limit, default=DAILY_PREVIEW_LIMIT)
+        if not self.settings.database_path.exists():
+            resolved_date = date or datetime.now().date().isoformat()
+            return {
+                "status": "ok",
+                "date": resolved_date,
+                "mode": preview_mode,
+                "row_count": 0,
+                "hidden_count": 0,
+                "columns": _daily_preview_columns(preview_mode),
+                "rows": [],
+            }
+
+        with self._connect() as conn:
+            control_tables = self._existing_tables(conn, CONTROL_SCHEMA)
+            silver_tables = self._existing_tables(conn, SILVER_SCHEMA)
+            resolved_date = self._resolve_daily_status_date(
+                conn,
+                silver_tables=silver_tables,
+                control_tables=control_tables,
+                requested_date=date,
+            )
+            reference_rows, reference_source = self._daily_reference_rows(
+                conn,
+                silver_tables=silver_tables,
+                date=resolved_date,
+            )
+            rows = self._daily_wide_rows(
+                conn,
+                silver_tables=silver_tables,
+                date=resolved_date,
+                mode=preview_mode,
+                reference_rows=reference_rows,
+                limit=row_limit,
+            )
+        return {
+            "status": "ok",
+            "date": resolved_date,
+            "mode": preview_mode,
+            "reference_source": reference_source,
+            "row_count": len(rows),
+            "hidden_count": max(len(reference_rows) - len(rows), 0),
+            "columns": _daily_preview_columns(preview_mode),
+            "rows": rows,
+        }
+
+    def _resolve_daily_status_date(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        silver_tables: set[str],
+        control_tables: set[str],
+        requested_date: str | None,
+    ) -> str:
+        if requested_date:
+            return requested_date
+        if "daily_bar" in silver_tables:
+            value = conn.execute(f"select max(trade_date) from {SILVER_SCHEMA}.daily_bar").fetchone()[0]
+            if value:
+                return str(value)
+        if "job_run" in control_tables:
+            value = conn.execute(
+                f"""
+                select max(end_date)
+                from {CONTROL_SCHEMA}.job_run
+                where job_type in ('daily', 'daily_pipeline')
+                """
+            ).fetchone()[0]
+            if value:
+                return str(value)
+        return datetime.now().date().isoformat()
+
+    def _daily_reference_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        silver_tables: set[str],
+        date: str,
+    ) -> tuple[list[dict[str, Any]], str]:
+        if "stock_basic" in silver_tables:
+            rows = _query_dicts(
+                conn,
+                f"""
+                select instrument, symbol, exchange, name, industry, is_active
+                from {SILVER_SCHEMA}.stock_basic
+                where coalesce(is_active, true) = true
+                order by instrument
+                """,
+            )
+            if rows:
+                return rows, "stock_basic_active"
+        if "universe_constituent" in silver_tables:
+            snapshot = conn.execute(
+                f"""
+                select max(snapshot_date)
+                from {SILVER_SCHEMA}.universe_constituent
+                where snapshot_date <= ?
+                """,
+                [date],
+            ).fetchone()[0]
+            if snapshot:
+                rows = _query_dicts(
+                    conn,
+                    f"""
+                    select instrument, symbol, exchange, name, null as industry, true as is_active
+                    from {SILVER_SCHEMA}.universe_constituent
+                    where snapshot_date = ?
+                    order by instrument
+                    """,
+                    [snapshot],
+                )
+                if rows:
+                    return rows, f"universe_constituent:{snapshot}"
+        rows = [_default_instrument_identity(instrument) for instrument in _configured_instruments(self.settings)]
+        return rows, "config"
+
+    def _daily_dataset_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        silver_tables: set[str],
+        date: str,
+        expected_count: int,
+    ) -> list[dict[str, Any]]:
+        rows = []
+        for dataset in DAILY_COLLECTION_DATASETS:
+            if dataset not in silver_tables:
+                rows.append(
+                    {
+                        "dataset": dataset,
+                        "row_count": 0,
+                        "instrument_count": 0,
+                        "expected_instrument_count": expected_count
+                        if dataset in REQUIRED_DAILY_COVERAGE_DATASETS
+                        else None,
+                        "missing_instrument_count": expected_count
+                        if dataset in REQUIRED_DAILY_COVERAGE_DATASETS
+                        else None,
+                        "coverage_percent": 0
+                        if dataset in REQUIRED_DAILY_COVERAGE_DATASETS
+                        else None,
+                        "latest_updated_at": None,
+                    }
+                )
+                continue
+            columns = self._columns(conn, SILVER_SCHEMA, dataset)
+            date_column = _preferred_date_column(columns)
+            if date_column not in {"trade_date", "publish_date", "snapshot_date"}:
+                date_column = None
+            filters = f"where {date_column} = ?" if date_column else ""
+            params = [date] if date_column else []
+            row_count = int(
+                conn.execute(
+                    f"select count(*) from {SILVER_SCHEMA}.{dataset} {filters}",
+                    params,
+                ).fetchone()[0]
+                or 0
+            )
+            instrument_count = None
+            if "instrument" in columns:
+                instrument_count = int(
+                    conn.execute(
+                        f"""
+                        select count(distinct instrument)
+                        from {SILVER_SCHEMA}.{dataset}
+                        {filters}
+                        """,
+                        params,
+                    ).fetchone()[0]
+                    or 0
+                )
+            latest_updated_at = None
+            if "updated_at" in columns:
+                latest_updated_at = conn.execute(
+                    f"select max(updated_at) from {SILVER_SCHEMA}.{dataset} {filters}",
+                    params,
+                ).fetchone()[0]
+            expected = expected_count if dataset in REQUIRED_DAILY_COVERAGE_DATASETS else None
+            missing = max(expected - int(instrument_count or 0), 0) if expected is not None else None
+            rows.append(
+                {
+                    "dataset": dataset,
+                    "row_count": row_count,
+                    "instrument_count": instrument_count,
+                    "expected_instrument_count": expected,
+                    "missing_instrument_count": missing,
+                    "coverage_percent": _percent(int(instrument_count or 0), expected)
+                    if expected is not None
+                    else None,
+                    "latest_updated_at": latest_updated_at,
+                }
+            )
+        return rows
+
+    def _daily_instrument_set(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        silver_tables: set[str],
+        dataset: str,
+        date: str,
+    ) -> set[str]:
+        if dataset not in silver_tables:
+            return set()
+        columns = self._columns(conn, SILVER_SCHEMA, dataset)
+        if "instrument" not in columns or "trade_date" not in columns:
+            return set()
+        rows = conn.execute(
+            f"""
+            select distinct instrument
+            from {SILVER_SCHEMA}.{dataset}
+            where trade_date = ?
+            """,
+            [date],
+        ).fetchall()
+        return {str(row[0]) for row in rows}
+
+    def _daily_batch_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        date: str,
+    ) -> list[dict[str, Any]]:
+        if "backfill_task" not in control_tables:
+            return []
+        placeholders = ", ".join("?" for _ in DAILY_BATCH_DATASETS)
+        stale_threshold = _now_for_console_minutes_ago(STALE_RUNNING_MINUTES)
+        tasks = _query_dicts(
+            conn,
+            f"""
+            select *
+            from {CONTROL_SCHEMA}.backfill_task
+            where start_date <= ?
+              and end_date >= ?
+              and status <> 'superseded'
+              and dataset in ({placeholders})
+            order by dataset, created_at, task_id
+            """,
+            [date, date, *DAILY_BATCH_DATASETS],
+        )
+        groups: dict[str, dict[str, Any]] = {}
+        for task in tasks:
+            dataset = str(task.get("dataset") or "")
+            group = groups.setdefault(
+                dataset,
+                {
+                    "dataset": dataset,
+                    "total_batch_count": 0,
+                    "success_count": 0,
+                    "running_count": 0,
+                    "pending_count": 0,
+                    "failed_count": 0,
+                    "stale_running_count": 0,
+                    "symbol_count": 0,
+                    "latest_updated_at": None,
+                },
+            )
+            status = str(task.get("status") or "")
+            symbols = task.get("symbol_batch_json") or []
+            if not isinstance(symbols, list):
+                symbols = []
+            group["total_batch_count"] += 1
+            group["symbol_count"] += len(symbols)
+            if status == "success":
+                group["success_count"] += 1
+            elif status == "running":
+                group["running_count"] += 1
+                if str(task.get("updated_at") or "") <= stale_threshold:
+                    group["stale_running_count"] += 1
+            elif status == "pending":
+                group["pending_count"] += 1
+            elif status == "failed":
+                group["failed_count"] += 1
+            updated_at = task.get("updated_at")
+            if updated_at and (
+                not group["latest_updated_at"]
+                or str(updated_at) > str(group["latest_updated_at"])
+            ):
+                group["latest_updated_at"] = updated_at
+        rows = []
+        for dataset in DAILY_BATCH_DATASETS:
+            row = groups.get(
+                dataset,
+                {
+                    "dataset": dataset,
+                    "total_batch_count": 0,
+                    "success_count": 0,
+                    "running_count": 0,
+                    "pending_count": 0,
+                    "failed_count": 0,
+                    "stale_running_count": 0,
+                    "symbol_count": 0,
+                    "latest_updated_at": None,
+                },
+            )
+            total = int(row["total_batch_count"] or 0)
+            success = int(row["success_count"] or 0)
+            row["complete_percent"] = _percent(success, total)
+            row["state"] = _progress_state(
+                total=total,
+                success=success,
+                failed=int(row["failed_count"] or 0),
+                running=int(row["running_count"] or 0),
+                pending=int(row["pending_count"] or 0),
+                stale=int(row["stale_running_count"] or 0),
+            )
+            rows.append(row)
+        return rows
+
+    def _daily_wide_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        silver_tables: set[str],
+        date: str,
+        mode: str,
+        reference_rows: list[dict[str, Any]],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        table_fields = DAILY_FACTOR_WIDE_TABLES if mode == "factor" else DAILY_RAW_WIDE_TABLES
+        table_maps = {
+            table: self._daily_table_rows(
+                conn,
+                silver_tables=silver_tables,
+                table=table,
+                date=date,
+                fields=fields,
+            )
+            for table, fields in table_fields.items()
+        }
+        align_documents = mode == "factor"
+        news_groups = self._daily_document_groups(
+            conn,
+            silver_tables=silver_tables,
+            table="news",
+            date=date,
+            align_to_trade_date=align_documents,
+        )
+        announcement_groups = self._daily_document_groups(
+            conn,
+            silver_tables=silver_tables,
+            table="announcement",
+            date=date,
+            align_to_trade_date=align_documents,
+        )
+        rows = []
+        for identity in reference_rows[:limit]:
+            instrument = str(identity.get("instrument") or "")
+            row = {
+                "instrument": instrument,
+                "symbol": identity.get("symbol") or _instrument_symbol(instrument),
+                "exchange": identity.get("exchange") or _instrument_exchange(instrument),
+                "name": identity.get("name"),
+                "industry": identity.get("industry"),
+            }
+            for table, fields in table_fields.items():
+                table_row = table_maps.get(table, {}).get(instrument, {})
+                for field in fields:
+                    if field in table_row:
+                        row[field] = table_row.get(field)
+                if table_row.get("source_id"):
+                    row[f"{table}_source_id"] = table_row.get("source_id")
+                if table_row.get("updated_at"):
+                    row[f"{table}_updated_at"] = table_row.get("updated_at")
+            news = news_groups.get(instrument, {"count": 0, "documents": []})
+            announcements = announcement_groups.get(instrument, {"count": 0, "documents": []})
+            row["raw_news_count" if mode == "factor" else "news_count"] = news["count"]
+            row["raw_announcement_count" if mode == "factor" else "announcement_count"] = announcements["count"]
+            row["_news_documents"] = news["documents"]
+            row["_announcement_documents"] = announcements["documents"]
+            rows.append(row)
+        return rows
+
+    def _daily_table_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        silver_tables: set[str],
+        table: str,
+        date: str,
+        fields: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        if table not in silver_tables:
+            return {}
+        columns = self._columns(conn, SILVER_SCHEMA, table)
+        if "instrument" not in columns or "trade_date" not in columns:
+            return {}
+        selected_fields = [field for field in fields if field in columns]
+        source_expr = ", source_id" if "source_id" in columns else ""
+        updated_expr = ", updated_at" if "updated_at" in columns else ""
+        if selected_fields:
+            select_expr = ", " + ", ".join(selected_fields)
+        else:
+            select_expr = ""
+        rows = _query_dicts(
+            conn,
+            f"""
+            select instrument{select_expr}{source_expr}{updated_expr}
+            from {SILVER_SCHEMA}.{table}
+            where trade_date = ?
+            order by instrument
+            """,
+            [date],
+        )
+        return {str(row["instrument"]): row for row in rows}
+
+    def _daily_document_groups(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        silver_tables: set[str],
+        table: str,
+        date: str,
+        align_to_trade_date: bool,
+    ) -> dict[str, dict[str, Any]]:
+        if table not in silver_tables:
+            return {}
+        id_field = "news_id" if table == "news" else "announcement_id"
+        publish_start = date_minus_days(date, DOCUMENT_DETAIL_LOOKBACK_DAYS) if align_to_trade_date else date
+        rows = _query_dicts(
+            conn,
+            f"""
+            select {id_field}, publish_date, instrument, title, url, source_id
+            from {SILVER_SCHEMA}.{table}
+            where publish_date >= ?
+              and publish_date <= ?
+            order by publish_date desc, instrument, {id_field}
+            limit ?
+            """,
+            [publish_start, date, DAILY_DOCUMENT_DETAIL_LIMIT],
+        )
+        aligner = TradeDayAligner.from_connection(conn) if align_to_trade_date else None
+        groups: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if aligner and aligner.align(row["publish_date"]) != date:
+                continue
+            if not aligner and str(row.get("publish_date")) != date:
+                continue
+            instrument = str(row.get("instrument") or "")
+            group = groups.setdefault(instrument, {"count": 0, "documents": []})
+            group["count"] += 1
+            if len(group["documents"]) < 80:
+                group["documents"].append(row)
+        return groups
 
     def raw_instrument_preview(
         self,
@@ -650,6 +1253,18 @@ class QdcConsoleData:
             "latest_qlib_exports": [],
             "data_coverage": _empty_data_coverage(),
         }
+
+    def locked_payload(self, message: str) -> dict[str, Any]:
+        payload = self._empty_payload()
+        payload.update(
+            {
+                "status": "busy",
+                "database_exists": self.settings.database_path.exists(),
+                "database_busy": True,
+                "message": message,
+            }
+        )
+        return payload
 
     def _connect(self) -> duckdb.DuckDBPyConnection:
         return duckdb.connect(str(self.settings.database_path), read_only=True)
@@ -1853,6 +2468,19 @@ def _make_handler(
             try:
                 if path == "/api/overview":
                     self._send_json(data.overview())
+                elif path == "/api/daily-collection-status":
+                    self._send_json(
+                        data.daily_collection_status(date=_query_value(query, "date"))
+                    )
+                elif path == "/api/daily-wide-preview":
+                    raw_limit = _query_value(query, "limit")
+                    self._send_json(
+                        data.daily_wide_preview(
+                            date=_query_value(query, "date"),
+                            mode=_query_value(query, "mode"),
+                            limit=int(raw_limit) if raw_limit else None,
+                        )
+                    )
                 elif path == "/api/backfill-tasks":
                     self._send_json(
                         data.backfill_tasks(
@@ -1929,10 +2557,13 @@ def _make_handler(
                     status=HTTPStatus.BAD_REQUEST,
                 )
             except duckdb.Error as exc:
-                self._send_json(
-                    {"status": "fail", "error": f"duckdb read error: {exc}"},
-                    status=HTTPStatus.SERVICE_UNAVAILABLE,
-                )
+                if _is_duckdb_lock_error(exc):
+                    self._send_json(_locked_api_payload(data, path, query, exc))
+                else:
+                    self._send_json(
+                        {"status": "fail", "error": f"duckdb read error: {exc}"},
+                        status=HTTPStatus.SERVICE_UNAVAILABLE,
+                    )
             except Exception as exc:  # pragma: no cover - defensive HTTP guard
                 self._send_json(
                     {"status": "fail", "error": str(exc)},
@@ -1987,6 +2618,123 @@ def _make_handler(
             self.wfile.write(body)
 
     return QdcConsoleHandler
+
+
+def _locked_api_payload(
+    data: QdcConsoleData,
+    path: str,
+    query: dict[str, list[str]],
+    exc: BaseException,
+) -> dict[str, Any]:
+    message = (
+        "DuckDB 正在被采集任务写入，控制台暂时显示降级状态并会继续刷新。"
+    )
+    if path == "/api/overview":
+        return data.locked_payload(message)
+    if path == "/api/daily-collection-status":
+        payload = _empty_daily_collection_status(
+            date=_query_value(query, "date") or datetime.now().date().isoformat(),
+            database_path=str(data.settings.database_path),
+        )
+        payload.update({"status": "busy", "database_busy": True, "message": message})
+        return payload
+    if path == "/api/daily-wide-preview":
+        preview_mode = _query_value(query, "mode")
+        payload = {
+            "status": "busy",
+            "database_busy": True,
+            "message": message,
+            "date": _query_value(query, "date") or datetime.now().date().isoformat(),
+            "mode": preview_mode if preview_mode in {"raw", "factor"} else "raw",
+            "row_count": 0,
+            "hidden_count": 0,
+            "columns": _daily_preview_columns(
+                preview_mode if preview_mode in {"raw", "factor"} else "raw"
+            ),
+            "rows": [],
+        }
+        return payload
+    if path == "/api/job-runs":
+        return {"status": "busy", "database_busy": True, "message": message, "job_count": 0, "jobs": []}
+    if path == "/api/quality-issues":
+        return {
+            "status": "busy",
+            "database_busy": True,
+            "message": message,
+            "issue_count": 0,
+            "issues": [],
+        }
+    if path == "/api/watermarks":
+        return {
+            "status": "busy",
+            "database_busy": True,
+            "message": message,
+            "watermark_count": 0,
+            "watermarks": [],
+        }
+    if path == "/api/source-objects":
+        return {
+            "status": "busy",
+            "database_busy": True,
+            "message": message,
+            "object_count": 0,
+            "objects": [],
+        }
+    if path == "/api/backfill-tasks":
+        return {
+            "status": "busy",
+            "database_busy": True,
+            "message": message,
+            "task_count": 0,
+            "tasks": [],
+        }
+    if path == "/api/instruments":
+        row_limit = _clamp_instrument_limit(_query_limit(query), default=500)
+        rows = _configured_instrument_options(
+            data.settings,
+            query=_query_value(query, "query"),
+            limit=row_limit,
+        )
+        return {
+            "status": "busy",
+            "database_busy": True,
+            "message": message,
+            "instrument_count": len(rows),
+            "instruments": rows,
+        }
+    if path == "/api/dataset-preview":
+        payload = _empty_dataset_preview(_query_value(query, "dataset") or "daily_bar")
+        payload.update({"status": "busy", "database_busy": True, "message": message})
+        return payload
+    if path == "/api/raw-instrument-preview":
+        payload = _empty_raw_instrument_preview(
+            _query_value(query, "instrument") or "",
+            start=_query_value(query, "start"),
+            end=_query_value(query, "end"),
+            limit=_clamp_limit(_query_limit(query)),
+        )
+        payload.update({"status": "busy", "database_busy": True, "message": message})
+        return payload
+    if path in {"/api/instrument-timeline", "/api/factor-preview"}:
+        payload = _empty_instrument_timeline(
+            _query_value(query, "instrument") or "",
+            start=_query_value(query, "start"),
+            end=_query_value(query, "end"),
+            limit=_clamp_limit(_query_limit(query)),
+            offset=_query_offset(query),
+        )
+        payload.update({"status": "busy", "database_busy": True, "message": message})
+        return payload
+    return {
+        "status": "busy",
+        "database_busy": True,
+        "message": f"{message} ({exc})",
+    }
+
+
+def _is_duckdb_lock_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return "could not set lock" in message or "conflicting lock" in message
 
 
 def _query_dicts(
@@ -2910,6 +3658,101 @@ def _instrument_exchange(instrument: str) -> str | None:
     if len(instrument) > 2 and instrument[:2] in {"SH", "SZ", "BJ"}:
         return instrument[:2]
     return None
+
+
+def _empty_daily_collection_status(*, date: str, database_path: str) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "date": date,
+        "database_exists": False,
+        "database_path": database_path,
+        "updated_at": datetime.now().replace(microsecond=0).isoformat(),
+        "reference": {"source": "none", "expected_instrument_count": 0},
+        "collection": {
+            "collected_instrument_count": 0,
+            "remaining_instrument_count": 0,
+            "collection_percent": 0,
+            "core_complete_instrument_count": 0,
+            "core_complete_percent": 0,
+            "problem_instrument_count": 0,
+        },
+        "batches": {
+            "total_batch_count": 0,
+            "success_count": 0,
+            "running_count": 0,
+            "pending_count": 0,
+            "failed_count": 0,
+            "stale_running_count": 0,
+            "complete_percent": 0,
+        },
+        "batch_rows": [],
+        "dataset_rows": [],
+        "issue_rows": [],
+    }
+
+
+def _daily_issue_rows(
+    reference_rows: list[dict[str, Any]],
+    required_sets: dict[str, set[str]],
+) -> list[dict[str, Any]]:
+    rows = []
+    for identity in reference_rows:
+        instrument = str(identity.get("instrument") or "")
+        missing = [
+            dataset for dataset, instruments in required_sets.items() if instrument not in instruments
+        ]
+        if not missing:
+            continue
+        rows.append(
+            {
+                "instrument": instrument,
+                "symbol": identity.get("symbol") or _instrument_symbol(instrument),
+                "exchange": identity.get("exchange") or _instrument_exchange(instrument),
+                "name": identity.get("name"),
+                "industry": identity.get("industry"),
+                "missing_dimensions": missing,
+                "daily_bar": "missing" if "daily_bar" in missing else "ok",
+                "adj_factor": "missing" if "adj_factor" in missing else "ok",
+                "price_limit": "missing" if "price_limit" in missing else "ok",
+            }
+        )
+    return rows
+
+
+def _daily_batch_summary(batch_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    total = sum(int(row.get("total_batch_count") or 0) for row in batch_rows)
+    success = sum(int(row.get("success_count") or 0) for row in batch_rows)
+    running = sum(int(row.get("running_count") or 0) for row in batch_rows)
+    pending = sum(int(row.get("pending_count") or 0) for row in batch_rows)
+    failed = sum(int(row.get("failed_count") or 0) for row in batch_rows)
+    stale = sum(int(row.get("stale_running_count") or 0) for row in batch_rows)
+    return {
+        "total_batch_count": total,
+        "success_count": success,
+        "running_count": running,
+        "pending_count": pending,
+        "failed_count": failed,
+        "stale_running_count": stale,
+        "complete_percent": _percent(success, total),
+    }
+
+
+def _daily_preview_columns(mode: str) -> list[str]:
+    base = ["instrument", "symbol", "exchange", "name", "industry"]
+    if mode == "factor":
+        fields = [
+            field
+            for table_fields in DAILY_FACTOR_WIDE_TABLES.values()
+            for field in table_fields
+        ]
+        return [
+            *base,
+            *fields,
+            "raw_news_count",
+            "raw_announcement_count",
+        ]
+    fields = [field for table_fields in DAILY_RAW_WIDE_TABLES.values() for field in table_fields]
+    return [*base, *fields, "news_count", "announcement_count"]
 
 
 def _empty_data_coverage() -> dict[str, Any]:

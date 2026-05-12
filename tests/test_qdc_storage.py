@@ -12,9 +12,10 @@ from pathlib import Path
 import pandas as pd
 
 from quant_data_center.cli import _print_json, main
-from quant_data_center.console import QdcConsoleData
+from quant_data_center.console import QdcConsoleData, _locked_api_payload
 from quant_data_center.jobs.backfill import parse_date, plan_backfill_tasks
 from quant_data_center.settings import QdcSettings
+from quant_data_center.storage import database as database_module
 from quant_data_center.storage.database import QdcDatabase
 from quant_data_center.storage.schema import CONTROL_TABLES, SILVER_TABLES
 from quant_data_center.storage.silver import SilverStore
@@ -319,6 +320,33 @@ def test_qdc_run_backfill_control_only_updates_tasks_and_watermark(tmp_path: Pat
     assert watermark["max_date"] == "2026-05-03"
 
 
+def test_qdc_database_connect_retries_temporary_duckdb_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    attempts = []
+    original_connect = database_module.duckdb.connect
+
+    def fake_connect(path: str, **kwargs):
+        attempts.append((path, kwargs))
+        if len(attempts) == 1:
+            raise database_module.duckdb.IOException(
+                'IO Error: Could not set lock on file "qdc.duckdb": Conflicting lock'
+            )
+        return original_connect(":memory:", **kwargs)
+
+    monkeypatch.setattr(database_module.duckdb, "connect", fake_connect)
+    monkeypatch.setattr(database_module.time, "sleep", lambda _: None)
+    monkeypatch.setenv("QDC_DUCKDB_LOCK_TIMEOUT_SECONDS", "1")
+
+    with QdcDatabase(settings).connect() as conn:
+        assert conn.execute("select 1").fetchone()[0] == 1
+
+    assert len(attempts) == 2
+    assert attempts[0][0].endswith("qdc.duckdb")
+
+
 def test_qdc_console_overview_reads_collection_state(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     settings = QdcSettings.from_yaml(config_path)
@@ -352,6 +380,35 @@ def test_qdc_console_overview_reads_collection_state(tmp_path: Path) -> None:
     assert overview["latest_job_runs"][0]["parameters_json"] == {"planned_count": 1}
     assert overview["backfill_progress"][0]["success_percent"] == 0
     assert overview["backfill_progress"][0]["state"] == "pending"
+
+
+def test_qdc_console_returns_busy_payload_when_duckdb_is_locked(tmp_path: Path) -> None:
+    settings = QdcSettings.from_yaml(_write_config(tmp_path))
+    data = QdcConsoleData(settings)
+
+    overview = _locked_api_payload(
+        data,
+        "/api/overview",
+        {},
+        RuntimeError("Could not set lock on file"),
+    )
+    jobs = _locked_api_payload(
+        data,
+        "/api/job-runs",
+        {},
+        RuntimeError("Could not set lock on file"),
+    )
+
+    assert overview["status"] == "busy"
+    assert overview["database_busy"] is True
+    assert overview["database_path"].endswith("qdc.duckdb")
+    assert jobs == {
+        "status": "busy",
+        "database_busy": True,
+        "message": overview["message"],
+        "job_count": 0,
+        "jobs": [],
+    }
 
 
 def test_qdc_console_overview_reports_data_coverage(tmp_path: Path) -> None:

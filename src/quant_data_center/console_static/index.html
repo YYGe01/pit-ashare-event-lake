@@ -10,17 +10,16 @@
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark">日</div>
+          <div class="brand-mark">D</div>
           <div>
             <div class="brand-title">每日采集控制台</div>
-            <div class="brand-subtitle">quant_data_center</div>
+            <div class="brand-subtitle">daily collection only</div>
           </div>
         </div>
 
         <nav class="nav-list" aria-label="每日采集导航">
           <button class="nav-item active" data-section="dashboard" type="button">今日总览</button>
           <button class="nav-item" data-section="data" type="button">数据预览</button>
-          <button class="nav-item" data-section="quality" type="button">质量信号</button>
         </nav>
 
         <div class="sidebar-card">
@@ -33,13 +32,17 @@
       <main class="main">
         <header class="topbar">
           <div>
-            <div class="eyebrow">QDC DAILY OPS</div>
+            <div class="eyebrow">QDC DAILY COLLECTION</div>
             <h1 id="page-title">今日总览</h1>
             <p id="page-summary" class="page-summary">
-              只看每日采集链路：运行状态、数据水位、单标的数据预览和质量信号。
+              按日期查看每日 5000 多只标的的采集进度、批次状态、缺失标的和数据宽表。
             </p>
           </div>
           <div class="topbar-actions">
+            <label class="date-picker">
+              <span>基准日期</span>
+              <input id="active-date" class="input" type="date" />
+            </label>
             <span id="database-state" class="tag tag-default">连接中</span>
             <button id="refresh-btn" class="btn btn-primary" type="button">刷新</button>
           </div>
@@ -50,11 +53,15 @@
         <section id="dashboard" class="page-section active">
           <section class="hero-panel">
             <div>
-              <div class="eyebrow">LATEST DAILY RUN</div>
+              <div class="eyebrow">COLLECTION PROGRESS</div>
               <h2 id="hero-date">-</h2>
-              <p id="hero-summary">正在读取每日采集状态。</p>
+              <p id="hero-summary">正在读取当前日期的采集状态。</p>
             </div>
-            <div id="hero-status" class="hero-status">等待数据</div>
+            <div class="hero-meter">
+              <div id="hero-percent" class="hero-percent">0%</div>
+              <div class="progress-bar hero-progress"><div id="hero-progress-fill" class="progress-fill"></div></div>
+              <div id="hero-meter-foot" class="hero-meter-foot">等待数据</div>
+            </div>
           </section>
 
           <div id="kpi-grid" class="kpi-grid"></div>
@@ -62,126 +69,66 @@
           <section class="panel">
             <div class="panel-header">
               <div>
-                <h2>每日采集进度</h2>
-                <p class="panel-subtitle">按基础资料、核心日频、事件源、文本因子和导出产物拆开看最近一次每日链路是否齐全。</p>
+                <h2>批次进度</h2>
+                <p class="panel-subtitle">按数据集汇总当天每日采集批次：总批次、成功、运行中、待执行、失败和涉及标的数。</p>
               </div>
             </div>
-            <div id="daily-stage-grid" class="stage-grid"></div>
-          </section>
-
-          <div class="content-grid">
-            <section class="panel wide">
-              <div class="panel-header">
-                <div>
-                  <h2>最近流水线记录</h2>
-                  <p class="panel-subtitle">展示每日采集及其后续质量、同步、导出相关作业。</p>
-                </div>
-              </div>
-              <div id="recent-jobs"></div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-header">
-                <div>
-                  <h2>数据水位</h2>
-                  <p class="panel-subtitle">每个数据集最近成功覆盖到哪一天。</p>
-                </div>
-              </div>
-              <div id="watermark-list" class="list-block"></div>
-            </section>
-          </div>
-        </section>
-
-        <section id="data" class="page-section">
-          <section class="guide-panel">
-            <div>
-              <h2>数据预览</h2>
-              <p>先看整体覆盖，再点开数据集或标的。默认会尽量使用最近每日运行日期作为日期筛选。</p>
-            </div>
-            <div id="coverage-reference" class="coverage-grid"></div>
+            <div id="batch-table"></div>
           </section>
 
           <section class="panel">
             <div class="panel-header">
               <div>
                 <h2>覆盖总表</h2>
-                <p class="panel-subtitle">按数据集展示行数、日期范围、标的覆盖和核心日频完整度。</p>
+                <p class="panel-subtitle">按日期统计各数据集当天行数、覆盖标的数和核心数据缺口。</p>
               </div>
             </div>
-            <div id="coverage-dataset-table"></div>
+            <div id="dataset-coverage-table"></div>
           </section>
 
           <section class="panel">
             <div class="panel-header">
               <div>
-                <h2>数据集明细预览</h2>
-                <p class="panel-subtitle">快速查看任一每日相关表的最新记录。</p>
-              </div>
-              <div class="filters">
-                <select id="dataset-select" class="input"></select>
-                <input id="dataset-instrument" class="input" list="instrument-options" placeholder="标的，可选" autocomplete="off" />
-                <input id="dataset-start" class="input compact-input" placeholder="开始日期" />
-                <input id="dataset-end" class="input compact-input" placeholder="结束日期" />
-                <select id="dataset-limit" class="input compact-input">
-                  <option value="20">20</option>
-                  <option value="50">50</option>
-                  <option value="100">100</option>
-                </select>
-                <button id="load-dataset-preview" class="btn" type="button">查看</button>
+                <h2>问题标的</h2>
+                <p class="panel-subtitle">本来应该有核心日频数据但当天没有采到的标的。核心维度：daily_bar、adj_factor、price_limit。</p>
               </div>
             </div>
-            <div id="dataset-preview-summary" class="summary-strip"></div>
-            <div id="dataset-preview-table"></div>
-          </section>
-
-          <section class="panel">
-            <div class="panel-header">
-              <div>
-                <h2>标的日频预览</h2>
-                <p class="panel-subtitle">按 instrument 查看原始采集输入或处理后的日频因子。</p>
-              </div>
-              <div class="filters">
-                <input id="preview-instrument" class="input" list="instrument-options" placeholder="例如 SH600000" autocomplete="off" />
-                <datalist id="instrument-options"></datalist>
-                <input id="preview-start" class="input compact-input" placeholder="开始日期" />
-                <input id="preview-end" class="input compact-input" placeholder="结束日期" />
-                <select id="preview-limit" class="input compact-input">
-                  <option value="10">10</option>
-                  <option value="20">20</option>
-                  <option value="50">50</option>
-                </select>
-                <button id="load-instrument-preview" class="btn" type="button">查看</button>
-              </div>
-            </div>
-            <div class="segmented-control" aria-label="标的预览模式">
-              <button class="segment-button active" data-instrument-mode="factor" type="button">处理后因子</button>
-              <button class="segment-button" data-instrument-mode="raw" type="button">原始输入</button>
-            </div>
-            <div id="instrument-preview-summary" class="summary-strip"></div>
-            <div id="instrument-preview-table"></div>
+            <div id="issue-table"></div>
           </section>
         </section>
 
-        <section id="quality" class="page-section">
-          <section class="guide-panel quality-guide">
-            <div>
-              <h2>质量信号</h2>
-              <p>这里优先看未关闭问题。每日链路跑完后，如果 open 问题增长，需要先定位数据集和实体。</p>
-            </div>
-            <div id="quality-kpis" class="coverage-grid"></div>
-          </section>
-
-          <section class="panel">
+        <section id="data" class="page-section">
+          <section class="panel data-panel">
             <div class="panel-header">
               <div>
-                <h2>未关闭质量问题</h2>
-                <p class="panel-subtitle">按创建时间倒序展示最近问题。</p>
+                <h2>每日数据宽表</h2>
+                <p class="panel-subtitle">每行一个标的，所有字段横向平铺。新闻和公告只显示数量，点击数量查看来源明细。</p>
+              </div>
+              <div class="segmented-control" aria-label="数据预览模式">
+                <button class="segment-button active" data-preview-mode="raw" type="button">原始输入宽表</button>
+                <button class="segment-button" data-preview-mode="factor" type="button">处理后因子宽表</button>
               </div>
             </div>
-            <div id="quality-table"></div>
+            <div id="preview-summary" class="summary-strip"></div>
+            <div id="wide-preview-table"></div>
           </section>
         </section>
       </main>
+    </div>
+
+    <div id="document-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="document-modal-title">
+      <div class="modal-backdrop" data-close-modal="true"></div>
+      <section class="modal-card">
+        <header class="modal-header">
+          <div>
+            <div class="eyebrow">DOCUMENTS</div>
+            <h2 id="document-modal-title">来源明细</h2>
+            <p id="document-modal-summary">-</p>
+          </div>
+          <button class="btn" data-close-modal="true" type="button">关闭</button>
+        </header>
+        <div id="document-modal-body" class="modal-body"></div>
+      </section>
     </div>
 
     <script src="/app.js"></script>
