@@ -1267,7 +1267,9 @@ def test_qdc_crawl_run_control_only_updates_tasks(tmp_path: Path) -> None:
     assert database.table_counts()["crawl_run"] == 2
 
 
-def test_qdc_crawl_run_without_fetcher_fails_explicitly(tmp_path: Path) -> None:
+def test_qdc_crawl_run_real_cninfo_with_fake_response(
+    tmp_path: Path, monkeypatch
+) -> None:
     config_path = _write_config(tmp_path)
     assert (
         main(
@@ -1284,6 +1286,46 @@ def test_qdc_crawl_run_without_fetcher_fails_explicitly(tmp_path: Path) -> None:
         == 0
     )
 
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "totalpages": 1,
+                "totalRecordNum": 2,
+                "announcements": [
+                    {
+                        "secCode": "600000",
+                        "secName": "浦发银行",
+                        "announcementId": "1218792734",
+                        "announcementTitle": "<em>年度报告</em>",
+                        "announcementTime": 1704199222000,
+                        "adjunctUrl": "finalpage/2024-01-02/1218792734.PDF",
+                    },
+                    {
+                        "secCode": "000001",
+                        "secName": "平安银行",
+                        "announcementId": "1218792735",
+                        "announcementTitle": "关于董事会决议的公告",
+                        "announcementTime": 1704199222000,
+                        "adjunctUrl": "finalpage/2024-01-02/1218792735.PDF",
+                    },
+                ],
+            }
+
+    calls = []
+
+    def fake_post(url, headers, data, timeout):
+        calls.append({"url": url, "headers": headers, "data": data, "timeout": timeout})
+        return FakeResponse()
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
     assert (
         main(
             [
@@ -1292,15 +1334,59 @@ def test_qdc_crawl_run_without_fetcher_fails_explicitly(tmp_path: Path) -> None:
                 "crawl-run",
                 "--source-id",
                 "cninfo_announcement",
+                "--page-size",
+                "2",
             ]
         )
-        == 1
+        == 0
     )
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     task = database.list_crawl_tasks()[0]
+    assert task["status"] == "success"
+    assert calls[0]["data"]["seDate"] == "2026-05-11~2026-05-11"
+    assert database.silver_table_counts()["announcement"] == 2
+    source_objects = database.list_source_objects(dataset="announcement", source_id="cninfo_announcement")
+    assert {item["layer"] for item in source_objects} == {"bronze", "raw"}
+    with database.connect() as conn:
+        rows = conn.execute(
+            """
+            select instrument, title, url
+            from qdc_silver.announcement
+            order by instrument
+            """
+        ).fetchall()
+    assert rows == [
+        (
+            "SH600000",
+            "年度报告",
+            "https://static.cninfo.com.cn/finalpage/2024-01-02/1218792734.PDF",
+        ),
+        (
+            "SZ000001",
+            "关于董事会决议的公告",
+            "https://static.cninfo.com.cn/finalpage/2024-01-02/1218792735.PDF",
+        ),
+    ]
+
+
+def test_qdc_crawl_run_unsupported_real_source_fails_explicitly(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    database.init_schema()
+    database.insert_crawl_task(
+        source_id="unsupported_source",
+        dataset="announcement",
+        crawl_date="2026-05-11",
+        partition_key="date=2026-05-11",
+        request={"source_id": "unsupported_source"},
+    )
+
+    assert main(["--config", str(config_path), "crawl-run"]) == 1
+
+    task = database.list_crawl_tasks()[0]
     assert task["status"] == "failed"
-    assert "real crawler execution is not implemented yet" in str(task["last_error"])
+    assert "unsupported real crawler source_id" in str(task["last_error"])
 
 
 def test_qdc_crawl_daily_control_only_plans_and_runs_default_sources(tmp_path: Path) -> None:

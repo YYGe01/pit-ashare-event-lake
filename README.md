@@ -61,7 +61,7 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 
 `qdc daily-pipeline` 是收盘后日频自动化入口，默认使用 `all_a` 全 A 当前 active 标的：先刷新 `stock_basic`，再执行单日采集、因子重建、Parquet 同步、质量检查和 Qlib provider 导出。建议在 `ai-trader` 环境中用 Windows 计划任务每日 18:30 后运行；首次全市场运行前先用 `--symbols` 和 `--control-only` 做 smoke。
 
-`qdc crawl-plan` / `qdc crawl-run` / `qdc crawl-daily` 是非结构化数据每日爬虫的控制面入口。当前阶段先支持 `cninfo_announcement` 的任务规划、状态流、可恢复运行和 `--control-only` 验证；真实 CNINFO 请求和解析会在下一阶段接入。
+`qdc crawl-plan` / `qdc crawl-run` / `qdc crawl-daily` 是非结构化数据每日爬虫入口。当前已支持 `cninfo_announcement` 公告列表每日新增：写 raw JSON、bronze Parquet 和 `qdc_silver.announcement`；可用 `--page-size` / `--max-pages` 做小范围真实 smoke。PDF 原文下载、正文抽取和交易所公告补源在后续阶段接入。
 
 当前回补链路会写入原始 JSON、上游快照 Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 默认用规则引擎生成新闻/公告日频 count、标题级情绪和事件因子，覆盖增长、风险、融资、合同、回购、股东增减持、监管、诉讼、业绩、质押和担保等事件；`qdc sync-parquet` 可同步统一研究层/研究宽表层 Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day 数据目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的数据目录做数据读取层冒烟验证。
 

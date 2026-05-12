@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from quant_data_center.collectors.akshare import AkshareSilverCollector
 from quant_data_center.console import run_console
 from quant_data_center.crawlers.registry import crawler_source_spec, enabled_daily_source_specs
+from quant_data_center.crawlers.sources.cninfo import CninfoAnnouncementCrawler
 from quant_data_center.exports.qlib import QlibExporter, QlibProviderVerifier
 from quant_data_center.factor_engine import build_text_event_classifier
 from quant_data_center.factors import FactorBuilder
@@ -506,9 +507,12 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
         )
         return 0
     results, has_failures = _run_crawl_tasks(
+        settings=settings,
         database=database,
         tasks=tasks,
         control_only=bool(args.control_only),
+        page_size=args.page_size,
+        max_pages=args.max_pages,
     )
     run_id = database.record_crawl_run(
         status="failed" if has_failures else "success",
@@ -517,10 +521,14 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
         planned_count=len(tasks),
         success_count=sum(1 for item in results if item["status"] == "success"),
         failed_count=sum(1 for item in results if item["status"] == "failed"),
+        document_count=sum(int(item.get("document_count", 0)) for item in results),
+        raw_object_count=sum(int(item.get("raw_object_count", 0)) for item in results),
         parameters={
             "control_only": bool(args.control_only),
             "retry_failed": bool(args.retry_failed),
             "task_status": task_status,
+            "page_size": args.page_size,
+            "max_pages": args.max_pages,
         },
     )
     _print_json(
@@ -567,9 +575,12 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
     ]
     selected_tasks = tasks[: args.limit_tasks] if args.limit_tasks else tasks
     results, has_failures = _run_crawl_tasks(
+        settings=settings,
         database=database,
         tasks=selected_tasks,
         control_only=bool(args.control_only),
+        page_size=args.page_size,
+        max_pages=args.max_pages,
     )
     status = "partial" if has_failures or len(selected_tasks) < len(tasks) else "ok"
     run_id = database.record_crawl_run(
@@ -579,10 +590,14 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         planned_count=len(planned),
         success_count=sum(1 for item in results if item["status"] == "success"),
         failed_count=sum(1 for item in results if item["status"] == "failed"),
+        document_count=sum(int(item.get("document_count", 0)) for item in results),
+        raw_object_count=sum(int(item.get("raw_object_count", 0)) for item in results),
         parameters={
             "control_only": bool(args.control_only),
             "ran_count": len(results),
             "remaining_task_count": len(tasks) - len(selected_tasks),
+            "page_size": args.page_size,
+            "max_pages": args.max_pages,
         },
     )
     _print_json(
@@ -649,9 +664,12 @@ def _plan_crawl_tasks(
 
 def _run_crawl_tasks(
     *,
+    settings: QdcSettings,
     database: QdcDatabase,
     tasks: list[dict[str, Any]],
     control_only: bool,
+    page_size: int,
+    max_pages: int | None,
 ) -> tuple[list[dict[str, Any]], bool]:
     results = []
     has_failures = False
@@ -659,9 +677,14 @@ def _run_crawl_tasks(
         task_id = str(task["task_id"])
         database.mark_crawl_task_running(task_id)
         try:
-            if not control_only:
-                raise NotImplementedError(
-                    "real crawler execution is not implemented yet; use --control-only"
+            if control_only:
+                result = {"document_count": 0, "raw_object_count": 0}
+            else:
+                result = _run_real_crawl_task(
+                    settings=settings,
+                    task=task,
+                    page_size=page_size,
+                    max_pages=max_pages,
                 )
             database.finish_crawl_task(task_id=task_id, status="success")
             results.append(
@@ -670,8 +693,9 @@ def _run_crawl_tasks(
                     "source_id": task["source_id"],
                     "dataset": task["dataset"],
                     "status": "success",
-                    "document_count": 0,
-                    "raw_object_count": 0,
+                    "document_count": int(result.get("document_count", 0)),
+                    "raw_object_count": int(result.get("raw_object_count", 0)),
+                    "provider_record_count": int(result.get("provider_record_count", 0)),
                 }
             )
         except Exception as exc:
@@ -692,6 +716,26 @@ def _run_crawl_tasks(
                 }
             )
     return results, has_failures
+
+
+def _run_real_crawl_task(
+    *,
+    settings: QdcSettings,
+    task: dict[str, Any],
+    page_size: int,
+    max_pages: int | None,
+) -> dict[str, Any]:
+    source_id = str(task["source_id"])
+    if source_id == "cninfo_announcement":
+        spec = crawler_source_spec(source_id)
+        return CninfoAnnouncementCrawler(settings).crawl_date(
+            source_id=source_id,
+            crawl_date=str(task["crawl_date"]),
+            page_size=page_size,
+            max_pages=max_pages,
+            min_delay_seconds=spec.min_delay_seconds,
+        )
+    raise ValueError(f"unsupported real crawler source_id: {source_id}")
 
 
 def _plan_daily_tasks(
@@ -1257,6 +1301,8 @@ def build_parser() -> argparse.ArgumentParser:
     crawl_run_parser.add_argument("--source-id")
     crawl_run_parser.add_argument("--dataset")
     crawl_run_parser.add_argument("--limit-tasks", type=int)
+    crawl_run_parser.add_argument("--page-size", type=int, default=30)
+    crawl_run_parser.add_argument("--max-pages", type=int)
     crawl_run_parser.add_argument("--retry-failed", action="store_true")
     crawl_run_parser.add_argument(
         "--control-only",
@@ -1275,6 +1321,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     crawl_daily_parser.add_argument("--source-id")
     crawl_daily_parser.add_argument("--limit-tasks", type=int)
+    crawl_daily_parser.add_argument("--page-size", type=int, default=30)
+    crawl_daily_parser.add_argument("--max-pages", type=int)
     crawl_daily_parser.add_argument("--plan-only", action="store_true")
     crawl_daily_parser.add_argument("--control-only", action="store_true")
     crawl_daily_parser.set_defaults(func=cmd_crawl_daily)

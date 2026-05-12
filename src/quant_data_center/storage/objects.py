@@ -104,8 +104,8 @@ class QdcObjectStore:
             / f"dt={_safe_segment(partition_value)}"
         )
         directory.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
-        filename = f"{timestamp}_{_short_segment(stem)}_{uuid4().hex[:12]}{suffix}"
+        timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        filename = f"{timestamp}_{_short_segment(stem)}_{uuid4().hex[:8]}{suffix}"
         return directory / filename
 
     def _index_object(
@@ -134,7 +134,7 @@ def _safe_segment(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.=-]+", "_", text)
 
 
-def _short_segment(value: str, *, max_length: int = 32) -> str:
+def _short_segment(value: str, *, max_length: int = 16) -> str:
     text = _safe_segment(value)
     if len(text) <= max_length:
         return text
