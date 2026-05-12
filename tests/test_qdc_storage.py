@@ -1603,6 +1603,105 @@ def test_qdc_crawl_run_real_cninfo_with_fake_response(
     ]
 
 
+def test_qdc_crawl_run_filters_cninfo_announcements_by_symbols(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-plan",
+                "--source-id",
+                "cninfo_announcement",
+                "--date",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "totalpages": 1,
+                "totalRecordNum": 2,
+                "announcements": [
+                    {
+                        "secCode": "600000",
+                        "secName": "浦发银行",
+                        "announcementId": "1218792734",
+                        "announcementTitle": "年度报告",
+                        "announcementTime": 1778515200000,
+                        "adjunctUrl": "finalpage/2026-05-11/1218792734.PDF",
+                    },
+                    {
+                        "secCode": "000001",
+                        "secName": "平安银行",
+                        "announcementId": "1218792735",
+                        "announcementTitle": "关于董事会决议的公告",
+                        "announcementTime": 1778515200000,
+                        "adjunctUrl": "finalpage/2026-05-11/1218792735.PDF",
+                    },
+                ],
+            }
+
+    class FakePdfResponse:
+        status_code = 200
+        headers = {"Content-Type": "application/pdf"}
+        content = b"%PDF-1.4 filtered"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    pdf_calls = []
+
+    def fake_post(url, headers, data, timeout):
+        return FakeResponse()
+
+    def fake_get(url, headers, timeout):
+        pdf_calls.append(url)
+        return FakePdfResponse()
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-run",
+                "--source-id",
+                "cninfo_announcement",
+                "--symbols",
+                "SH600000",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    assert pdf_calls == ["https://static.cninfo.com.cn/finalpage/2026-05-11/1218792734.PDF"]
+    assert database.silver_table_counts()["announcement"] == 1
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            select instrument, title, pdf_download_status
+            from qdc_silver.announcement
+            """
+        ).fetchone()
+    assert row == ("SH600000", "年度报告", "success")
+
+
 def test_qdc_crawl_run_real_sse_announcement_with_fake_response(
     tmp_path: Path, monkeypatch
 ) -> None:

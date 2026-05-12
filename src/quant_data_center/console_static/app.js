@@ -18,6 +18,13 @@ const FIELD_LABELS = {
   instrument_count: "覆盖标的",
   expected_instrument_count: "应采标的",
   missing_instrument_count: "缺失标的",
+  dimension: "字段维度",
+  source_id: "数据源",
+  success_instrument_count: "成功标的",
+  failed_instrument_count: "失败标的",
+  timeout_count: "超时次数",
+  error_count: "错误次数",
+  last_error: "最近错误",
   coverage_percent: "覆盖率",
   latest_updated_at: "最近更新",
   missing_dimensions: "缺失维度",
@@ -353,6 +360,7 @@ function renderDashboard(payload) {
 
   renderBatchTable(payload.batch_rows || []);
   renderDatasetCoverage(payload.dataset_rows || []);
+  renderSourceDimensions(payload.source_dimension_rows || []);
   renderIssueTable(payload.issue_rows || []);
 }
 
@@ -393,6 +401,26 @@ function renderDatasetCoverage(rows) {
     sorted,
     "暂无覆盖统计。",
     { sortKind: "coverage", sort: state.sort.coverage || {} },
+  );
+}
+
+function renderSourceDimensions(rows) {
+  const sorted = sortedRows(rows, state.sort.sourceDimension);
+  $("source-dimension-table").innerHTML = table(
+    [
+      { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel, maxLength: 90 },
+      { key: "dimension", label: fieldLabel("dimension"), maxLength: 120 },
+      { key: "source_id", label: fieldLabel("source_id"), maxLength: 160 },
+      { key: "expected_instrument_count", label: fieldLabel("expected_instrument_count"), value: (row) => row.expected_instrument_count === null ? "-" : number(row.expected_instrument_count) },
+      { key: "success_instrument_count", label: fieldLabel("success_instrument_count"), value: (row) => row.success_instrument_count === null ? "-" : number(row.success_instrument_count) },
+      { key: "failed_instrument_count", label: fieldLabel("failed_instrument_count"), value: (row) => row.failed_instrument_count === null ? "-" : number(row.failed_instrument_count) },
+      { key: "timeout_count", label: fieldLabel("timeout_count"), value: (row) => number(row.timeout_count) },
+      { key: "error_count", label: fieldLabel("error_count"), value: (row) => number(row.error_count) },
+      { key: "last_error", label: fieldLabel("last_error"), maxLength: 260 },
+    ],
+    sorted,
+    "当前日期暂无按源字段失败统计。",
+    { sortKind: "sourceDimension", sort: state.sort.sourceDimension || {} },
   );
 }
 
