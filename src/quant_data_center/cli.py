@@ -947,6 +947,25 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         status = "partial"
 
     should_continue = not (has_failures or has_incomplete_tasks) or bool(args.continue_on_failure)
+    crawl_result: dict[str, Any] | None = None
+    if should_continue and args.crawl_documents:
+        crawl_result = _run_daily_pipeline_crawl_documents(
+            settings=settings,
+            database=database,
+            run_date=run_date,
+            source_id=args.crawl_source_id,
+            limit_tasks=args.crawl_limit_tasks,
+            control_only=bool(args.control_only),
+            page_size=args.crawl_page_size,
+            max_pages=args.crawl_max_pages,
+            download_pdfs=not bool(args.skip_crawl_pdf_download),
+            pdf_limit=args.crawl_pdf_limit,
+        )
+        steps.append({"step": "crawl_documents", **crawl_result})
+        if crawl_result["status"] != "ok":
+            status = "partial"
+            should_continue = bool(args.continue_on_failure)
+
     if should_continue and not args.control_only and not args.skip_factors:
         factor_result = FactorBuilder(settings).build(
             factor_set="all",
@@ -990,6 +1009,10 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             "planned_count": len(planned),
             "ran_count": len(daily_results),
             "control_only": bool(args.control_only),
+            "crawl_documents": bool(args.crawl_documents),
+            "crawl_status": crawl_result["status"] if crawl_result else None,
+            "crawl_planned_count": crawl_result["planned_count"] if crawl_result else 0,
+            "crawl_ran_count": crawl_result["ran_count"] if crawl_result else 0,
             "quality_status": quality_result["status"] if quality_result else None,
         },
     )
@@ -1006,6 +1029,76 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         }
     )
     return 1 if status != "ok" else 0
+
+
+def _run_daily_pipeline_crawl_documents(
+    *,
+    settings: QdcSettings,
+    database: QdcDatabase,
+    run_date: str,
+    source_id: str | None,
+    limit_tasks: int | None,
+    control_only: bool,
+    page_size: int,
+    max_pages: int | None,
+    download_pdfs: bool,
+    pdf_limit: int | None,
+) -> dict[str, Any]:
+    planned = []
+    for spec in enabled_daily_source_specs(source_id):
+        planned.extend(
+            _plan_crawl_tasks(
+                database=database,
+                source_spec=spec.to_record(),
+                crawl_date=run_date,
+            )
+        )
+    tasks = [
+        task
+        for task in database.list_crawl_tasks(status="pending", source_id=source_id)
+        if task["crawl_date"] == run_date
+    ]
+    selected_tasks = tasks[:limit_tasks] if limit_tasks else tasks
+    results, has_failures = _run_crawl_tasks(
+        settings=settings,
+        database=database,
+        tasks=selected_tasks,
+        control_only=control_only,
+        page_size=page_size,
+        max_pages=max_pages,
+        download_pdfs=download_pdfs,
+        pdf_limit=pdf_limit,
+    )
+    remaining_task_count = len(tasks) - len(selected_tasks)
+    status = "partial" if has_failures or remaining_task_count else "ok"
+    run_id = database.record_crawl_run(
+        status="success" if status == "ok" else "failed",
+        source_id=source_id,
+        crawl_date=run_date,
+        planned_count=len(planned),
+        success_count=sum(1 for item in results if item["status"] == "success"),
+        failed_count=sum(1 for item in results if item["status"] == "failed"),
+        document_count=sum(int(item.get("document_count", 0)) for item in results),
+        raw_object_count=sum(int(item.get("raw_object_count", 0)) for item in results),
+        parameters={
+            "control_only": control_only,
+            "command": "daily-pipeline",
+            "ran_count": len(results),
+            "remaining_task_count": remaining_task_count,
+            "page_size": page_size,
+            "max_pages": max_pages,
+            "download_pdfs": download_pdfs,
+            "pdf_limit": pdf_limit,
+        },
+    )
+    return {
+        "status": status,
+        "run_id": run_id,
+        "planned_count": len(planned),
+        "ran_count": len(results),
+        "remaining_task_count": remaining_task_count,
+        "results": results,
+    }
 
 
 def _run_backfill_tasks(
@@ -1300,6 +1393,24 @@ def build_parser() -> argparse.ArgumentParser:
     daily_pipeline_parser.add_argument("--plan-only", action="store_true")
     daily_pipeline_parser.add_argument("--control-only", action="store_true")
     daily_pipeline_parser.add_argument("--continue-on-failure", action="store_true")
+    daily_pipeline_parser.add_argument(
+        "--crawl-documents",
+        action="store_true",
+        help="Run enabled daily document crawlers before factor, quality, and Qlib export steps",
+    )
+    daily_pipeline_parser.add_argument(
+        "--crawl-source-id",
+        help="Optional crawler source filter, for example cninfo_announcement or sina_finance_news",
+    )
+    daily_pipeline_parser.add_argument("--crawl-limit-tasks", type=int)
+    daily_pipeline_parser.add_argument("--crawl-page-size", type=int, default=30)
+    daily_pipeline_parser.add_argument("--crawl-max-pages", type=int)
+    daily_pipeline_parser.add_argument("--crawl-pdf-limit", type=int)
+    daily_pipeline_parser.add_argument(
+        "--skip-crawl-pdf-download",
+        action="store_true",
+        help="Only collect announcement metadata during --crawl-documents",
+    )
     daily_pipeline_parser.add_argument("--skip-factors", action="store_true")
     daily_pipeline_parser.add_argument("--skip-sync", action="store_true")
     daily_pipeline_parser.add_argument("--skip-quality", action="store_true")

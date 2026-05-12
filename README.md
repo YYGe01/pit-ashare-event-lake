@@ -64,7 +64,7 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 
 日线行情 `daily_bar`、复权因子 `adj_factor`、涨跌停价格 `price_limit`、新闻 `news` 可用 `--universe` 展开上游代码 `symbol`，也可以显式传入 `--symbols` 覆盖。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
 
-`qdc daily-pipeline` 是收盘后结构化日频自动化入口，默认使用 `all_a` 全 A 当前 active 标的：先刷新 `stock_basic`，再执行单日采集、因子重建、Parquet 同步、质量检查和 Qlib provider 导出。当前它不会自动调用 `crawl-daily`；如果希望同日新闻公告爬虫进入本次因子和 Qlib 导出，先运行 `qdc crawl-daily`，再运行 `qdc daily-pipeline`。首次全市场运行前先用 `--symbols` 和 `--control-only` 做 smoke。
+`qdc daily-pipeline` 是收盘后日频自动化入口，默认使用 `all_a` 全 A 当前 active 标的：先刷新 `stock_basic`，再执行单日采集、因子重建、Parquet 同步、质量检查和 Qlib provider 导出。需要把同日新闻公告爬虫纳入本次因子和 Qlib 导出时，增加 `--crawl-documents`；该开关会在因子构建前执行 `crawl-daily` 的默认新闻公告源。首次全市场运行前先用 `--symbols`、`--control-only` 和爬虫限量参数做 smoke。
 
 `qdc crawl-plan` / `qdc crawl-run` / `qdc crawl-daily` 是非结构化数据每日爬虫入口。当前已支持 `cninfo_announcement` 公告列表每日新增：写 raw JSON、bronze Parquet、公开 PDF 原文 `raw_file` 留档，并把 PDF hash、object_id、下载状态回写到 `qdc_silver.announcement`。也已接入 `sina_finance_news` 作为公开新闻 metadata-only 补位源：保存 raw JSON、bronze Parquet，把标题中能匹配到 `stock_basic` 代码或名称的新闻写入 `qdc_silver.news`，再进入 `daily_news_factor` 和 Qlib 日频导出。可用 `--page-size` / `--max-pages` / `--pdf-limit` 做小范围真实 smoke；如只验证公告列表元数据，可加 `--skip-pdf-download`。正文抽取和交易所公告补源在后续阶段接入。
 

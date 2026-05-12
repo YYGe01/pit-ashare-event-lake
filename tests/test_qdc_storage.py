@@ -1740,6 +1740,74 @@ def test_qdc_daily_pipeline_control_only_records_pipeline_job(
     assert json.loads(pipeline_job[3])["symbol_count"] == 2
 
 
+def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "akshare",
+        SimpleNamespace(
+            stock_info_a_code_name=lambda: pd.DataFrame(
+                [{"code": "600000", "name": "浦发银行"}, {"code": "000001", "name": "平安银行"}]
+            )
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "daily-pipeline",
+                "--date",
+                "2026-05-11",
+                "--batch-size",
+                "1",
+                "--control-only",
+                "--crawl-documents",
+                "--crawl-page-size",
+                "5",
+                "--crawl-max-pages",
+                "1",
+                "--crawl-pdf-limit",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    tasks = database.list_crawl_tasks()
+    assert len(tasks) == 2
+    assert [task["source_id"] for task in tasks] == ["cninfo_announcement", "sina_finance_news"]
+    assert {task["status"] for task in tasks} == {"success"}
+    with database.connect() as conn:
+        crawl_run = conn.execute(
+            """
+            select status, planned_count, success_count, parameters_json
+            from qdc_meta.crawl_run
+            """
+        ).fetchone()
+        pipeline_job = conn.execute(
+            """
+            select parameters_json
+            from qdc_meta.job_run
+            where job_type = 'daily_pipeline'
+            """
+        ).fetchone()
+    assert crawl_run is not None
+    assert crawl_run[0:3] == ("success", 2, 2)
+    assert json.loads(crawl_run[3])["command"] == "daily-pipeline"
+    assert pipeline_job is not None
+    parameters = json.loads(pipeline_job[0])
+    assert parameters["crawl_documents"] is True
+    assert parameters["crawl_status"] == "ok"
+    assert parameters["crawl_planned_count"] == 2
+    assert parameters["crawl_ran_count"] == 2
+
+
 def test_qdc_plan_backfill_rejects_unsupported_source(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     assert (
