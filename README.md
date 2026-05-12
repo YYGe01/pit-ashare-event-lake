@@ -5,7 +5,7 @@
 目标是服务 Qlib 研究：采集 A 股数据、支持历史回补和每日增量、加工稳定日频因子，并导出 Qlib 可读数据。本仓库不做模型训练、组合回测、实盘下单或交易终端适配。
 
 当前实施计划见 `docs/迁移实施计划.md`。第一次阅读项目时，建议先看 `docs/数据流阅读指南.md`，它按数据流解释原始留档层、上游快照层、统一研究层、因子、研究宽表层和 Qlib 数据目录导出的输入输出。控制台页面设计和后续标的画像规划见 `docs/控制台产品设计方案.md`。
-每日收盘后自动采集方案见 `docs/每日自动采集实施计划.md`。
+每日收盘后自动采集、新闻公告爬虫和阶段状态统一见 `docs/每日自动采集实施计划.md`。
 
 ## 当前入口
 
@@ -64,7 +64,7 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 
 日线行情 `daily_bar`、复权因子 `adj_factor`、涨跌停价格 `price_limit`、新闻 `news` 可用 `--universe` 展开上游代码 `symbol`，也可以显式传入 `--symbols` 覆盖。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
 
-`qdc daily-pipeline` 是收盘后日频自动化入口，默认使用 `all_a` 全 A 当前 active 标的：先刷新 `stock_basic`，再执行单日采集、因子重建、Parquet 同步、质量检查和 Qlib provider 导出。建议在 `ai-trader` 环境中用 Windows 计划任务每日 18:30 后运行；首次全市场运行前先用 `--symbols` 和 `--control-only` 做 smoke。
+`qdc daily-pipeline` 是收盘后结构化日频自动化入口，默认使用 `all_a` 全 A 当前 active 标的：先刷新 `stock_basic`，再执行单日采集、因子重建、Parquet 同步、质量检查和 Qlib provider 导出。当前它不会自动调用 `crawl-daily`；如果希望同日新闻公告爬虫进入本次因子和 Qlib 导出，先运行 `qdc crawl-daily`，再运行 `qdc daily-pipeline`。首次全市场运行前先用 `--symbols` 和 `--control-only` 做 smoke。
 
 `qdc crawl-plan` / `qdc crawl-run` / `qdc crawl-daily` 是非结构化数据每日爬虫入口。当前已支持 `cninfo_announcement` 公告列表每日新增：写 raw JSON、bronze Parquet、公开 PDF 原文 `raw_file` 留档，并把 PDF hash、object_id、下载状态回写到 `qdc_silver.announcement`。也已接入 `sina_finance_news` 作为公开新闻 metadata-only 补位源：保存 raw JSON、bronze Parquet，把标题中能匹配到 `stock_basic` 代码或名称的新闻写入 `qdc_silver.news`，再进入 `daily_news_factor` 和 Qlib 日频导出。可用 `--page-size` / `--max-pages` / `--pdf-limit` 做小范围真实 smoke；如只验证公告列表元数据，可加 `--skip-pdf-download`。正文抽取和交易所公告补源在后续阶段接入。
 
