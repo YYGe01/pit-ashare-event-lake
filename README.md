@@ -39,12 +39,18 @@ qdc daily-pipeline --batch-size 50
 qdc --config config/quant_data_center_daily_only.yaml init
 qdc --config config/quant_data_center_daily_only.yaml daily-pipeline
 qdc crawl-plan --source-id cninfo_announcement --date 2026-05-11 --control-only
+qdc crawl-plan --source-id sse_announcement --date 2026-05-11 --control-only
 qdc crawl-plan --source-id sina_finance_news --date 2026-05-11 --control-only
+qdc crawl-plan --source-id eastmoney_roll_news --date 2026-05-11 --control-only
 qdc crawl-run --source-id cninfo_announcement --control-only
+qdc crawl-run --source-id sse_announcement --control-only
 qdc crawl-run --source-id sina_finance_news --control-only
+qdc crawl-run --source-id eastmoney_roll_news --control-only
 qdc crawl-daily --date 2026-05-11 --control-only
 qdc crawl-daily --date 2026-05-11 --source-id cninfo_announcement --page-size 2 --max-pages 1 --pdf-limit 1
+qdc crawl-daily --date 2026-05-11 --source-id sse_announcement --page-size 2 --max-pages 1 --skip-pdf-download
 qdc crawl-daily --date 2026-05-11 --source-id sina_finance_news --page-size 10 --max-pages 1
+qdc crawl-daily --date 2026-05-11 --source-id eastmoney_roll_news --page-size 10 --max-pages 1
 qdc build-factors --factor-set all --start 2026-05-01 --end 2026-05-03
 qdc classify-text-event --document-type announcement --title "公司收到交易所监管问询函"
 qdc sync-parquet --layer all
@@ -69,15 +75,15 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 - 公告 `announcement`
 - 新闻 `news`
 
-日线行情 `daily_bar`、复权因子 `adj_factor`、涨跌停价格 `price_limit`、新闻 `news` 可用 `--universe` 展开上游代码 `symbol`，也可以显式传入 `--symbols` 覆盖。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
+日线行情 `daily_bar`、复权因子 `adj_factor`、涨跌停价格 `price_limit` 可用 `--universe` 展开上游代码 `symbol`，也可以显式传入 `--symbols` 覆盖。历史回补命令仍保留 AkShare `announcement` / `news` 能力，但当前每日链路不再用 AkShare 作为公告新闻来源。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
 
-`qdc daily-pipeline` 是收盘后日频自动化入口，默认使用 `all_a` 全 A 当前 active 标的：先刷新 `stock_basic`，再执行单日采集、同日新闻公告爬虫、因子重建、Parquet 同步、质量检查和 Qlib provider 导出。配置里的 `crawl_documents: true` 会在因子构建前执行 `crawl-daily` 的默认新闻公告源；需要临时只跑结构化链路时传 `--no-crawl-documents`。首次全市场运行前先用 `--symbols`、`--control-only` 和爬虫限量参数做 smoke。
+`qdc daily-pipeline` 是收盘后日频自动化入口，默认使用 `all_a` 全 A 当前 active 标的：先刷新 `stock_basic`，再执行结构化单日采集、同日新闻公告爬虫、因子重建、Parquet 同步、质量检查和 Qlib provider 导出。每日结构化任务只规划 `trade_calendar`、`daily_bar`、`adj_factor`、`price_limit` 和 `trade_status`；公告新闻只走 `crawl-daily` 的 crawler-backed 源，避免 AkShare 元数据混入当日文档口径。配置里的 `crawl_documents: true` 会在因子构建前执行 `crawl-daily` 的默认新闻公告源；需要临时只跑结构化链路时传 `--no-crawl-documents`。首次全市场运行前先用 `--symbols`、`--control-only` 和爬虫限量参数做 smoke。
 
 如果暂时不使用历史回补数据，改用 `config/quant_data_center_daily_only.yaml`。该配置把 DuckDB、raw、Parquet、Qlib provider 和日志全部写到 `data/quant_data_center_daily_only/`，与当前 `data/quant_data_center/` 历史回补库隔离。`daily_pipeline` 段保存 `batch_size`、`export_start`、`market_name`、非结构化文档爬虫和跳过步骤等默认参数；默认会采集公告和新闻文档，命令行传同名参数时会覆盖配置，例如 `--batch-size 20` 或 `--no-crawl-documents`。
 
-`qdc crawl-plan` / `qdc crawl-run` / `qdc crawl-daily` 是非结构化数据每日爬虫入口。当前已支持 `cninfo_announcement` 公告列表每日新增：写 raw JSON、bronze Parquet、公开 PDF 原文 `raw_file` 留档，并把 PDF hash、object_id、下载状态回写到 `qdc_silver.announcement`。也已接入 `sina_finance_news` 作为公开新闻 metadata-only 补位源：保存 raw JSON、bronze Parquet，把标题中能匹配到 `stock_basic` 代码或名称的新闻写入 `qdc_silver.news`，再进入 `daily_news_factor` 和 Qlib 日频导出。可用 `--page-size` / `--max-pages` / `--pdf-limit` 做小范围真实 smoke；如只验证公告列表元数据，可加 `--skip-pdf-download`。正文抽取和交易所公告补源在后续阶段接入。
+`qdc crawl-plan` / `qdc crawl-run` / `qdc crawl-daily` 是非结构化数据每日爬虫入口。当前默认源是 `cninfo_announcement`、`sse_announcement`、`sina_finance_news` 和 `eastmoney_roll_news`。公告源必须能按请求日期或返回字段确认当日发布日期；新闻源必须能解析完整 `YYYY-MM-DD HH:MM[:SS]` 发布时间，分不清发布日期的候选不启用。raw 侧除原始 JSON 外，会额外写直观文件包 `data/quant_data_center/raw/documents/<date>/<source>/<run>/manifest.json` 和 `records.jsonl`；DuckDB 继续只做索引、控制表、silver 表、去重和导出。新闻源只保存 metadata/title/url，不保存版权不明确的正文。`build-factors` 会按 `publish_date + instrument + normalized_title` 对多源文档去重后再计数。可用 `--page-size` / `--max-pages` / `--pdf-limit` 做小范围真实 smoke；如只验证公告列表元数据，可加 `--skip-pdf-download`。正文抽取和更多备用源在后续阶段接入。
 
-当前每日链路会写入原始 JSON、上游快照 Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。历史回补相关的 `qdc plan-backfill` / `qdc run-backfill` / `qdc run-backfill --retry-failed` 先冻结，不作为默认推进方向。`qdc build-factors` 默认用规则引擎生成新闻/公告日频 count、标题级情绪和事件因子，覆盖增长、风险、融资、合同、回购、股东增减持、监管、诉讼、业绩、质押和担保等事件；`qdc sync-parquet` 可同步统一研究层/研究宽表层 Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day 数据目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的数据目录做数据读取层冒烟验证。
+当前每日链路会写入原始 JSON、直观 `raw/documents` 文件包、上游快照 Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。控制台每日宽表和处理后因子只消费 crawler-backed 文档源；点击公告/新闻标题会优先预览本地 PDF、raw JSON 或 `records.jsonl`，并标记“已保存正文文本 / 已保存 PDF 原文 / 仅元数据 / 本地未保存内容”。历史回补相关的 `qdc plan-backfill` / `qdc run-backfill` / `qdc run-backfill --retry-failed` 先冻结，不作为默认推进方向。`qdc build-factors` 默认用规则引擎基于 crawler-backed 新闻/公告生成日频 count、标题级情绪和事件因子，覆盖增长、风险、融资、合同、回购、股东增减持、监管、诉讼、业绩、质押和担保等事件；`qdc sync-parquet` 可同步统一研究层/研究宽表层 Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day 数据目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的数据目录做数据读取层冒烟验证。
 
 LLM 抽取接口已预留为单条冒烟验证 `smoke` 命令，不参与 `build-factors` 全量构建。模型切换和数据提供方 `provider` 默认值统一放在 `config/quant_data_center.yaml` 的 `llm.text_event` 段：
 

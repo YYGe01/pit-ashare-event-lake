@@ -1561,8 +1561,19 @@ def test_qdc_crawl_run_real_cninfo_with_fake_response(
         }
     ]
     assert database.silver_table_counts()["announcement"] == 2
-    source_objects = database.list_source_objects(dataset="announcement", source_id="cninfo_announcement")
-    assert {item["layer"] for item in source_objects} == {"bronze", "raw", "raw_file"}
+    source_objects = database.list_source_objects(
+        dataset="announcement",
+        source_id="cninfo_announcement",
+    )
+    assert {item["layer"] for item in source_objects} == {
+        "bronze",
+        "raw",
+        "raw_file",
+        "raw_manifest",
+        "raw_records",
+    }
+    records_uri = next(item["uri"] for item in source_objects if item["layer"] == "raw_records")
+    assert "/raw/documents/2026-05-11/cninfo_announcement/" in records_uri
     pdf_hash = hashlib.sha256(FakePdfResponse.content).hexdigest()
     with database.connect() as conn:
         rows = conn.execute(
@@ -1590,6 +1601,110 @@ def test_qdc_crawl_run_real_cninfo_with_fake_response(
             None,
         ),
     ]
+
+
+def test_qdc_crawl_run_real_sse_announcement_with_fake_response(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-plan",
+                "--source-id",
+                "sse_announcement",
+                "--date",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "pageHelp": {"pageCount": 1},
+                "result": [
+                    {
+                        "SECURITY_CODE": "600000",
+                        "SECURITY_NAME": "浦发银行",
+                        "SSEDATE": "2026-05-11",
+                        "TITLE": "浦发银行2025年年度股东会决议公告",
+                        "URL": "/disclosure/listedinfo/announcement/c/new/a1.pdf",
+                    },
+                    {
+                        "SECURITY_CODE": "600001",
+                        "SECURITY_NAME": "测试公司",
+                        "SSEDATE": "2026-05-10",
+                        "TITLE": "历史公告不应入库",
+                        "URL": "/disclosure/listedinfo/announcement/c/new/a2.pdf",
+                    },
+                ],
+            }
+
+    calls = []
+
+    def fake_get(url, headers, params=None, timeout=30):
+        calls.append({"url": url, "headers": headers, "params": params, "timeout": timeout})
+        return FakeResponse()
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-run",
+                "--source-id",
+                "sse_announcement",
+                "--page-size",
+                "2",
+                "--skip-pdf-download",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    task = database.list_crawl_tasks(source_id="sse_announcement")[0]
+    assert task["status"] == "success"
+    assert calls[0]["params"]["beginDate"] == "2026-05-11"
+    assert calls[0]["params"]["endDate"] == "2026-05-11"
+    assert database.silver_table_counts()["announcement"] == 1
+    source_objects = database.list_source_objects(
+        dataset="announcement",
+        source_id="sse_announcement",
+    )
+    assert {item["layer"] for item in source_objects} == {
+        "bronze",
+        "raw",
+        "raw_manifest",
+        "raw_records",
+    }
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            select instrument, publish_date, title, source_id, pdf_download_status
+            from qdc_silver.announcement
+            """
+        ).fetchone()
+    assert row == (
+        "SH600000",
+        datetime(2026, 5, 11).date(),
+        "浦发银行2025年年度股东会决议公告",
+        "sse_announcement",
+        "skipped",
+    )
 
 
 
@@ -1698,8 +1813,18 @@ def test_qdc_crawl_run_real_sina_news_with_fake_response(
     assert task["status"] == "success"
     assert calls[0]["params"] == {"pageid": "153", "lid": "1686", "num": "3", "page": "1"}
     assert database.silver_table_counts()["news"] == 1
-    source_objects = database.list_source_objects(dataset="news", source_id="sina_finance_news")
-    assert {item["layer"] for item in source_objects} == {"bronze", "raw"}
+    source_objects = database.list_source_objects(
+        dataset="news",
+        source_id="sina_finance_news",
+    )
+    assert {item["layer"] for item in source_objects} == {
+        "bronze",
+        "raw",
+        "raw_manifest",
+        "raw_records",
+    }
+    records_uri = next(item["uri"] for item in source_objects if item["layer"] == "raw_records")
+    assert "/raw/documents/2026-05-11/sina_finance_news/" in records_uri
     with database.connect() as conn:
         rows = conn.execute(
             """
@@ -1716,6 +1841,111 @@ def test_qdc_crawl_run_real_sina_news_with_fake_response(
             "sina_finance_news",
         )
     ]
+
+
+def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    SilverStore(settings).upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-plan",
+                "--source-id",
+                "eastmoney_roll_news",
+                "--date",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    class FakeResponse:
+        status_code = 200
+        text = """
+        <li><span>2026-05-11 18:20</span>[<a href="stock.html">股票</a>]
+        <a href="http://stock.eastmoney.com/a/202605111111.html"
+        title="浦发银行签订重大合同" target="_blank">浦发银行签订重大合同</a></li>
+        <li><span>2026-05-10 18:21</span>[<a href="stock.html">股票</a>]
+        <a href="http://stock.eastmoney.com/a/202605101111.html"
+        title="浦发银行历史新闻" target="_blank">浦发银行历史新闻</a></li>
+        """
+
+        def raise_for_status(self) -> None:
+            return None
+
+    calls = []
+
+    def fake_get(url, headers, timeout):
+        calls.append({"url": url, "headers": headers, "timeout": timeout})
+        return FakeResponse()
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-run",
+                "--source-id",
+                "eastmoney_roll_news",
+                "--page-size",
+                "5",
+                "--max-pages",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    task = database.list_crawl_tasks(source_id="eastmoney_roll_news")[0]
+    assert task["status"] == "success"
+    assert calls[0]["url"] == "https://roll.eastmoney.com/default_1.html"
+    assert database.silver_table_counts()["news"] == 1
+    source_objects = database.list_source_objects(
+        dataset="news",
+        source_id="eastmoney_roll_news",
+    )
+    assert {item["layer"] for item in source_objects} == {
+        "bronze",
+        "raw",
+        "raw_manifest",
+        "raw_records",
+    }
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            select instrument, publish_date, title, source_id
+            from qdc_silver.news
+            """
+        ).fetchone()
+    assert row == (
+        "SH600000",
+        datetime(2026, 5, 11).date(),
+        "浦发银行签订重大合同",
+        "eastmoney_roll_news",
+    )
+
 
 def test_qdc_crawl_run_unsupported_real_source_fails_explicitly(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
@@ -1755,8 +1985,13 @@ def test_qdc_crawl_daily_control_only_plans_and_runs_default_sources(tmp_path: P
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 2
-    assert [task["source_id"] for task in tasks] == ["cninfo_announcement", "sina_finance_news"]
+    assert len(tasks) == 4
+    assert {task["source_id"] for task in tasks} == {
+        "cninfo_announcement",
+        "sse_announcement",
+        "sina_finance_news",
+        "eastmoney_roll_news",
+    }
     assert {task["status"] for task in tasks} == {"success"}
     assert database.table_counts()["crawl_run"] == 1
 
@@ -1827,11 +2062,12 @@ def test_qdc_daily_control_only_plans_and_runs_daily_tasks(tmp_path: Path) -> No
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_backfill_tasks()
-    assert len(tasks) == 11
+    assert len(tasks) == 8
+    assert {task["dataset"] for task in tasks}.isdisjoint({"announcement", "news"})
     assert {task["status"] for task in tasks} == {"success"}
-    assert database.table_counts()["dataset_watermark"] == 7
+    assert database.table_counts()["dataset_watermark"] == 5
     job_runs = database.table_counts()["job_run"]
-    assert job_runs == 12
+    assert job_runs == 9
 
 
 def test_qdc_daily_all_market_uses_stock_basic_symbols(
@@ -1870,8 +2106,9 @@ def test_qdc_daily_all_market_uses_stock_basic_symbols(
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     assert database.stock_basic_instruments() == ["SH600000", "SZ000001"]
     tasks = database.list_backfill_tasks()
-    assert len(tasks) == 11
+    assert len(tasks) == 8
     assert {task["status"] for task in tasks} == {"success"}
+    assert {task["dataset"] for task in tasks}.isdisjoint({"announcement", "news"})
     daily_bar_tasks = database.list_backfill_tasks(dataset="daily_bar")
     assert [task["symbol_batch_json"] for task in daily_bar_tasks] == [["SH600000"], ["SZ000001"]]
 
@@ -2106,8 +2343,13 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 2
-    assert [task["source_id"] for task in tasks] == ["cninfo_announcement", "sina_finance_news"]
+    assert len(tasks) == 4
+    assert {task["source_id"] for task in tasks} == {
+        "cninfo_announcement",
+        "sse_announcement",
+        "sina_finance_news",
+        "eastmoney_roll_news",
+    }
     assert {task["status"] for task in tasks} == {"success"}
     with database.connect() as conn:
         crawl_run = conn.execute(
@@ -2124,14 +2366,14 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
             """
         ).fetchone()
     assert crawl_run is not None
-    assert crawl_run[0:3] == ("success", 2, 2)
+    assert crawl_run[0:3] == ("success", 4, 4)
     assert json.loads(crawl_run[3])["command"] == "daily-pipeline"
     assert pipeline_job is not None
     parameters = json.loads(pipeline_job[0])
     assert parameters["crawl_documents"] is True
     assert parameters["crawl_status"] == "ok"
-    assert parameters["crawl_planned_count"] == 2
-    assert parameters["crawl_ran_count"] == 2
+    assert parameters["crawl_planned_count"] == 4
+    assert parameters["crawl_ran_count"] == 4
 
 
 def test_qdc_plan_backfill_rejects_unsupported_source(tmp_path: Path) -> None:
@@ -2721,6 +2963,13 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
                 "title": "公司被立案调查存在退市风险",
                 "source_id": "sina_finance_news",
             },
+            {
+                "news_id": "n2_backup",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "公司被立案调查存在退市风险",
+                "source_id": "eastmoney_roll_news",
+            },
         ]
     )
     silver.upsert_announcements(
@@ -2738,6 +2987,13 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
                 "instrument": "SH600000",
                 "title": "年度权益分派公告",
                 "source_id": "cninfo_announcement",
+            },
+            {
+                "announcement_id": "a2_backup",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "年度权益分派公告",
+                "source_id": "sse_announcement",
             },
         ]
     )

@@ -11,7 +11,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import duckdb
 
@@ -35,6 +35,26 @@ RAW_OBJECT_SCAN_LIMIT = 1000
 DOCUMENT_DETAIL_LOOKBACK_DAYS = 15
 DOCUMENT_DETAIL_LIMIT = 1000
 DAILY_DOCUMENT_DETAIL_LIMIT = 10000
+DAILY_DOCUMENT_SOURCE_IDS = {
+    "announcement": ("cninfo_announcement", "sse_announcement"),
+    "news": ("sina_finance_news", "eastmoney_roll_news"),
+}
+DOCUMENT_SOURCE_PRIORITY = {
+    "cninfo_announcement": 0,
+    "sse_announcement": 1,
+    "sina_finance_news": 0,
+    "eastmoney_roll_news": 1,
+}
+DOCUMENT_LOCAL_CONTENT_FIELDS = ("body_text", "content", "正文", "summary", "摘要")
+DOCUMENT_OBJECT_FIELDS = (
+    "raw_object_id",
+    "pdf_url",
+    "pdf_object_id",
+    "pdf_download_status",
+    "pdf_size_bytes",
+    "pdf_error_message",
+)
+DOCUMENT_OBJECT_LAYERS = {"raw", "raw_file", "raw_manifest", "raw_records"}
 STALE_RUNNING_MINUTES = 15
 COVERAGE_INSTRUMENT_LIMIT = 500
 DAILY_PREVIEW_LIMIT = 6000
@@ -468,6 +488,7 @@ class QdcConsoleData:
             )
             rows = self._daily_wide_rows(
                 conn,
+                control_tables=control_tables,
                 silver_tables=silver_tables,
                 date=resolved_date,
                 mode=preview_mode,
@@ -588,11 +609,21 @@ class QdcConsoleData:
             date_column = _preferred_date_column(columns)
             if date_column not in {"trade_date", "publish_date", "snapshot_date"}:
                 date_column = None
-            filters = f"where {date_column} = ?" if date_column else ""
-            params = [date] if date_column else []
+            filters = []
+            params: list[Any] = []
+            if date_column:
+                filters.append(f"{date_column} = ?")
+                params.append(date)
+            document_source_ids = DAILY_DOCUMENT_SOURCE_IDS.get(dataset, ())
+            if document_source_ids and "source_id" in columns:
+                filters.append(
+                    "source_id in (" + ", ".join("?" for _ in document_source_ids) + ")"
+                )
+                params.extend(document_source_ids)
+            where_clause = f"where {' and '.join(filters)}" if filters else ""
             row_count = int(
                 conn.execute(
-                    f"select count(*) from {SILVER_SCHEMA}.{dataset} {filters}",
+                    f"select count(*) from {SILVER_SCHEMA}.{dataset} {where_clause}",
                     params,
                 ).fetchone()[0]
                 or 0
@@ -604,7 +635,7 @@ class QdcConsoleData:
                         f"""
                         select count(distinct instrument)
                         from {SILVER_SCHEMA}.{dataset}
-                        {filters}
+                        {where_clause}
                         """,
                         params,
                     ).fetchone()[0]
@@ -613,7 +644,7 @@ class QdcConsoleData:
             latest_updated_at = None
             if "updated_at" in columns:
                 latest_updated_at = conn.execute(
-                    f"select max(updated_at) from {SILVER_SCHEMA}.{dataset} {filters}",
+                    f"select max(updated_at) from {SILVER_SCHEMA}.{dataset} {where_clause}",
                     params,
                 ).fetchone()[0]
             expected = expected_count if dataset in REQUIRED_DAILY_COVERAGE_DATASETS else None
@@ -753,6 +784,7 @@ class QdcConsoleData:
         self,
         conn: duckdb.DuckDBPyConnection,
         *,
+        control_tables: set[str],
         silver_tables: set[str],
         date: str,
         mode: str,
@@ -770,20 +802,19 @@ class QdcConsoleData:
             )
             for table, fields in table_fields.items()
         }
-        align_documents = mode == "factor"
         news_groups = self._daily_document_groups(
             conn,
+            control_tables=control_tables,
             silver_tables=silver_tables,
             table="news",
             date=date,
-            align_to_trade_date=align_documents,
         )
         announcement_groups = self._daily_document_groups(
             conn,
+            control_tables=control_tables,
             silver_tables=silver_tables,
             table="announcement",
             date=date,
-            align_to_trade_date=align_documents,
         )
         rows = []
         for identity in reference_rows[:limit]:
@@ -850,40 +881,154 @@ class QdcConsoleData:
         self,
         conn: duckdb.DuckDBPyConnection,
         *,
+        control_tables: set[str],
         silver_tables: set[str],
         table: str,
         date: str,
-        align_to_trade_date: bool,
     ) -> dict[str, dict[str, Any]]:
         if table not in silver_tables:
             return {}
+        source_ids = DAILY_DOCUMENT_SOURCE_IDS.get(table, ())
+        if not source_ids:
+            return {}
         id_field = "news_id" if table == "news" else "announcement_id"
-        publish_start = date_minus_days(date, DOCUMENT_DETAIL_LOOKBACK_DAYS) if align_to_trade_date else date
+        columns = self._columns(conn, SILVER_SCHEMA, table)
+        optional_fields = [
+            field
+            for field in (*DOCUMENT_LOCAL_CONTENT_FIELDS, *DOCUMENT_OBJECT_FIELDS)
+            if field in columns
+        ]
+        select_fields = [id_field, "publish_date", "instrument", "title", "url", "source_id"]
+        for field in optional_fields:
+            if field not in select_fields:
+                select_fields.append(field)
+        placeholders = ", ".join("?" for _ in source_ids)
+        raw_object_ids = self._daily_source_raw_object_ids(
+            conn,
+            control_tables=control_tables,
+            dataset=table,
+            source_ids=source_ids,
+            date=date,
+        )
         rows = _query_dicts(
             conn,
             f"""
-            select {id_field}, publish_date, instrument, title, url, source_id
+            select {", ".join(select_fields)}
             from {SILVER_SCHEMA}.{table}
-            where publish_date >= ?
-              and publish_date <= ?
+            where publish_date = ?
+              and source_id in ({placeholders})
             order by publish_date desc, instrument, {id_field}
             limit ?
             """,
-            [publish_start, date, DAILY_DOCUMENT_DETAIL_LIMIT],
+            [date, *source_ids, DAILY_DOCUMENT_DETAIL_LIMIT],
         )
-        aligner = TradeDayAligner.from_connection(conn) if align_to_trade_date else None
         groups: dict[str, dict[str, Any]] = {}
         for row in rows:
-            if aligner and aligner.align(row["publish_date"]) != date:
-                continue
-            if not aligner and str(row.get("publish_date")) != date:
-                continue
             instrument = str(row.get("instrument") or "")
-            group = groups.setdefault(instrument, {"count": 0, "documents": []})
-            group["count"] += 1
-            if len(group["documents"]) < 80:
-                group["documents"].append(row)
-        return groups
+            group = groups.setdefault(instrument, {"documents_by_key": {}})
+            documents_by_key = group["documents_by_key"]
+            key = _daily_document_key(row)
+            existing = documents_by_key.get(key)
+            item = _annotated_document_row(row, raw_object_ids=raw_object_ids)
+            if existing:
+                source_ids = set(existing.get("source_ids") or [existing.get("source_id")])
+                source_ids.add(item.get("source_id"))
+                preferred = _preferred_document_row(existing, item)
+                preferred["source_ids"] = _ordered_source_ids(source_ids)
+                preferred["source_id"] = ", ".join(preferred["source_ids"])
+                preferred = _annotated_document_row(preferred, raw_object_ids=raw_object_ids)
+                documents_by_key[key] = preferred
+            else:
+                source_id = item.get("source_id")
+                item["source_ids"] = [source_id] if source_id else []
+                documents_by_key[key] = item
+        return {
+            instrument: {
+                "count": len(group["documents_by_key"]),
+                "documents": list(group["documents_by_key"].values())[:80],
+            }
+            for instrument, group in groups.items()
+        }
+
+    def _daily_source_raw_object_ids(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        dataset: str,
+        source_ids: tuple[str, ...],
+        date: str,
+    ) -> dict[str, str]:
+        if "source_object" not in control_tables or not source_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in source_ids)
+        layer_placeholders = ", ".join("?" for _ in DOCUMENT_OBJECT_LAYERS)
+        rows = _query_dicts(
+            conn,
+            f"""
+            select source_id, object_id, layer, created_at
+            from {CONTROL_SCHEMA}.source_object
+            where dataset = ?
+              and layer in ({layer_placeholders})
+              and source_id in ({placeholders})
+              and uri like ?
+            order by
+              case layer
+                when 'raw_records' then 0
+                when 'raw' then 1
+                when 'raw_manifest' then 2
+                when 'raw_file' then 3
+                else 9
+              end,
+              created_at desc,
+              object_id desc
+            """,
+            [dataset, *DOCUMENT_OBJECT_LAYERS, *source_ids, f"%{date}%"],
+        )
+        object_ids: dict[str, str] = {}
+        for row in rows:
+            source_id = str(row.get("source_id") or "")
+            if source_id and source_id not in object_ids:
+                object_ids[source_id] = str(row.get("object_id") or "")
+        return object_ids
+
+    def source_object_file(self, *, object_id: str) -> dict[str, Any]:
+        object_id = str(object_id or "").strip()
+        if not object_id:
+            raise ValueError("source object id is required")
+        if not self.settings.database_path.exists():
+            raise ValueError("database does not exist")
+        with self._connect() as conn:
+            control_tables = self._existing_tables(conn, CONTROL_SCHEMA)
+            if "source_object" not in control_tables:
+                raise ValueError("source_object table does not exist")
+            row = _query_dicts(
+                conn,
+                f"""
+                select object_id, dataset, source_id, layer, uri, size_bytes
+                from {CONTROL_SCHEMA}.source_object
+                where object_id = ?
+                """,
+                [object_id],
+            )
+        if not row:
+            raise ValueError(f"source object not found: {object_id}")
+        item = row[0]
+        dataset = str(item.get("dataset") or "")
+        layer = str(item.get("layer") or "")
+        if dataset not in {"announcement", "news"} or layer not in DOCUMENT_OBJECT_LAYERS:
+            raise ValueError(f"source object is not a previewable document object: {object_id}")
+        path = _resolve_source_object_path(self.settings, item.get("uri"))
+        if not path.is_file():
+            raise ValueError(f"source object file does not exist: {path}")
+        body = path.read_bytes()
+        content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        return {
+            "body": body,
+            "content_type": content_type,
+            "filename": path.name,
+            "size_bytes": len(body),
+        }
 
     def raw_instrument_preview(
         self,
@@ -1061,6 +1206,9 @@ class QdcConsoleData:
     ) -> list[dict[str, Any]]:
         if table not in silver_tables or not trade_dates:
             return []
+        source_ids = DAILY_DOCUMENT_SOURCE_IDS.get(table, ())
+        if not source_ids:
+            return []
         id_field = "news_id" if table == "news" else "announcement_id"
         target_trade_dates = {str(trade_date) for trade_date in trade_dates if trade_date}
         if not target_trade_dates:
@@ -1068,6 +1216,7 @@ class QdcConsoleData:
         publish_start = date_minus_days(min(target_trade_dates), DOCUMENT_DETAIL_LOOKBACK_DAYS)
         publish_end = max(target_trade_dates)
         aligner = TradeDayAligner.from_connection(conn)
+        placeholders = ", ".join("?" for _ in source_ids)
         rows = _query_dicts(
             conn,
             f"""
@@ -1076,10 +1225,11 @@ class QdcConsoleData:
             where instrument = ?
               and publish_date >= ?
               and publish_date <= ?
+              and source_id in ({placeholders})
             order by publish_date desc, {id_field}
             limit ?
             """,
-            [instrument, publish_start, publish_end, DOCUMENT_DETAIL_LIMIT],
+            [instrument, publish_start, publish_end, *source_ids, DOCUMENT_DETAIL_LIMIT],
         )
         aligned_rows = []
         for row in rows:
@@ -2509,6 +2659,12 @@ def _make_handler(
                             limit=_query_limit(query),
                         )
                     )
+                elif path == "/api/source-object-file":
+                    self._send_bytes(
+                        data.source_object_file(
+                            object_id=_query_value(query, "object_id") or ""
+                        )
+                    )
                 elif path == "/api/instruments":
                     self._send_json(
                         data.instruments(
@@ -2599,6 +2755,18 @@ def _make_handler(
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_bytes(self, payload: dict[str, Any]) -> None:
+            body = bytes(payload["body"])
+            filename = str(payload.get("filename") or "source-object")
+            content_type = str(payload.get("content_type") or "application/octet-stream")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition", f"inline; filename={quote(filename)}")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
         def _send_json(
             self,
             payload: dict[str, Any],
@@ -2680,6 +2848,12 @@ def _locked_api_payload(
             "object_count": 0,
             "objects": [],
         }
+    if path == "/api/source-object-file":
+        return {
+            "status": "busy",
+            "database_busy": True,
+            "message": message,
+        }
     if path == "/api/backfill-tasks":
         return {
             "status": "busy",
@@ -2735,6 +2909,143 @@ def _locked_api_payload(
 def _is_duckdb_lock_error(exc: BaseException) -> bool:
     message = str(exc).lower()
     return "could not set lock" in message or "conflicting lock" in message
+
+
+def _annotated_document_row(
+    row: dict[str, Any],
+    *,
+    raw_object_ids: dict[str, str],
+) -> dict[str, Any]:
+    item = dict(row)
+    source_id = str(item.get("source_id") or "")
+    raw_object_id = str(item.get("raw_object_id") or raw_object_ids.get(source_id) or "")
+    if raw_object_id:
+        item["raw_object_id"] = raw_object_id
+    body_text = _first_document_text(item)
+    pdf_object_id = str(item.get("pdf_object_id") or "")
+    pdf_status = str(item.get("pdf_download_status") or "")
+    has_pdf = bool(pdf_object_id and pdf_status == "success")
+    item["has_body"] = bool(body_text)
+    item["has_pdf"] = has_pdf
+    item["body_text"] = body_text
+    if body_text:
+        item["content_status"] = "local_text"
+        item["content_label"] = "已保存正文文本"
+        if raw_object_id:
+            item["local_object_id"] = raw_object_id
+            item["local_object_kind"] = "raw_json"
+            item["local_url"] = _source_object_url(raw_object_id)
+        return item
+    if has_pdf:
+        item["content_status"] = "local_pdf"
+        item["content_label"] = "已保存 PDF 原文，尚未抽取正文文本"
+        item["local_object_id"] = pdf_object_id
+        item["local_object_kind"] = "pdf"
+        item["local_url"] = _source_object_url(pdf_object_id)
+        return item
+    if raw_object_id:
+        item["content_status"] = "local_metadata"
+        pdf_note = f"，PDF 状态：{pdf_status}" if pdf_status else ""
+        item["content_label"] = f"本地仅保存列表/元数据 JSON，未保存正文或 PDF{pdf_note}"
+        item["local_object_id"] = raw_object_id
+        item["local_object_kind"] = "raw_json"
+        item["local_url"] = _source_object_url(raw_object_id)
+        return item
+    item["content_status"] = "missing_local_content"
+    item["content_label"] = "本地未保存正文、PDF 或原始 JSON"
+    item["local_object_id"] = None
+    item["local_object_kind"] = None
+    item["local_url"] = None
+    return item
+
+
+def _first_document_text(row: dict[str, Any]) -> str | None:
+    for field in DOCUMENT_LOCAL_CONTENT_FIELDS:
+        value = row.get(field)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text[:5000]
+    return None
+
+
+def _source_object_url(object_id: str) -> str:
+    return f"/api/source-object-file?object_id={quote(str(object_id), safe='')}"
+
+
+def _resolve_source_object_path(settings: QdcSettings, uri: Any) -> Path:
+    value = str(uri or "").strip()
+    if not value:
+        raise ValueError("source object uri is empty")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    resolved = path.resolve()
+    roots = [
+        _resolve_settings_path(settings.data_root),
+        _resolve_settings_path(settings.raw_root),
+        _resolve_settings_path(settings.parquet_root),
+    ]
+    if not any(_is_relative_to(resolved, root) for root in roots):
+        raise ValueError(f"source object path is outside configured data roots: {resolved}")
+    return resolved
+
+
+def _resolve_settings_path(path: Path) -> Path:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    return candidate.resolve()
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _daily_document_key(row: dict[str, Any]) -> str:
+    title_key = _normalize_document_title(row.get("title"))
+    if title_key:
+        return title_key
+    url = str(row.get("url") or "").strip()
+    if url:
+        return url
+    return str(row.get("news_id") or row.get("announcement_id") or "")
+
+
+def _normalize_document_title(value: Any) -> str:
+    text = str(value or "").strip()
+    for separator in (":", "："):
+        if separator in text:
+            prefix, suffix = text.split(separator, 1)
+            if 0 < len(prefix.strip()) <= 12 and suffix.strip():
+                text = suffix.strip()
+                break
+    return "".join(text.split()).lower()
+
+
+def _preferred_document_row(
+    current: dict[str, Any],
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    current_priority = _document_source_priority(current.get("source_id"))
+    candidate_priority = _document_source_priority(candidate.get("source_id"))
+    if candidate_priority < current_priority:
+        return dict(candidate)
+    return dict(current)
+
+
+def _ordered_source_ids(source_ids: set[Any]) -> list[str]:
+    values = [str(source_id) for source_id in source_ids if source_id]
+    return sorted(values, key=lambda source_id: (_document_source_priority(source_id), source_id))
+
+
+def _document_source_priority(source_id: Any) -> int:
+    return DOCUMENT_SOURCE_PRIORITY.get(str(source_id or ""), 100)
 
 
 def _query_dicts(

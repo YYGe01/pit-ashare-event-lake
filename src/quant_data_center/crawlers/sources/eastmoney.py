@@ -1,7 +1,8 @@
-"""Sina finance rolling-news crawler used as a public metadata-only补位源."""
+"""Eastmoney rolling-news crawler used as a public metadata-only source."""
 
 from __future__ import annotations
 
+import html
 import re
 import time
 from datetime import datetime
@@ -13,12 +14,13 @@ from quant_data_center.storage.objects import QdcObjectStore
 from quant_data_center.storage.silver import SilverStore
 
 
-SINA_ROLL_NEWS_URL = "https://feed.mix.sina.com.cn/api/roll/get"
-PARSER_VERSION = "sina_finance_news_v1"
+EASTMONEY_ROLL_NEWS_URL_TEMPLATE = "https://roll.eastmoney.com/default_{page_num}.html"
+EASTMONEY_REFERER = "https://roll.eastmoney.com/"
+PARSER_VERSION = "eastmoney_roll_news_v1"
 
 
-class SinaFinanceNewsCrawler:
-    """Fetch metadata from Sina finance roll-news pages and map titles to known stocks."""
+class EastmoneyRollNewsCrawler:
+    """Fetch Eastmoney rolling-news metadata and map titles to known stocks."""
 
     def __init__(self, settings: QdcSettings) -> None:
         self.settings = settings
@@ -41,21 +43,19 @@ class SinaFinanceNewsCrawler:
         observed_at = _timestamp()
         page_count = max_pages or 1
         for page_num in range(1, page_count + 1):
-            params = _query_params(page_num=page_num, page_size=page_size)
-            response = requests.get(
-                SINA_ROLL_NEWS_URL,
-                headers=_headers(),
-                params=params,
-                timeout=30,
-            )
+            url = EASTMONEY_ROLL_NEWS_URL_TEMPLATE.format(page_num=page_num)
+            response = requests.get(url, headers=_headers(), timeout=30)
             response.raise_for_status()
-            body = response.json()
-            rows = _extract_rows(body)
+            rows = _extract_rows(
+                text=response.text,
+                crawl_date=crawl_date,
+                limit=page_size,
+            )
             provider_rows.extend(rows)
             pages.append(
                 {
                     "page_num": page_num,
-                    "request": params,
+                    "url": url,
                     "status_code": response.status_code,
                     "news_count": len(rows),
                     "items": rows,
@@ -68,10 +68,9 @@ class SinaFinanceNewsCrawler:
             dataset="news",
             source_id=source_id,
             partition_value=crawl_date,
-            stem=f"sina_finance_news_{crawl_date}",
+            stem=f"eastmoney_roll_news_{crawl_date}",
             payload={
-                "function": "sina_finance_roll_news",
-                "url": SINA_ROLL_NEWS_URL,
+                "function": "eastmoney_roll_news_html",
                 "params": {
                     "crawl_date": crawl_date,
                     "page_size": page_size,
@@ -84,11 +83,10 @@ class SinaFinanceNewsCrawler:
             dataset="news",
             source_id=source_id,
             partition_value=crawl_date,
-            stem=f"sina_finance_news_{crawl_date}",
+            stem=f"eastmoney_roll_news_{crawl_date}",
             manifest={
-                "function": "sina_finance_roll_news",
-                "url": SINA_ROLL_NEWS_URL,
-                "accepted_date_rule": "publish_time parsed from ctime/time/datetime/date must equal crawl_date",
+                "function": "eastmoney_roll_news_html",
+                "accepted_date_rule": "publish_time in page HTML must equal crawl_date",
                 "copyright_policy": "metadata_only",
                 "raw_object_id": raw_object_id,
             },
@@ -98,7 +96,7 @@ class SinaFinanceNewsCrawler:
             dataset="news",
             source_id=source_id,
             partition_value=crawl_date,
-            stem=f"sina_finance_news_{crawl_date}",
+            stem=f"eastmoney_roll_news_{crawl_date}",
             records=provider_rows,
         )
         records = _normalize_news(
@@ -143,27 +141,40 @@ class SinaFinanceNewsCrawler:
         ]
 
 
-def _query_params(*, page_num: int, page_size: int) -> dict[str, str]:
-    return {
-        "pageid": "153",
-        "lid": "1686",
-        "num": str(page_size),
-        "page": str(page_num),
-    }
-
-
 def _headers() -> dict[str, str]:
     return {
         "User-Agent": "Mozilla/5.0 QDC-Crawler/0.1 (+local research)",
-        "Referer": "https://finance.sina.com.cn/stock/",
-        "Accept": "application/json,text/plain,*/*",
+        "Referer": EASTMONEY_REFERER,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
 
 
-def _extract_rows(body: dict[str, Any]) -> list[dict[str, Any]]:
-    data = body.get("result") if isinstance(body.get("result"), dict) else body
-    raw_rows = data.get("data") if isinstance(data, dict) else []
-    return [row for row in raw_rows if isinstance(row, dict)]
+def _extract_rows(*, text: str, crawl_date: str, limit: int) -> list[dict[str, str]]:
+    rows = []
+    pattern = re.compile(
+        r"<li>\s*<span>\s*(?P<publish_time>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*</span>"
+        r"\s*\[<a[^>]*>(?P<category>.*?)</a>\]"
+        r"\s*<a\s+href=\"(?P<url>[^\"]+)\"\s+title=\"(?P<title>[^\"]+)\"",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(text):
+        publish_time = _clean_text(match.group("publish_time"))
+        if not publish_time or publish_time[:10] != crawl_date:
+            continue
+        rows.append(
+            {
+                "publish_time": f"{publish_time}:00"
+                if len(publish_time) == 16
+                else publish_time,
+                "publish_date": publish_time[:10],
+                "category": _clean_text(_strip_tags(match.group("category"))) or "",
+                "url": html.unescape(match.group("url")),
+                "title": _clean_text(html.unescape(match.group("title"))) or "",
+            }
+        )
+        if len(rows) >= limit:
+            break
+    return rows
 
 
 def _normalize_news(
@@ -175,17 +186,15 @@ def _normalize_news(
 ) -> list[dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
     for row in rows:
-        title = _clean_text(row.get("title") or row.get("stitle") or row.get("name"))
-        if not title:
+        title = _clean_text(row.get("title"))
+        publish_time = _clean_text(row.get("publish_time"))
+        publish_date = publish_time[:10] if publish_time else _clean_text(row.get("publish_date"))
+        if not title or publish_date != crawl_date:
             continue
-        publish_time = _publish_time(row)
-        publish_date = publish_time[:10] if publish_time else crawl_date
-        if publish_date != crawl_date:
-            continue
-        url = _clean_text(row.get("url") or row.get("wapurl"))
-        source_record_id = _clean_text(row.get("id") or row.get("docid") or url or title)
+        url = _clean_text(row.get("url"))
+        source_record_id = _article_id(url) or url or title
         for instrument in _match_instruments(title=title, url=url, hints=instrument_hints):
-            news_id = f"sina_{_slug(source_record_id)}_{instrument}"
+            news_id = f"eastmoney_{_slug(source_record_id)}_{instrument}"
             records[news_id] = {
                 "news_id": news_id,
                 "publish_date": publish_date,
@@ -213,21 +222,15 @@ def _match_instruments(
     return sorted(set(matched))
 
 
-def _publish_time(row: dict[str, Any]) -> str | None:
-    value = row.get("ctime") or row.get("time") or row.get("datetime") or row.get("date")
-    if value is None or value == "":
+def _article_id(url: str | None) -> str | None:
+    if not url:
         return None
-    if isinstance(value, (int, float)):
-        timestamp = float(value)
-        if timestamp > 10_000_000_000:
-            timestamp = timestamp / 1000
-        return datetime.fromtimestamp(timestamp).replace(microsecond=0).isoformat(sep=" ")
-    text = str(value).strip()
-    if re.fullmatch(r"\d{10,13}", text):
-        return _publish_time({"ctime": int(text)})
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}$", text):
-        return f"{text} 00:00:00"
-    return text.replace("T", " ")[:19]
+    match = re.search(r"/a/(\d+)\.html", url)
+    return match.group(1) if match else None
+
+
+def _strip_tags(value: str) -> str:
+    return re.sub(r"<[^>]+>", "", value)
 
 
 def _clean_text(value: Any) -> str | None:

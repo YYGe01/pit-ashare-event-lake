@@ -1,12 +1,12 @@
-"""CNINFO announcement daily crawler."""
+"""SSE announcement daily crawler."""
 
 from __future__ import annotations
 
-import html
 import re
 import time
 from datetime import datetime
 from typing import Any
+from urllib.parse import urljoin
 
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.objects import QdcObjectStore
@@ -14,17 +14,14 @@ from quant_data_center.storage.silver import SilverStore
 from quant_data_center.utils.instruments import normalize_instrument
 
 
-CNINFO_QUERY_URL = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
-CNINFO_REFERER = (
-    "https://www.cninfo.com.cn/new/commonUrl/pageOfSearch?"
-    "lastPage=index&url=disclosure/list/search"
-)
-CNINFO_STATIC_ROOT = "https://static.cninfo.com.cn/"
-PARSER_VERSION = "cninfo_announcement_v1"
+SSE_ANNOUNCEMENT_URL = "https://query.sse.com.cn/security/stock/queryCompanyBulletin.do"
+SSE_REFERER = "https://www.sse.com.cn/disclosure/listedinfo/announcement/"
+SSE_ROOT = "https://www.sse.com.cn/"
+PARSER_VERSION = "sse_announcement_v1"
 
 
-class CninfoAnnouncementCrawler:
-    """Fetch CNINFO announcement list pages for one disclosure date."""
+class SseAnnouncementCrawler:
+    """Fetch SSE announcement list pages for one disclosure date."""
 
     def __init__(self, settings: QdcSettings) -> None:
         self.settings = settings
@@ -46,46 +43,49 @@ class CninfoAnnouncementCrawler:
         pages = []
         announcements = []
         observed_at = _timestamp()
-        total_pages = 1
+        page_count = 1
         page_num = 1
-        while page_num <= total_pages:
-            payload = _query_payload(crawl_date=crawl_date, page_num=page_num, page_size=page_size)
-            response = requests.post(
-                CNINFO_QUERY_URL,
+        while page_num <= page_count:
+            params = _query_params(
+                crawl_date=crawl_date,
+                page_num=page_num,
+                page_size=page_size,
+            )
+            response = requests.get(
+                SSE_ANNOUNCEMENT_URL,
                 headers=_headers(),
-                data=payload,
+                params=params,
                 timeout=30,
             )
             response.raise_for_status()
             body = response.json()
-            page_announcements = list(body.get("announcements") or [])
-            announcements.extend(page_announcements)
-            total_pages = int(body.get("totalpages") or total_pages or 1)
+            page_rows = _extract_rows(body)
+            announcements.extend(page_rows)
+            page_count = _page_count(body) or page_count
             pages.append(
                 {
                     "page_num": page_num,
-                    "request": payload,
+                    "request": params,
                     "status_code": response.status_code,
-                    "total_pages": total_pages,
-                    "total_record_num": body.get("totalRecordNum"),
-                    "announcement_count": len(page_announcements),
-                    "announcements": page_announcements,
+                    "page_count": page_count,
+                    "announcement_count": len(page_rows),
+                    "announcements": page_rows,
                 }
             )
             page_num += 1
             if max_pages is not None and page_num > max_pages:
                 break
-            if page_num <= total_pages and min_delay_seconds > 0:
+            if page_num <= page_count and min_delay_seconds > 0:
                 time.sleep(min_delay_seconds)
 
         raw_object_id = self.objects.put_json(
             dataset="announcement",
             source_id=source_id,
             partition_value=crawl_date,
-            stem=f"cninfo_announcement_{crawl_date}",
+            stem=f"sse_announcement_{crawl_date}",
             payload={
-                "function": "cninfo_his_announcement_query",
-                "url": CNINFO_QUERY_URL,
+                "function": "sse_query_company_bulletin",
+                "url": SSE_ANNOUNCEMENT_URL,
                 "params": {
                     "crawl_date": crawl_date,
                     "page_size": page_size,
@@ -98,11 +98,11 @@ class CninfoAnnouncementCrawler:
             dataset="announcement",
             source_id=source_id,
             partition_value=crawl_date,
-            stem=f"cninfo_announcement_{crawl_date}",
+            stem=f"sse_announcement_{crawl_date}",
             manifest={
-                "function": "cninfo_his_announcement_query",
-                "url": CNINFO_QUERY_URL,
-                "accepted_date_rule": "query seDate is exactly crawl_date; publish_date comes from announcementTime when present",
+                "function": "sse_query_company_bulletin",
+                "url": SSE_ANNOUNCEMENT_URL,
+                "accepted_date_rule": "SSEDATE must equal crawl_date",
                 "raw_object_id": raw_object_id,
             },
             records=announcements,
@@ -111,7 +111,7 @@ class CninfoAnnouncementCrawler:
             dataset="announcement",
             source_id=source_id,
             partition_value=crawl_date,
-            stem=f"cninfo_announcement_{crawl_date}",
+            stem=f"sse_announcement_{crawl_date}",
             records=announcements,
         )
         records = _normalize_announcements(
@@ -137,7 +137,10 @@ class CninfoAnnouncementCrawler:
         return {
             "document_count": row_count,
             "raw_object_count": (
-                1 + bundle_object_count + int(bronze_object_id is not None) + pdf_stats["downloaded"]
+                1
+                + bundle_object_count
+                + int(bronze_object_id is not None)
+                + pdf_stats["downloaded"]
             ),
             "raw_object_id": raw_object_id,
             "bronze_object_id": bronze_object_id,
@@ -149,31 +152,48 @@ class CninfoAnnouncementCrawler:
         }
 
 
-def _query_payload(*, crawl_date: str, page_num: int, page_size: int) -> dict[str, str]:
+def _query_params(*, crawl_date: str, page_num: int, page_size: int) -> dict[str, str]:
     return {
-        "pageNum": str(page_num),
-        "pageSize": str(page_size),
-        "column": "szse",
-        "tabName": "fulltext",
-        "plate": "",
-        "stock": "",
-        "searchkey": "",
-        "secid": "",
-        "category": "",
-        "trade": "",
-        "seDate": f"{crawl_date}~{crawl_date}",
-        "sortName": "",
-        "sortType": "",
-        "isHLtitle": "true",
+        "isPagination": "true",
+        "productId": "",
+        "securityType": "0101,120100,020100,020200,120200",
+        "reportType2": "",
+        "reportType": "ALL",
+        "beginDate": crawl_date,
+        "endDate": crawl_date,
+        "pageHelp.pageSize": str(page_size),
+        "pageHelp.pageNo": str(page_num),
+        "pageHelp.beginPage": str(page_num),
+        "pageHelp.cacheSize": "1",
+        "pageHelp.endPage": str(page_num),
     }
 
 
 def _headers() -> dict[str, str]:
     return {
         "User-Agent": "Mozilla/5.0 QDC-Crawler/0.1 (+local research)",
-        "Referer": CNINFO_REFERER,
-        "Origin": "https://www.cninfo.com.cn",
+        "Referer": SSE_REFERER,
+        "Accept": "application/json,text/plain,*/*",
     }
+
+
+def _extract_rows(body: dict[str, Any]) -> list[dict[str, Any]]:
+    result = body.get("result")
+    if isinstance(result, list):
+        return [row for row in result if isinstance(row, dict)]
+    page_help = body.get("pageHelp")
+    data = page_help.get("data") if isinstance(page_help, dict) else []
+    return [row for row in data if isinstance(row, dict)]
+
+
+def _page_count(body: dict[str, Any]) -> int | None:
+    page_help = body.get("pageHelp")
+    if not isinstance(page_help, dict):
+        return None
+    try:
+        return int(page_help.get("pageCount"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _normalize_announcements(
@@ -187,33 +207,38 @@ def _normalize_announcements(
 ) -> list[dict[str, Any]]:
     records = []
     for row in rows:
-        raw_code = row.get("secCode")
-        raw_id = row.get("announcementId")
-        raw_title = row.get("announcementTitle") or row.get("shortTitle")
-        if raw_code is None or raw_id is None or raw_title is None:
+        raw_code = _clean_text(row.get("SECURITY_CODE") or row.get("security_Code"))
+        raw_title = _clean_text(row.get("TITLE") or row.get("title"))
+        publish_date = _clean_text(row.get("SSEDATE") or row.get("SSEDate"))
+        if (
+            not raw_code
+            or not raw_code.startswith("6")
+            or not raw_title
+            or publish_date != crawl_date
+        ):
             continue
         try:
-            instrument = normalize_instrument(str(raw_code))
+            instrument = normalize_instrument(raw_code)
         except ValueError:
             continue
-        publish_time = _announcement_time(row.get("announcementTime"))
-        publish_date = publish_time[:10] if publish_time else crawl_date
-        title = _clean_title(str(raw_title))
-        adjunct_url = str(row.get("adjunctUrl") or "").strip()
-        url = f"{CNINFO_STATIC_ROOT}{adjunct_url}" if adjunct_url else None
+        raw_url = _clean_text(row.get("URL") or row.get("url"))
+        url = urljoin(SSE_ROOT, raw_url) if raw_url else None
+        source_record_id = raw_url or f"{raw_code}_{publish_date}_{raw_title}"
         records.append(
             {
-                "announcement_id": f"cninfo_{raw_id}_{instrument}",
-                "source_record_id": str(raw_id),
-                "source_sec_code": str(raw_code),
-                "source_sec_name": _clean_text(row.get("secName")),
+                "announcement_id": f"sse_{_slug(source_record_id)}_{instrument}",
+                "source_record_id": source_record_id,
+                "source_sec_code": raw_code,
+                "source_sec_name": _clean_text(
+                    row.get("SECURITY_NAME") or row.get("security_Name")
+                ),
                 "publish_date": publish_date,
-                "publish_time": publish_time,
+                "publish_time": f"{publish_date} 00:00:00",
                 "instrument": instrument,
-                "title": title,
+                "title": raw_title,
                 "url": url,
                 "pdf_url": url,
-                "adjunct_url": adjunct_url or None,
+                "adjunct_url": raw_url,
                 "observed_at": observed_at,
                 "collect_time": observed_at,
                 "raw_object_id": raw_object_id,
@@ -236,7 +261,6 @@ def _attach_pdf_objects(
     min_delay_seconds: float,
 ) -> dict[str, int]:
     stats = {"downloaded": 0, "failed": 0, "skipped": 0}
-    cache: dict[str, dict[str, Any]] = {}
     attempted = 0
     for record in records:
         pdf_url = str(record.get("pdf_url") or "").strip()
@@ -244,19 +268,12 @@ def _attach_pdf_objects(
             _apply_pdf_result(record, {"pdf_download_status": "missing_url"})
             stats["skipped"] += 1
             continue
-        if pdf_url in cache:
-            _apply_pdf_result(record, cache[pdf_url])
-            continue
         if not enabled:
-            result = {"pdf_download_status": "skipped"}
-            cache[pdf_url] = result
-            _apply_pdf_result(record, result)
+            _apply_pdf_result(record, {"pdf_download_status": "skipped"})
             stats["skipped"] += 1
             continue
         if pdf_limit is not None and attempted >= pdf_limit:
-            result = {"pdf_download_status": "skipped_by_limit"}
-            cache[pdf_url] = result
-            _apply_pdf_result(record, result)
+            _apply_pdf_result(record, {"pdf_download_status": "skipped_by_limit"})
             stats["skipped"] += 1
             continue
         if attempted > 0 and min_delay_seconds > 0:
@@ -270,7 +287,6 @@ def _attach_pdf_objects(
             record=record,
             pdf_url=pdf_url,
         )
-        cache[pdf_url] = result
         _apply_pdf_result(record, result)
         if result["pdf_download_status"] == "success":
             stats["downloaded"] += 1
@@ -298,14 +314,11 @@ def _download_pdf(
         content = bytes(response.content)
         if not content:
             raise ValueError("empty PDF response")
-        content_type = str(response.headers.get("Content-Type") or "").lower()
-        if "html" in content_type and not content.startswith(b"%PDF"):
-            raise ValueError(f"unexpected PDF content type: {content_type}")
         result = objects.put_bytes(
             dataset="announcement",
             source_id=source_id,
             partition_value=crawl_date,
-            stem=f"cninfo_pdf_{record['announcement_id']}",
+            stem=f"sse_pdf_{record['announcement_id']}",
             content=content,
             suffix=".pdf",
             layer="raw_file",
@@ -339,26 +352,17 @@ def _apply_pdf_result(record: dict[str, Any], result: dict[str, Any]) -> None:
             record[key] = result[key]
 
 
-def _announcement_time(value: Any) -> str | None:
-    if value in (None, ""):
-        return None
-    try:
-        return datetime.fromtimestamp(int(value) / 1000).replace(microsecond=0).isoformat(" ")
-    except (TypeError, ValueError, OSError):
-        return None
-
-
-def _clean_title(value: str) -> str:
-    text = html.unescape(value)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
 def _clean_text(value: Any) -> str | None:
     if value in (None, ""):
         return None
-    return _clean_title(str(value))
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    return text or None
+
+
+def _slug(value: str | None) -> str:
+    text = value or "unknown"
+    slug = re.sub(r"[^0-9A-Za-z]+", "_", text).strip("_")
+    return slug[:80] or "unknown"
 
 
 def _timestamp() -> str:

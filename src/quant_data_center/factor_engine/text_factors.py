@@ -25,6 +25,10 @@ from quant_data_center.storage.database import QdcDatabase
 
 DOCUMENT_TABLES = {"announcement", "news"}
 DOCUMENT_LOOKBACK_DAYS = 15
+DOCUMENT_FACTOR_SOURCE_IDS = {
+    "announcement": ("cninfo_announcement", "sse_announcement"),
+    "news": ("sina_finance_news", "eastmoney_roll_news"),
+}
 
 NEWS_FACTOR_FIELDS = (
     "news_count",
@@ -147,29 +151,48 @@ def _load_documents(
     if table not in DOCUMENT_TABLES:
         raise ValueError(f"unsupported document table: {table}")
     publish_start = date_minus_days(start_date, DOCUMENT_LOOKBACK_DAYS)
+    source_ids = DOCUMENT_FACTOR_SOURCE_IDS.get(table, ())
+    if not source_ids:
+        return []
+    placeholders = ", ".join("?" for _ in source_ids)
     with database.connect() as conn:
         aligner = TradeDayAligner.from_connection(conn)
         rows = conn.execute(
             f"""
-            select publish_date, instrument, title
+            select publish_date, instrument, title, source_id
             from qdc_silver.{table}
             where publish_date >= ? and publish_date <= ?
-            order by publish_date, instrument
+              and source_id in ({placeholders})
+            order by publish_date, instrument, source_id
             """,
-            [publish_start, end_date],
+            [publish_start, end_date, *source_ids],
         ).fetchall()
     documents = []
-    for publish_date, instrument, title in rows:
+    seen_keys = set()
+    for publish_date, instrument, title, source_id_value in rows:
         trade_date = aligner.align(publish_date)
         if start_date <= trade_date <= end_date:
+            key = (
+                str(publish_date),
+                str(instrument),
+                _dedupe_title_key(str(title)),
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
             documents.append(
                 {
                     "trade_date": trade_date,
                     "instrument": str(instrument),
                     "title": str(title),
+                    "source_id": str(source_id_value),
                 }
             )
     return documents
+
+
+def _dedupe_title_key(title: str) -> str:
+    return "".join(ch for ch in title.lower() if ch.isalnum())
 
 
 def _news_factor_seed() -> dict[str, float]:

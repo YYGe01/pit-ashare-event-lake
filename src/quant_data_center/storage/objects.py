@@ -53,6 +53,68 @@ class QdcObjectStore:
             job_id=job_id,
         )
 
+    def put_document_bundle(
+        self,
+        *,
+        dataset: str,
+        source_id: str,
+        partition_value: str,
+        stem: str,
+        manifest: dict[str, Any],
+        records: list[dict[str, Any]],
+        job_id: str | None = None,
+    ) -> dict[str, str | None]:
+        directory = self._document_bundle_dir(
+            partition_value=partition_value,
+            source_id=source_id,
+            stem=stem,
+        )
+        manifest_payload = {
+            "dataset": dataset,
+            "source_id": source_id,
+            "partition_value": partition_value,
+            "stem": stem,
+            "record_count": len(records),
+            "created_at": datetime.now().replace(microsecond=0).isoformat(" "),
+            **manifest,
+        }
+        manifest_content = json.dumps(
+            manifest_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+            default=_json_default,
+        ).encode("utf-8")
+        manifest_path = directory / "manifest.json"
+        manifest_path.write_bytes(manifest_content)
+        result: dict[str, str | None] = {
+            "manifest_object_id": self._index_object(
+                dataset=dataset,
+                source_id=source_id,
+                layer="raw_manifest",
+                path=manifest_path,
+                content=manifest_content,
+                job_id=job_id,
+            ),
+            "records_object_id": None,
+        }
+        if records:
+            records_content = "".join(
+                f"{json.dumps(record, ensure_ascii=False, sort_keys=True, default=_json_default)}\n"
+                for record in records
+            ).encode("utf-8")
+            records_path = directory / "records.jsonl"
+            records_path.write_bytes(records_content)
+            result["records_object_id"] = self._index_object(
+                dataset=dataset,
+                source_id=source_id,
+                layer="raw_records",
+                path=records_path,
+                content=records_content,
+                job_id=job_id,
+            )
+        return result
+
     def put_bronze_parquet(
         self,
         *,
@@ -145,6 +207,24 @@ class QdcObjectStore:
         timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
         filename = f"{timestamp}_{_short_segment(stem)}_{uuid4().hex[:8]}{suffix}"
         return directory / filename
+
+    def _document_bundle_dir(
+        self,
+        *,
+        partition_value: str,
+        source_id: str,
+        stem: str,
+    ) -> Path:
+        timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        directory = (
+            self.settings.raw_root
+            / "documents"
+            / _safe_segment(partition_value)
+            / _safe_segment(source_id)
+            / f"{timestamp}_{_short_segment(stem)}_{uuid4().hex[:8]}"
+        )
+        directory.mkdir(parents=True, exist_ok=False)
+        return directory
 
     def _index_object(
         self,

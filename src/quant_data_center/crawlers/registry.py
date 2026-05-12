@@ -60,9 +60,52 @@ DEFAULT_CRAWLER_SOURCES: dict[str, CrawlerSourceSpec] = {
         parser_version="sina_finance_news_v1",
         notes="Daily metadata-only Sina finance rolling-news补位源; titles are mapped to known active A-share instruments.",
     ),
+    "sse_announcement": CrawlerSourceSpec(
+        source_id="sse_announcement",
+        source_type="announcement",
+        dataset="announcement",
+        base_url="https://www.sse.com.cn/",
+        enabled=True,
+        robots_url="https://www.sse.com.cn/robots.txt",
+        robots_status="manual_review_required",
+        terms_review_status="manual_review_required",
+        copyright_policy="metadata_and_public_pdf",
+        rate_limit_per_minute=20,
+        min_delay_seconds=3.0,
+        max_retry=3,
+        parser_version="sse_announcement_v1",
+        notes=(
+            "Daily SSE announcement backup source; rows are accepted only when "
+            "SSEDATE equals the crawl date."
+        ),
+    ),
+    "eastmoney_roll_news": CrawlerSourceSpec(
+        source_id="eastmoney_roll_news",
+        source_type="news",
+        dataset="news",
+        base_url="https://roll.eastmoney.com/",
+        enabled=True,
+        robots_url="https://roll.eastmoney.com/robots.txt",
+        robots_status="manual_review_required",
+        terms_review_status="manual_review_required",
+        copyright_policy="metadata_only",
+        rate_limit_per_minute=20,
+        min_delay_seconds=3.0,
+        max_retry=3,
+        parser_version="eastmoney_roll_news_v1",
+        notes=(
+            "Daily Eastmoney rolling-news metadata source; rows must carry "
+            "explicit YYYY-MM-DD HH:MM publish time for the crawl date."
+        ),
+    ),
 }
 
-CRAWL_DAILY_SOURCE_IDS = ["cninfo_announcement", "sina_finance_news"]
+CRAWL_DAILY_SOURCE_IDS = [
+    "cninfo_announcement",
+    "sse_announcement",
+    "sina_finance_news",
+    "eastmoney_roll_news",
+]
 
 
 def crawler_source_spec(source_id: str) -> CrawlerSourceSpec:
