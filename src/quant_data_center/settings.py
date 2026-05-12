@@ -27,6 +27,33 @@ class TextEventClassifierSettings:
 
 
 @dataclass(frozen=True)
+class DailyPipelineSettings:
+    """Default options for the post-close daily pipeline."""
+
+    universe: str | None
+    source_id: str | None
+    all_market: bool | None
+    skip_stock_basic_refresh: bool | None
+    batch_size: int | None
+    limit_tasks: int | None
+    provider_uri: str | None
+    export_start: str | None
+    market_name: str | None
+    continue_on_failure: bool | None
+    crawl_documents: bool | None
+    crawl_source_id: str | None
+    crawl_limit_tasks: int | None
+    crawl_page_size: int | None
+    crawl_max_pages: int | None
+    crawl_pdf_limit: int | None
+    skip_crawl_pdf_download: bool | None
+    skip_factors: bool | None
+    skip_sync: bool | None
+    skip_quality: bool | None
+    skip_export: bool | None
+
+
+@dataclass(frozen=True)
 class QdcSettings:
     """Runtime paths and basic project options."""
 
@@ -48,6 +75,7 @@ class QdcSettings:
     raw_append_only: bool
     unknown_copyright_policy: str
     text_event_classifier: TextEventClassifierSettings
+    daily_pipeline: DailyPipelineSettings
     universes: dict[str, list[str]]
 
     @classmethod
@@ -64,6 +92,7 @@ class QdcSettings:
             project_root=project_root,
             payload=payload.get("llm", {}),
         )
+        daily_pipeline = _parse_daily_pipeline_settings(payload.get("daily_pipeline", {}))
         universes = _parse_universes(payload.get("universes", {}))
 
         required_paths = [
@@ -99,6 +128,7 @@ class QdcSettings:
                 policy.get("unknown_copyright_policy", "metadata_only")
             ),
             text_event_classifier=text_event_classifier,
+            daily_pipeline=daily_pipeline,
             universes=universes,
         )
 
@@ -154,6 +184,29 @@ class QdcSettings:
                 "temperature": self.text_event_classifier.temperature,
                 "max_tokens": self.text_event_classifier.max_tokens,
             },
+            "daily_pipeline": {
+                "universe": self.daily_pipeline.universe,
+                "source_id": self.daily_pipeline.source_id,
+                "all_market": self.daily_pipeline.all_market,
+                "skip_stock_basic_refresh": self.daily_pipeline.skip_stock_basic_refresh,
+                "batch_size": self.daily_pipeline.batch_size,
+                "limit_tasks": self.daily_pipeline.limit_tasks,
+                "provider_uri": self.daily_pipeline.provider_uri,
+                "export_start": self.daily_pipeline.export_start,
+                "market_name": self.daily_pipeline.market_name,
+                "continue_on_failure": self.daily_pipeline.continue_on_failure,
+                "crawl_documents": self.daily_pipeline.crawl_documents,
+                "crawl_source_id": self.daily_pipeline.crawl_source_id,
+                "crawl_limit_tasks": self.daily_pipeline.crawl_limit_tasks,
+                "crawl_page_size": self.daily_pipeline.crawl_page_size,
+                "crawl_max_pages": self.daily_pipeline.crawl_max_pages,
+                "crawl_pdf_limit": self.daily_pipeline.crawl_pdf_limit,
+                "skip_crawl_pdf_download": self.daily_pipeline.skip_crawl_pdf_download,
+                "skip_factors": self.daily_pipeline.skip_factors,
+                "skip_sync": self.daily_pipeline.skip_sync,
+                "skip_quality": self.daily_pipeline.skip_quality,
+                "skip_export": self.daily_pipeline.skip_export,
+            },
             "universes": {
                 universe: {"symbol_count": len(symbols)}
                 for universe, symbols in sorted(self.universes.items())
@@ -182,6 +235,61 @@ def _parse_universes(payload: Any) -> dict[str, list[str]]:
             symbols = [str(item).strip() for item in raw_symbols or [] if str(item).strip()]
         universes[name] = symbols
     return universes
+
+
+def _parse_daily_pipeline_settings(payload: Any) -> DailyPipelineSettings:
+    if payload and not isinstance(payload, dict):
+        raise ValueError("qdc daily_pipeline settings must be a mapping")
+    spec = payload or {}
+    return DailyPipelineSettings(
+        universe=_optional_str(spec.get("universe")),
+        source_id=_optional_str(spec.get("source_id")),
+        all_market=_optional_bool(spec.get("all_market")),
+        skip_stock_basic_refresh=_optional_bool(spec.get("skip_stock_basic_refresh")),
+        batch_size=_optional_int(spec.get("batch_size")),
+        limit_tasks=_optional_int(spec.get("limit_tasks")),
+        provider_uri=_optional_str(spec.get("provider_uri")),
+        export_start=_optional_str(spec.get("export_start")),
+        market_name=_optional_str(spec.get("market_name")),
+        continue_on_failure=_optional_bool(spec.get("continue_on_failure")),
+        crawl_documents=_optional_bool(spec.get("crawl_documents")),
+        crawl_source_id=_optional_str(spec.get("crawl_source_id")),
+        crawl_limit_tasks=_optional_int(spec.get("crawl_limit_tasks")),
+        crawl_page_size=_optional_int(spec.get("crawl_page_size")),
+        crawl_max_pages=_optional_int(spec.get("crawl_max_pages")),
+        crawl_pdf_limit=_optional_int(spec.get("crawl_pdf_limit")),
+        skip_crawl_pdf_download=_optional_bool(spec.get("skip_crawl_pdf_download")),
+        skip_factors=_optional_bool(spec.get("skip_factors")),
+        skip_sync=_optional_bool(spec.get("skip_sync")),
+        skip_quality=_optional_bool(spec.get("skip_quality")),
+        skip_export=_optional_bool(spec.get("skip_export")),
+    )
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y", "on"}:
+        return True
+    if text in {"false", "0", "no", "n", "off"}:
+        return False
+    raise ValueError(f"invalid qdc boolean value: {value!r}")
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
 
 
 def _parse_text_event_classifier_settings(

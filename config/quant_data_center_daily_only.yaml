@@ -1,0 +1,54 @@
+project:
+  name: quant_data_center
+  timezone: Asia/Shanghai
+  phase: daily_only
+
+paths:
+  data_root: data/quant_data_center_daily_only
+  database_path: data/quant_data_center_daily_only/qdc.duckdb
+  raw_root: data/quant_data_center_daily_only/raw
+  parquet_root: data/quant_data_center_daily_only/parquet
+  qlib_root: data/quant_data_center_daily_only/qlib
+  logs_dir: data/quant_data_center_daily_only/logs
+
+runtime:
+  database_backend: duckdb
+  file_format: parquet
+
+policy:
+  prefer_free_sources: true
+  paid_providers_enabled: false
+  raw_append_only: true
+  unknown_copyright_policy: metadata_only
+
+daily_pipeline:
+  universe: all_a
+  source_id: akshare
+  batch_size: 50
+  export_start: 2026-05-12
+  market_name: all_a_daily
+  crawl_documents: false
+  crawl_page_size: 30
+  skip_stock_basic_refresh: false
+  skip_crawl_pdf_download: false
+  skip_factors: false
+  skip_sync: false
+  skip_quality: false
+  skip_export: false
+
+llm:
+  text_event:
+    provider: rule
+    model: deepseek/deepseek-v4-flash
+    api_key_file: data/quant_data_center_daily_only/secrets/deepseek_api_key
+    api_key_env: DEEPSEEK_API_KEY
+    temperature: 0
+    max_tokens: 512
+
+universes:
+  csi300:
+    description: "Daily-only CSI300 smoke universe; keep aligned with the main config sample."
+    symbols:
+      - SH600000
+      - SZ000001
+      - SZ300750

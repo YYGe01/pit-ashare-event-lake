@@ -877,21 +877,65 @@ def cmd_daily(args: argparse.Namespace) -> int:
     return 1 if has_failures else 0
 
 
+def _daily_pipeline_option(
+    args: argparse.Namespace,
+    settings: QdcSettings,
+    name: str,
+    fallback: Any = None,
+) -> Any:
+    cli_value = getattr(args, name)
+    if cli_value is not None:
+        return cli_value
+    config_value = getattr(settings.daily_pipeline, name)
+    if config_value is not None:
+        return config_value
+    return fallback
+
+
 def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     database = QdcDatabase(settings)
     database.init_schema()
     run_date = parse_date(args.date).isoformat() if args.date else _today(settings)
-    all_market = bool(args.all_market) or _is_full_market_universe(args.universe)
-    universe = _daily_task_universe(args.universe, all_market=all_market)
+    pipeline_universe = _daily_pipeline_option(args, settings, "universe", "all_a")
+    source_id = _daily_pipeline_option(args, settings, "source_id", "akshare")
+    all_market = bool(
+        _daily_pipeline_option(args, settings, "all_market", False)
+    ) or _is_full_market_universe(pipeline_universe)
+    skip_stock_basic_refresh = bool(
+        _daily_pipeline_option(args, settings, "skip_stock_basic_refresh", False)
+    )
+    batch_size = int(_daily_pipeline_option(args, settings, "batch_size", 50))
+    limit_tasks = _daily_pipeline_option(args, settings, "limit_tasks")
+    provider_uri = _daily_pipeline_option(args, settings, "provider_uri")
+    export_start = _daily_pipeline_option(args, settings, "export_start")
+    market_name = _daily_pipeline_option(args, settings, "market_name")
+    continue_on_failure = bool(
+        _daily_pipeline_option(args, settings, "continue_on_failure", False)
+    )
+    crawl_documents = bool(_daily_pipeline_option(args, settings, "crawl_documents", False))
+    crawl_source_id = _daily_pipeline_option(args, settings, "crawl_source_id")
+    crawl_limit_tasks = _daily_pipeline_option(args, settings, "crawl_limit_tasks")
+    crawl_page_size = int(_daily_pipeline_option(args, settings, "crawl_page_size", 30))
+    crawl_max_pages = _daily_pipeline_option(args, settings, "crawl_max_pages")
+    crawl_pdf_limit = _daily_pipeline_option(args, settings, "crawl_pdf_limit")
+    skip_crawl_pdf_download = bool(
+        _daily_pipeline_option(args, settings, "skip_crawl_pdf_download", False)
+    )
+    skip_factors = bool(_daily_pipeline_option(args, settings, "skip_factors", False))
+    skip_sync = bool(_daily_pipeline_option(args, settings, "skip_sync", False))
+    skip_quality = bool(_daily_pipeline_option(args, settings, "skip_quality", False))
+    skip_export = bool(_daily_pipeline_option(args, settings, "skip_export", False))
+
+    universe = _daily_task_universe(pipeline_universe, all_market=all_market)
     symbols = _resolve_daily_symbols(
         settings=settings,
         database=database,
-        universe=args.universe,
+        universe=pipeline_universe,
         symbols_arg=args.symbols,
         all_market=all_market,
-        source_id=args.source_id,
-        refresh_stock_basic=all_market and not bool(args.skip_stock_basic_refresh),
+        source_id=source_id,
+        refresh_stock_basic=all_market and not skip_stock_basic_refresh,
     )
     _validate_backfill_plan_symbols(dataset="daily_bar", symbols=symbols)
 
@@ -900,18 +944,18 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     has_failures = False
     planned = _plan_daily_tasks(
         database=database,
-        source_id=args.source_id,
+        source_id=source_id,
         universe=universe,
         run_date=run_date,
         symbols=symbols,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
     )
     tasks = [
         task
         for task in database.fetch_backfill_tasks_by_ids([str(item["task_id"]) for item in planned])
         if task["status"] in {"pending", "failed"}
     ]
-    selected_tasks = tasks[: args.limit_tasks] if args.limit_tasks else tasks
+    selected_tasks = tasks[:limit_tasks] if limit_tasks else tasks
     has_incomplete_tasks = len(selected_tasks) < len(tasks)
     if args.plan_only:
         _print_json(
@@ -946,27 +990,27 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     if has_failures or has_incomplete_tasks:
         status = "partial"
 
-    should_continue = not (has_failures or has_incomplete_tasks) or bool(args.continue_on_failure)
+    should_continue = not (has_failures or has_incomplete_tasks) or continue_on_failure
     crawl_result: dict[str, Any] | None = None
-    if should_continue and args.crawl_documents:
+    if should_continue and crawl_documents:
         crawl_result = _run_daily_pipeline_crawl_documents(
             settings=settings,
             database=database,
             run_date=run_date,
-            source_id=args.crawl_source_id,
-            limit_tasks=args.crawl_limit_tasks,
+            source_id=crawl_source_id,
+            limit_tasks=crawl_limit_tasks,
             control_only=bool(args.control_only),
-            page_size=args.crawl_page_size,
-            max_pages=args.crawl_max_pages,
-            download_pdfs=not bool(args.skip_crawl_pdf_download),
-            pdf_limit=args.crawl_pdf_limit,
+            page_size=crawl_page_size,
+            max_pages=crawl_max_pages,
+            download_pdfs=not skip_crawl_pdf_download,
+            pdf_limit=crawl_pdf_limit,
         )
         steps.append({"step": "crawl_documents", **crawl_result})
         if crawl_result["status"] != "ok":
             status = "partial"
-            should_continue = bool(args.continue_on_failure)
+            should_continue = continue_on_failure
 
-    if should_continue and not args.control_only and not args.skip_factors:
+    if should_continue and not args.control_only and not skip_factors:
         factor_result = FactorBuilder(settings).build(
             factor_set="all",
             start_date=run_date,
@@ -974,24 +1018,24 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         )
         steps.append({"step": "build_factors", **factor_result})
 
-    if should_continue and not args.control_only and not args.skip_sync:
+    if should_continue and not args.control_only and not skip_sync:
         sync_result = QdcParquetSync(settings).sync(layer="all")
         steps.append({"step": "sync_parquet", "status": "ok", **sync_result})
 
     quality_result: dict[str, Any] | None = None
-    if should_continue and not args.control_only and not args.skip_quality:
+    if should_continue and not args.control_only and not skip_quality:
         quality_result = QualityChecker(settings).run(start_date=run_date, end_date=run_date)
         steps.append({"step": "quality", **quality_result})
         if quality_result["status"] != "ok":
             status = "partial"
-            should_continue = bool(args.continue_on_failure)
+            should_continue = continue_on_failure
 
-    if should_continue and not args.control_only and not args.skip_export:
+    if should_continue and not args.control_only and not skip_export:
         export_result = QlibExporter(settings).export(
-            provider_uri=args.provider_uri,
-            start_date=args.export_start,
+            provider_uri=provider_uri,
+            start_date=export_start,
             end_date=run_date,
-            market_name=args.market_name or universe,
+            market_name=market_name or universe,
         )
         steps.append({"step": "export_qlib", **_summarize_export_result(export_result)})
 
@@ -999,7 +1043,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         job_type="daily_pipeline",
         status="success" if status == "ok" else "failed",
         dataset="daily_pipeline",
-        source_id=args.source_id,
+        source_id=source_id,
         universe=universe,
         start_date=run_date,
         end_date=run_date,
@@ -1009,7 +1053,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             "planned_count": len(planned),
             "ran_count": len(daily_results),
             "control_only": bool(args.control_only),
-            "crawl_documents": bool(args.crawl_documents),
+            "crawl_documents": crawl_documents,
             "crawl_status": crawl_result["status"] if crawl_result else None,
             "crawl_planned_count": crawl_result["planned_count"] if crawl_result else 0,
             "crawl_ran_count": crawl_result["ran_count"] if crawl_result else 0,
@@ -1364,22 +1408,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daily_pipeline_parser.add_argument(
         "--universe",
-        default="all_a",
         help="Universe id; all_a/all/ashare/cn_ashare mean full A-share market",
     )
-    daily_pipeline_parser.add_argument("--source-id", default="akshare")
+    daily_pipeline_parser.add_argument("--source-id")
     daily_pipeline_parser.add_argument("--symbols", help="Comma-separated symbols for smoke runs")
     daily_pipeline_parser.add_argument(
         "--all-market",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Force full-market stock_basic symbol resolution",
     )
     daily_pipeline_parser.add_argument(
         "--skip-stock-basic-refresh",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Do not refresh stock_basic before full-market symbol resolution",
     )
-    daily_pipeline_parser.add_argument("--batch-size", type=int, default=50)
+    daily_pipeline_parser.add_argument("--batch-size", type=int)
     daily_pipeline_parser.add_argument("--limit-tasks", type=int)
     daily_pipeline_parser.add_argument("--provider-uri")
     daily_pipeline_parser.add_argument(
@@ -1392,10 +1437,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daily_pipeline_parser.add_argument("--plan-only", action="store_true")
     daily_pipeline_parser.add_argument("--control-only", action="store_true")
-    daily_pipeline_parser.add_argument("--continue-on-failure", action="store_true")
+    daily_pipeline_parser.add_argument(
+        "--continue-on-failure",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
     daily_pipeline_parser.add_argument(
         "--crawl-documents",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Run enabled daily document crawlers before factor, quality, and Qlib export steps",
     )
     daily_pipeline_parser.add_argument(
@@ -1403,18 +1453,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional crawler source filter, for example cninfo_announcement or sina_finance_news",
     )
     daily_pipeline_parser.add_argument("--crawl-limit-tasks", type=int)
-    daily_pipeline_parser.add_argument("--crawl-page-size", type=int, default=30)
+    daily_pipeline_parser.add_argument("--crawl-page-size", type=int)
     daily_pipeline_parser.add_argument("--crawl-max-pages", type=int)
     daily_pipeline_parser.add_argument("--crawl-pdf-limit", type=int)
     daily_pipeline_parser.add_argument(
         "--skip-crawl-pdf-download",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Only collect announcement metadata during --crawl-documents",
     )
-    daily_pipeline_parser.add_argument("--skip-factors", action="store_true")
-    daily_pipeline_parser.add_argument("--skip-sync", action="store_true")
-    daily_pipeline_parser.add_argument("--skip-quality", action="store_true")
-    daily_pipeline_parser.add_argument("--skip-export", action="store_true")
+    daily_pipeline_parser.add_argument(
+        "--skip-factors", action=argparse.BooleanOptionalAction, default=None
+    )
+    daily_pipeline_parser.add_argument(
+        "--skip-sync", action=argparse.BooleanOptionalAction, default=None
+    )
+    daily_pipeline_parser.add_argument(
+        "--skip-quality", action=argparse.BooleanOptionalAction, default=None
+    )
+    daily_pipeline_parser.add_argument(
+        "--skip-export", action=argparse.BooleanOptionalAction, default=None
+    )
     daily_pipeline_parser.set_defaults(func=cmd_daily_pipeline)
 
     crawl_plan_parser = subparsers.add_parser(

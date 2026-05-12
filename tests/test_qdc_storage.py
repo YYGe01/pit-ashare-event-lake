@@ -20,11 +20,10 @@ from quant_data_center.storage.schema import CONTROL_TABLES, SILVER_TABLES
 from quant_data_center.storage.silver import SilverStore
 
 
-def _write_config(tmp_path: Path) -> Path:
+def _write_config(tmp_path: Path, extra_config: str = "") -> Path:
     config_path = tmp_path / "config" / "quant_data_center.yaml"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text(
-        """
+    content = """
 project:
   name: quant_data_center
   timezone: Asia/Shanghai
@@ -58,9 +57,10 @@ universes:
       - SH600000
       - SZ000001
       - SZ300750
-""".strip(),
-        encoding="utf-8",
-    )
+""".strip()
+    if extra_config.strip():
+        content = f"{content}\n{extra_config.strip()}"
+    config_path.write_text(content, encoding="utf-8")
     return config_path
 
 
@@ -1738,6 +1738,68 @@ def test_qdc_daily_pipeline_control_only_records_pipeline_job(
     assert pipeline_job is not None
     assert pipeline_job[0:3] == ("success", "daily_pipeline", "all_a")
     assert json.loads(pipeline_job[3])["symbol_count"] == 2
+
+
+def test_qdc_daily_pipeline_uses_config_defaults_and_cli_overrides(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """
+daily_pipeline:
+  universe: all_a
+  source_id: akshare
+  batch_size: 1
+  crawl_documents: true
+  crawl_page_size: 5
+  crawl_max_pages: 1
+  crawl_pdf_limit: 1
+""",
+    )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "akshare",
+        SimpleNamespace(
+            stock_info_a_code_name=lambda: pd.DataFrame(
+                [{"code": "600000", "name": "浦发银行"}, {"code": "000001", "name": "平安银行"}]
+            )
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "daily-pipeline",
+                "--date",
+                "2026-05-11",
+                "--batch-size",
+                "2",
+                "--no-crawl-documents",
+                "--control-only",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    daily_bar_tasks = database.list_backfill_tasks(dataset="daily_bar")
+    assert [task["symbol_batch_json"] for task in daily_bar_tasks] == [
+        ["SH600000", "SZ000001"]
+    ]
+    assert database.list_crawl_tasks() == []
+    with database.connect() as conn:
+        pipeline_job = conn.execute(
+            """
+            select parameters_json
+            from qdc_meta.job_run
+            where job_type = 'daily_pipeline'
+            """
+        ).fetchone()
+    assert pipeline_job is not None
+    assert json.loads(pipeline_job[0])["crawl_documents"] is False
 
 
 def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(

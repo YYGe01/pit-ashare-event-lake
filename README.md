@@ -32,6 +32,8 @@ qdc daily --date 2026-05-11 --universe csi300 --control-only
 qdc daily-pipeline --date 2026-05-11 --symbols "SH600000,SZ000001" --batch-size 1 --control-only
 qdc daily-pipeline --date 2026-05-11 --symbols "SH600000,SZ000001" --batch-size 1 --control-only --crawl-documents --crawl-page-size 5 --crawl-max-pages 1 --crawl-pdf-limit 1
 qdc daily-pipeline --batch-size 50
+qdc --config config/quant_data_center_daily_only.yaml init
+qdc --config config/quant_data_center_daily_only.yaml daily-pipeline
 qdc crawl-plan --source-id cninfo_announcement --date 2026-05-11 --control-only
 qdc crawl-plan --source-id sina_finance_news --date 2026-05-11 --control-only
 qdc crawl-run --source-id cninfo_announcement --control-only
@@ -67,6 +69,8 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 
 `qdc daily-pipeline` 是收盘后日频自动化入口，默认使用 `all_a` 全 A 当前 active 标的：先刷新 `stock_basic`，再执行单日采集、因子重建、Parquet 同步、质量检查和 Qlib provider 导出。需要把同日新闻公告爬虫纳入本次因子和 Qlib 导出时，增加 `--crawl-documents`；该开关会在因子构建前执行 `crawl-daily` 的默认新闻公告源。首次全市场运行前先用 `--symbols`、`--control-only` 和爬虫限量参数做 smoke。
 
+如果暂时不使用历史回补数据，改用 `config/quant_data_center_daily_only.yaml`。该配置把 DuckDB、raw、Parquet、Qlib provider 和日志全部写到 `data/quant_data_center_daily_only/`，与当前 `data/quant_data_center/` 历史回补库隔离。`daily_pipeline` 段保存 `batch_size`、`export_start`、`market_name`、爬虫和跳过步骤等默认参数；命令行传同名参数时会覆盖配置，例如 `--batch-size 20` 或 `--crawl-documents`。
+
 `qdc crawl-plan` / `qdc crawl-run` / `qdc crawl-daily` 是非结构化数据每日爬虫入口。当前已支持 `cninfo_announcement` 公告列表每日新增：写 raw JSON、bronze Parquet、公开 PDF 原文 `raw_file` 留档，并把 PDF hash、object_id、下载状态回写到 `qdc_silver.announcement`。也已接入 `sina_finance_news` 作为公开新闻 metadata-only 补位源：保存 raw JSON、bronze Parquet，把标题中能匹配到 `stock_basic` 代码或名称的新闻写入 `qdc_silver.news`，再进入 `daily_news_factor` 和 Qlib 日频导出。可用 `--page-size` / `--max-pages` / `--pdf-limit` 做小范围真实 smoke；如只验证公告列表元数据，可加 `--skip-pdf-download`。正文抽取和交易所公告补源在后续阶段接入。
 
 当前回补链路会写入原始 JSON、上游快照 Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 默认用规则引擎生成新闻/公告日频 count、标题级情绪和事件因子，覆盖增长、风险、融资、合同、回购、股东增减持、监管、诉讼、业绩、质押和担保等事件；`qdc sync-parquet` 可同步统一研究层/研究宽表层 Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day 数据目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的数据目录做数据读取层冒烟验证。
@@ -100,6 +104,7 @@ qdc classify-text-event --provider llm --document-type announcement --title "公
 
 ```text
 config/quant_data_center.yaml       QDC 运行配置
+config/quant_data_center_daily_only.yaml  只积累每日新增数据的隔离配置
 src/quant_data_center/              QDC 源码
 src/quant_data_center/console_static/  本地只读控制台静态页面
 tests/test_qdc_storage.py           当前 QDC 聚焦测试
@@ -107,6 +112,7 @@ docs/数据流阅读指南.md             数据流阅读指南
 docs/迁移实施计划.md               迁移实施计划和当前状态
 docs/工作日志/                     智能体工作记录
 data/quant_data_center/             本地运行数据，已 gitignored
+data/quant_data_center_daily_only/   daily-only 本地运行数据，已 gitignored
 ```
 
 当前主线只保留 QDC 代码、配置、测试和文档。
