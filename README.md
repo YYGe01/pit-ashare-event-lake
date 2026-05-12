@@ -9,10 +9,11 @@
 
 ## 当前入口
 
+项目统一使用已存在的 `ai-trader` conda 环境；不要新建 `quant-data-center` conda 环境。需要同步依赖时，可在 `ai-trader` 中执行 editable install。
+
 ```powershell
-conda env create -f environment.yml
-conda activate quant-data-center
-pip install -e .
+conda activate ai-trader
+python -m pip install -e ".[market,dev]"
 qdc validate-config
 qdc init
 qdc db-info
@@ -135,7 +136,7 @@ ruff check .
 自动化环境未激活 shell 时：
 
 ```powershell
-conda run -n quant-data-center qdc validate-config
-conda run -n quant-data-center pytest
-conda run -n quant-data-center ruff check .
+conda run -n ai-trader qdc validate-config
+conda run -n ai-trader pytest
+conda run -n ai-trader ruff check .
 ```

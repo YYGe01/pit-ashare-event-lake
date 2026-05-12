@@ -1,4 +1,4 @@
-name: quant-data-center
+name: ai-trader
 channels:
   - conda-forge
   - defaults

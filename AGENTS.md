@@ -14,6 +14,7 @@
 - 目标服务 Qlib 研究：A 股数据采集、历史回补、每日增量、标准化清洗、稳定日频因子加工和 Qlib 导出。
 - 本仓库不做模型训练、组合回测、实盘下单或终端适配。
 - 当前主线只保留 QDC 代码、配置、测试和文档。
+- 当前项目统一使用已存在的 `ai-trader` conda 环境；不要创建或切换到 `quant-data-center` conda 环境。`quant-data-center` 仅保留为 Python 项目发行名。
 
 ## 开始工作时先做什么
 
@@ -29,7 +30,7 @@ Get-Content -Raw -Encoding UTF8 config\quant_data_center.yaml
 需要确认本地环境时，运行：
 
 ```powershell
-conda activate quant-data-center
+conda activate ai-trader
 qdc validate-config
 pytest
 ruff check .
@@ -38,15 +39,14 @@ ruff check .
 如果 `qdc` 命令不可用，运行：
 
 ```powershell
-pip install -e .
+python -m pip install -e ".[market,dev]"
 ```
 
 ## 常用命令
 
 ```powershell
-conda env create -f environment.yml
-conda activate quant-data-center
-pip install -e .
+conda activate ai-trader
+python -m pip install -e ".[market,dev]"
 qdc validate-config
 qdc init
 qdc db-info
@@ -67,7 +67,7 @@ ruff check .
 如果自动化环境没有激活 shell，可以使用：
 
 ```powershell
-conda run -n quant-data-center ...
+conda run -n ai-trader ...
 ```
 
 ## 状态和历史
@@ -104,9 +104,9 @@ conda run -n quant-data-center ...
 - 准备提交或结束较大代码改动前，运行：
 
 ```powershell
-qdc validate-config
-pytest
-ruff check .
+conda run -n ai-trader qdc validate-config
+conda run -n ai-trader pytest
+conda run -n ai-trader ruff check .
 ```
 
 ## 文档规则
