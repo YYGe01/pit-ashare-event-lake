@@ -1409,6 +1409,131 @@ def test_qdc_crawl_run_real_cninfo_with_fake_response(
     ]
 
 
+
+def test_qdc_crawl_run_real_sina_news_with_fake_response(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    SilverStore(settings).upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+            {
+                "instrument": "SZ000001",
+                "symbol": "000001",
+                "exchange": "SZ",
+                "name": "平安银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+        ]
+    )
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-plan",
+                "--source-id",
+                "sina_finance_news",
+                "--date",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "result": {
+                    "data": [
+                        {
+                            "id": "news-1",
+                            "title": "浦发银行签订重大合同",
+                            "ctime": "2026-05-11 18:20:00",
+                            "url": "https://finance.sina.com.cn/news/1.shtml",
+                        },
+                        {
+                            "id": "news-2",
+                            "title": "市场综述未提及个股",
+                            "ctime": "2026-05-11 18:21:00",
+                            "url": "https://finance.sina.com.cn/news/2.shtml",
+                        },
+                        {
+                            "id": "news-3",
+                            "title": "平安银行公告解读",
+                            "ctime": "2026-05-10 18:21:00",
+                            "url": "https://finance.sina.com.cn/news/3.shtml",
+                        },
+                    ]
+                }
+            }
+
+    calls = []
+
+    def fake_get(url, headers, params, timeout):
+        calls.append({"url": url, "headers": headers, "params": params, "timeout": timeout})
+        return FakeResponse()
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-run",
+                "--source-id",
+                "sina_finance_news",
+                "--page-size",
+                "3",
+                "--max-pages",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    task = database.list_crawl_tasks(source_id="sina_finance_news")[0]
+    assert task["status"] == "success"
+    assert calls[0]["params"] == {"pageid": "153", "lid": "1686", "num": "3", "page": "1"}
+    assert database.silver_table_counts()["news"] == 1
+    source_objects = database.list_source_objects(dataset="news", source_id="sina_finance_news")
+    assert {item["layer"] for item in source_objects} == {"bronze", "raw"}
+    with database.connect() as conn:
+        rows = conn.execute(
+            """
+            select instrument, title, url, source_id
+            from qdc_silver.news
+            order by instrument
+            """
+        ).fetchall()
+    assert rows == [
+        (
+            "SH600000",
+            "浦发银行签订重大合同",
+            "https://finance.sina.com.cn/news/1.shtml",
+            "sina_finance_news",
+        )
+    ]
+
 def test_qdc_crawl_run_unsupported_real_source_fails_explicitly(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
@@ -1447,9 +1572,9 @@ def test_qdc_crawl_daily_control_only_plans_and_runs_default_sources(tmp_path: P
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 1
-    assert tasks[0]["source_id"] == "cninfo_announcement"
-    assert tasks[0]["status"] == "success"
+    assert len(tasks) == 2
+    assert [task["source_id"] for task in tasks] == ["cninfo_announcement", "sina_finance_news"]
+    assert {task["status"] for task in tasks} == {"success"}
     assert database.table_counts()["crawl_run"] == 1
 
 
