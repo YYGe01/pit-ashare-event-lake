@@ -16,7 +16,9 @@ from quant_data_center.collectors.akshare import AkshareSilverCollector
 from quant_data_center.console import run_console
 from quant_data_center.crawlers.registry import crawler_source_spec, enabled_daily_source_specs
 from quant_data_center.crawlers.sources.cninfo import CninfoAnnouncementCrawler
+from quant_data_center.crawlers.sources.eastmoney import EastmoneyRollNewsCrawler
 from quant_data_center.crawlers.sources.sina import SinaFinanceNewsCrawler
+from quant_data_center.crawlers.sources.sse import SseAnnouncementCrawler
 from quant_data_center.exports.qlib import QlibExporter, QlibProviderVerifier
 from quant_data_center.factor_engine import build_text_event_classifier
 from quant_data_center.factors import FactorBuilder
@@ -46,8 +48,6 @@ DAILY_DATASETS = [
     "adj_factor",
     "price_limit",
     "trade_status",
-    "announcement",
-    "news",
 ]
 
 
@@ -82,6 +82,25 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
     return value
+
+
+def _watch_print(enabled: bool, message: str) -> None:
+    if enabled:
+        print(message, file=sys.stderr)
+
+
+def _short_symbol_preview(symbols: list[str], *, max_items: int = 3) -> str:
+    if not symbols:
+        return "-"
+    shown = symbols[:max_items]
+    suffix = ""
+    if len(symbols) > max_items:
+        suffix = f"...(+{len(symbols) - max_items})"
+    return ",".join(shown) + suffix
+
+
+def _watch_task_prefix(*, phase: str, index: int, total: int) -> str:
+    return f"[{phase}] {index}/{total}"
 
 
 def _summarize_export_result(payload: dict[str, Any]) -> dict[str, Any]:
@@ -404,6 +423,7 @@ def cmd_run_backfill(args: argparse.Namespace) -> int:
         database=database,
         tasks=tasks,
         control_only=bool(args.control_only),
+        watch=False,
     )
     _print_json(
         {
@@ -516,6 +536,7 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
         max_pages=args.max_pages,
         download_pdfs=not bool(args.skip_pdf_download),
         pdf_limit=args.pdf_limit,
+        watch=False,
     )
     run_id = database.record_crawl_run(
         status="failed" if has_failures else "success",
@@ -588,6 +609,7 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         max_pages=args.max_pages,
         download_pdfs=not bool(args.skip_pdf_download),
         pdf_limit=args.pdf_limit,
+        watch=False,
     )
     status = "partial" if has_failures or len(selected_tasks) < len(tasks) else "ok"
     run_id = database.record_crawl_run(
@@ -681,11 +703,20 @@ def _run_crawl_tasks(
     max_pages: int | None,
     download_pdfs: bool,
     pdf_limit: int | None,
+    watch: bool = False,
 ) -> tuple[list[dict[str, Any]], bool]:
     results = []
     has_failures = False
-    for task in tasks:
+    total_tasks = len(tasks)
+    for index, task in enumerate(tasks, start=1):
         task_id = str(task["task_id"])
+        source_id = str(task["source_id"])
+        dataset = str(task["dataset"])
+        crawl_date = str(task["crawl_date"])
+        _watch_print(
+            watch,
+            f"{_watch_task_prefix(phase='CRAWL', index=index, total=total_tasks)} RUNNING task_id={task_id} source={source_id} dataset={dataset} date={crawl_date}",
+        )
         database.mark_crawl_task_running(task_id)
         try:
             if control_only:
@@ -714,6 +745,10 @@ def _run_crawl_tasks(
                     "pdf_skipped_count": int(result.get("pdf_skipped_count", 0)),
                 }
             )
+            _watch_print(
+                watch,
+                f"{_watch_task_prefix(phase='CRAWL', index=index, total=total_tasks)} OK task_id={task_id} docs={int(result.get('document_count', 0))} raws={int(result.get('raw_object_count', 0))}",
+            )
         except Exception as exc:
             has_failures = True
             error_message = str(exc)[:1000]
@@ -730,6 +765,10 @@ def _run_crawl_tasks(
                     "status": "failed",
                     "error_message": error_message,
                 }
+            )
+            _watch_print(
+                watch,
+                f"{_watch_task_prefix(phase='CRAWL', index=index, total=total_tasks)} FAIL task_id={task_id} error={error_message[:300]}",
             )
     return results, has_failures
 
@@ -755,9 +794,29 @@ def _run_real_crawl_task(
             download_pdfs=download_pdfs,
             pdf_limit=pdf_limit,
         )
+    if source_id == "sse_announcement":
+        spec = crawler_source_spec(source_id)
+        return SseAnnouncementCrawler(settings).crawl_date(
+            source_id=source_id,
+            crawl_date=str(task["crawl_date"]),
+            page_size=page_size,
+            max_pages=max_pages,
+            min_delay_seconds=spec.min_delay_seconds,
+            download_pdfs=download_pdfs,
+            pdf_limit=pdf_limit,
+        )
     if source_id == "sina_finance_news":
         spec = crawler_source_spec(source_id)
         return SinaFinanceNewsCrawler(settings).crawl_date(
+            source_id=source_id,
+            crawl_date=str(task["crawl_date"]),
+            page_size=page_size,
+            max_pages=max_pages,
+            min_delay_seconds=spec.min_delay_seconds,
+        )
+    if source_id == "eastmoney_roll_news":
+        spec = crawler_source_spec(source_id)
+        return EastmoneyRollNewsCrawler(settings).crawl_date(
             source_id=source_id,
             crawl_date=str(task["crawl_date"]),
             page_size=page_size,
@@ -835,6 +894,11 @@ def cmd_daily(args: argparse.Namespace) -> int:
         symbols=symbols,
         batch_size=args.batch_size,
     )
+    if args.watch:
+        _watch_print(
+            True,
+            f"{_watch_task_prefix(phase='daily', index=1, total=1)} PLAN date={run_date} dataset_count={len(set(task['dataset'] for task in planned)) if planned else 0} task_count={len(planned)}",
+        )
     if args.plan_only:
         _print_json({"status": "ok", "date": run_date, "planned": planned, "results": []})
         return 0
@@ -849,6 +913,7 @@ def cmd_daily(args: argparse.Namespace) -> int:
         database=database,
         tasks=tasks[: args.limit_tasks] if args.limit_tasks else tasks,
         control_only=bool(args.control_only),
+        watch=bool(args.watch),
     )
     job_id = database.record_job_run(
         job_type="daily",
@@ -952,6 +1017,11 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         symbols=symbols,
         batch_size=batch_size,
     )
+    if args.watch:
+        _watch_print(
+            True,
+            f"{_watch_task_prefix(phase='pipeline', index=1, total=1)} START date={run_date} universe={universe} planned_tasks={len(planned)} selected_tasks={0 if limit_tasks is None else min(len(planned), limit_tasks)}",
+        )
     tasks = [
         task
         for task in database.fetch_backfill_tasks_by_ids([str(item["task_id"]) for item in planned])
@@ -978,7 +1048,13 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         database=database,
         tasks=selected_tasks,
         control_only=bool(args.control_only),
+        watch=bool(args.watch),
     )
+    if args.watch:
+        _watch_print(
+            True,
+            f"{_watch_task_prefix(phase='pipeline', index=1, total=1)} END step=daily status={'ok' if not (has_failures or has_incomplete_tasks) else 'partial'} ran={len(daily_results)}/{len(selected_tasks)}",
+        )
     steps.append(
         {
             "step": "daily",
@@ -995,6 +1071,11 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     should_continue = not (has_failures or has_incomplete_tasks) or continue_on_failure
     crawl_result: dict[str, Any] | None = None
     if should_continue and crawl_documents:
+        if args.watch:
+            _watch_print(
+                True,
+                f"{_watch_task_prefix(phase='pipeline', index=2, total=2)} START step=crawl_documents",
+            )
         crawl_result = _run_daily_pipeline_crawl_documents(
             settings=settings,
             database=database,
@@ -1006,40 +1087,87 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             max_pages=crawl_max_pages,
             download_pdfs=not skip_crawl_pdf_download,
             pdf_limit=crawl_pdf_limit,
+            watch=bool(args.watch),
         )
         steps.append({"step": "crawl_documents", **crawl_result})
+        if args.watch:
+            _watch_print(
+                True,
+                f"{_watch_task_prefix(phase='pipeline', index=2, total=2)} END step=crawl_documents status={crawl_result['status']} ran={crawl_result['ran_count']}/{crawl_result['planned_count']}",
+            )
         if crawl_result["status"] != "ok":
             status = "partial"
             should_continue = continue_on_failure
 
     if should_continue and not args.control_only and not skip_factors:
+        if args.watch:
+            _watch_print(
+                True,
+                f"{_watch_task_prefix(phase='pipeline', index=3, total=2)} START step=build_factors",
+            )
         factor_result = FactorBuilder(settings).build(
             factor_set="all",
             start_date=run_date,
             end_date=run_date,
         )
         steps.append({"step": "build_factors", **factor_result})
+        if args.watch:
+            _watch_print(
+                True,
+                f"{_watch_task_prefix(phase='pipeline', index=3, total=2)} END step=build_factors status={factor_result.get('status', 'unknown')}",
+            )
 
     if should_continue and not args.control_only and not skip_sync:
+        if args.watch:
+            _watch_print(
+                True,
+                f"{_watch_task_prefix(phase='pipeline', index=4, total=2)} START step=sync_parquet",
+            )
         sync_result = QdcParquetSync(settings).sync(layer="all")
         steps.append({"step": "sync_parquet", "status": "ok", **sync_result})
+        if args.watch:
+            _watch_print(
+                True,
+                f"{_watch_task_prefix(phase='pipeline', index=4, total=2)} END step=sync_parquet status={sync_result.get('status', 'unknown')}",
+            )
 
     quality_result: dict[str, Any] | None = None
     if should_continue and not args.control_only and not skip_quality:
+        if args.watch:
+            _watch_print(
+                True,
+                f"{_watch_task_prefix(phase='pipeline', index=5, total=2)} START step=quality",
+            )
         quality_result = QualityChecker(settings).run(start_date=run_date, end_date=run_date)
         steps.append({"step": "quality", **quality_result})
+        if args.watch:
+            _watch_print(
+                True,
+                f"{_watch_task_prefix(phase='pipeline', index=5, total=2)} END step=quality status={quality_result.get('status', 'unknown')}",
+            )
         if quality_result["status"] != "ok":
             status = "partial"
             should_continue = continue_on_failure
 
     if should_continue and not args.control_only and not skip_export:
+        if args.watch:
+            _watch_print(
+                True,
+                f"{_watch_task_prefix(phase='pipeline', index=6, total=2)} START step=export_qlib",
+            )
         export_result = QlibExporter(settings).export(
             provider_uri=provider_uri,
             start_date=export_start,
             end_date=run_date,
             market_name=market_name or universe,
         )
-        steps.append({"step": "export_qlib", **_summarize_export_result(export_result)})
+        summarized_export = _summarize_export_result(export_result)
+        steps.append({"step": "export_qlib", **summarized_export})
+        if args.watch:
+            _watch_print(
+                True,
+                f"{_watch_task_prefix(phase='pipeline', index=6, total=2)} END step=export_qlib status={summarized_export.get('status', 'unknown')} object_id_count={summarized_export.get('object_id_count', 0)}",
+            )
 
     job_id = database.record_job_run(
         job_type="daily_pipeline",
@@ -1089,7 +1217,12 @@ def _run_daily_pipeline_crawl_documents(
     max_pages: int | None,
     download_pdfs: bool,
     pdf_limit: int | None,
+    watch: bool,
 ) -> dict[str, Any]:
+    _watch_print(
+        watch,
+        f"{_watch_task_prefix(phase='crawl-documents', index=1, total=1)} START run_date={run_date} source={source_id or 'all'}",
+    )
     planned = []
     for spec in enabled_daily_source_specs(source_id):
         planned.extend(
@@ -1114,6 +1247,7 @@ def _run_daily_pipeline_crawl_documents(
         max_pages=max_pages,
         download_pdfs=download_pdfs,
         pdf_limit=pdf_limit,
+        watch=watch,
     )
     remaining_task_count = len(tasks) - len(selected_tasks)
     status = "partial" if has_failures or remaining_task_count else "ok"
@@ -1153,11 +1287,23 @@ def _run_backfill_tasks(
     database: QdcDatabase,
     tasks: list[dict[str, object]],
     control_only: bool,
+    watch: bool = False,
 ) -> tuple[list[dict[str, object]], bool]:
     results = []
     has_failures = False
-    for task in tasks:
+    total_tasks = len(tasks)
+    for index, task in enumerate(tasks, start=1):
         task_id = str(task["task_id"])
+        symbols = [str(symbol) for symbol in (task.get("symbol_batch_json") or [])]
+        dataset = str(task["dataset"])
+        source_id = str(task["source_id"])
+        start_date = str(task["start_date"])
+        end_date = str(task["end_date"])
+        _watch_print(
+            watch,
+            f"{_watch_task_prefix(phase='BACKFILL', index=index, total=total_tasks)} RUNNING task_id={task_id} "
+            f"dataset={dataset} source={source_id} date={start_date}:{end_date} symbols={_short_symbol_preview(symbols)}",
+        )
         database.mark_backfill_task_running(task_id)
         try:
             if control_only:
@@ -1193,6 +1339,10 @@ def _run_backfill_tasks(
             results.append(
                 {"task_id": task_id, "job_id": job_id, "status": "success", "row_count": row_count}
             )
+            _watch_print(
+                watch,
+                f"{_watch_task_prefix(phase='BACKFILL', index=index, total=total_tasks)} OK task_id={task_id} rows={row_count}",
+            )
         except Exception as exc:
             has_failures = True
             error_message = str(exc)[:1000]
@@ -1219,6 +1369,10 @@ def _run_backfill_tasks(
                     "status": "failed",
                     "error_message": error_message,
                 }
+            )
+            _watch_print(
+                watch,
+                f"{_watch_task_prefix(phase='BACKFILL', index=index, total=total_tasks)} FAIL task_id={task_id} error={error_message[:300]}",
             )
     return results, has_failures
 
@@ -1398,6 +1552,11 @@ def build_parser() -> argparse.ArgumentParser:
     daily_parser.add_argument("--limit-tasks", type=int)
     daily_parser.add_argument("--plan-only", action="store_true")
     daily_parser.add_argument("--control-only", action="store_true")
+    daily_parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Print per-task execution progress to stderr",
+    )
     daily_parser.set_defaults(func=cmd_daily)
 
     daily_pipeline_parser = subparsers.add_parser(
@@ -1440,6 +1599,11 @@ def build_parser() -> argparse.ArgumentParser:
     daily_pipeline_parser.add_argument("--plan-only", action="store_true")
     daily_pipeline_parser.add_argument("--control-only", action="store_true")
     daily_pipeline_parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Print per-stage and per-task execution progress to stderr",
+    )
+    daily_pipeline_parser.add_argument(
         "--continue-on-failure",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -1452,7 +1616,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daily_pipeline_parser.add_argument(
         "--crawl-source-id",
-        help="Optional crawler source filter, for example cninfo_announcement or sina_finance_news",
+        help=(
+            "Optional crawler source filter, for example cninfo_announcement, "
+            "sse_announcement, sina_finance_news, or eastmoney_roll_news"
+        ),
     )
     daily_pipeline_parser.add_argument("--crawl-limit-tasks", type=int)
     daily_pipeline_parser.add_argument("--crawl-page-size", type=int)

@@ -701,6 +701,132 @@ def test_qdc_console_dataset_preview_filters_silver_rows(tmp_path: Path) -> None
     assert preview["rows"][0]["close"] == 10.6
 
 
+def test_qdc_console_daily_documents_use_crawler_sources_and_local_preview(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    silver = SilverStore(settings)
+    silver.upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    announcement_raw_path = (
+        settings.raw_root / "announcement" / "cninfo_announcement" / "dt=2026-05-11" / "raw.json"
+    )
+    announcement_raw_path.parent.mkdir(parents=True)
+    announcement_raw_path.write_text('{"pages": []}', encoding="utf-8")
+    announcement_raw_id = database.insert_source_object(
+        dataset="announcement",
+        source_id="cninfo_announcement",
+        layer="raw",
+        uri=str(announcement_raw_path),
+        content_hash=hashlib.sha256(announcement_raw_path.read_bytes()).hexdigest(),
+        size_bytes=announcement_raw_path.stat().st_size,
+    )
+    pdf_path = (
+        settings.raw_root / "announcement" / "cninfo_announcement" / "dt=2026-05-11" / "a1.pdf"
+    )
+    pdf_path.write_bytes(b"%PDF-1.4\nunit test\n")
+    pdf_id = database.insert_source_object(
+        dataset="announcement",
+        source_id="cninfo_announcement",
+        layer="raw_file",
+        uri=str(pdf_path),
+        content_hash=hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
+        size_bytes=pdf_path.stat().st_size,
+    )
+    news_raw_path = settings.raw_root / "news" / "sina_finance_news" / "dt=2026-05-11" / "raw.json"
+    news_raw_path.parent.mkdir(parents=True)
+    news_raw_path.write_text('{"items": [{"title": "浦发银行新闻"}]}', encoding="utf-8")
+    news_raw_id = database.insert_source_object(
+        dataset="news",
+        source_id="sina_finance_news",
+        layer="raw",
+        uri=str(news_raw_path),
+        content_hash=hashlib.sha256(news_raw_path.read_bytes()).hexdigest(),
+        size_bytes=news_raw_path.stat().st_size,
+    )
+    silver.upsert_announcements(
+        [
+            {
+                "announcement_id": "cninfo_a1",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "年度权益分派公告",
+                "url": "https://static.cninfo.com.cn/a1.pdf",
+                "source_id": "cninfo_announcement",
+                "raw_object_id": announcement_raw_id,
+                "pdf_object_id": pdf_id,
+                "pdf_download_status": "success",
+                "pdf_size_bytes": pdf_path.stat().st_size,
+            },
+            {
+                "announcement_id": "ak_a1",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "浦发银行:年度权益分派公告",
+                "url": "https://example.test/ak/1",
+                "source_id": "akshare",
+            },
+        ]
+    )
+    silver.upsert_news(
+        [
+            {
+                "news_id": "sina_n1",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "浦发银行新闻",
+                "url": "https://finance.sina.com.cn/n1",
+                "source_id": "sina_finance_news",
+            },
+            {
+                "news_id": "ak_n1",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "AkShare 新闻",
+                "url": "https://example.test/ak/news",
+                "source_id": "akshare",
+            },
+        ]
+    )
+
+    payload = QdcConsoleData(settings).daily_wide_preview(
+        date="2026-05-11",
+        mode="factor",
+    )
+    row = payload["rows"][0]
+
+    assert row["raw_announcement_count"] == 1
+    assert row["raw_news_count"] == 1
+    announcement = row["_announcement_documents"][0]
+    assert announcement["source_ids"] == ["cninfo_announcement"]
+    assert announcement["has_pdf"] is True
+    assert announcement["has_body"] is False
+    assert announcement["local_object_id"] == pdf_id
+    assert announcement["local_url"].endswith(pdf_id)
+    assert "正文文本" in announcement["content_label"]
+    news = row["_news_documents"][0]
+    assert news["source_ids"] == ["sina_finance_news"]
+    assert news["local_object_id"] == news_raw_id
+    assert news["content_status"] == "local_metadata"
+
+    local_pdf = QdcConsoleData(settings).source_object_file(object_id=pdf_id)
+    assert local_pdf["body"] == b"%PDF-1.4\nunit test\n"
+    assert local_pdf["content_type"] == "application/pdf"
+
+
 def test_qdc_console_instruments_supports_search_by_name(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     settings = QdcSettings.from_yaml(config_path)
@@ -968,7 +1094,7 @@ def test_qdc_console_instrument_timeline_merges_daily_and_documents(
                 "instrument": "SH600000",
                 "title": "公司订单增长",
                 "url": "https://example.com/news",
-                "source_id": "unit_test",
+                "source_id": "sina_finance_news",
             }
         ]
     )
@@ -980,7 +1106,7 @@ def test_qdc_console_instrument_timeline_merges_daily_and_documents(
                 "instrument": "SH600000",
                 "title": "公司发布回购公告",
                 "url": "https://example.com/announcement",
-                "source_id": "unit_test",
+                "source_id": "cninfo_announcement",
             }
         ]
     )
@@ -1783,7 +1909,9 @@ def test_qdc_daily_pipeline_control_only_records_pipeline_job(
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     assert database.stock_basic_instruments() == ["SH600000", "SZ000001"]
-    assert len(database.list_backfill_tasks()) == 11
+    tasks = database.list_backfill_tasks()
+    assert len(tasks) == 8
+    assert {task["dataset"] for task in tasks}.isdisjoint({"announcement", "news"})
     with database.connect() as conn:
         pipeline_job = conn.execute(
             """
@@ -1795,6 +1923,35 @@ def test_qdc_daily_pipeline_control_only_records_pipeline_job(
     assert pipeline_job is not None
     assert pipeline_job[0:3] == ("success", "daily_pipeline", "all_a")
     assert json.loads(pipeline_job[3])["symbol_count"] == 2
+
+
+def test_qdc_daily_watch_outputs_backfill_progress(tmp_path: Path, capsys) -> None:
+    config_path = _write_config(tmp_path)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "daily",
+                "--date",
+                "2026-05-11",
+                "--symbols",
+                "SH600000",
+                "--batch-size",
+                "1",
+                "--control-only",
+                "--watch",
+            ]
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    assert "[BACKFILL]" in captured.err
+    assert "RUNNING" in captured.err
+    assert "dataset=" in captured.err
+    assert "source=" in captured.err
 
 
 def test_qdc_daily_pipeline_uses_config_defaults_and_cli_overrides(
@@ -1857,6 +2014,56 @@ daily_pipeline:
         ).fetchone()
     assert pipeline_job is not None
     assert json.loads(pipeline_job[0])["crawl_documents"] is False
+
+
+def test_qdc_daily_pipeline_watch_outputs_pipeline_and_crawl_progress(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """
+daily_pipeline:
+  crawl_documents: true
+""",
+    )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "akshare",
+        SimpleNamespace(
+            stock_info_a_code_name=lambda: pd.DataFrame(
+                [{"code": "600000", "name": "浦发银行"}, {"code": "000001", "name": "平安银行"}]
+            )
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "daily-pipeline",
+                "--date",
+                "2026-05-11",
+                "--batch-size",
+                "1",
+                "--watch",
+                "--control-only",
+                "--crawl-page-size",
+                "5",
+                "--crawl-max-pages",
+                "1",
+                "--crawl-pdf-limit",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    assert "pipeline" in captured.err
+    assert "crawl-documents" in captured.err
+    assert "source=" in captured.err
 
 
 def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
@@ -2373,8 +2580,8 @@ def test_qdc_run_backfill_announcement_news_and_build_factors_with_fake_akshare(
     counts = database.silver_table_counts()
     assert counts["announcement"] == 1
     assert counts["news"] == 1
-    assert counts["daily_news_factor"] == 1
-    assert counts["daily_announcement_factor"] == 1
+    assert counts["daily_news_factor"] == 0
+    assert counts["daily_announcement_factor"] == 0
     with database.connect() as conn:
         row = conn.execute(
             """
@@ -2384,7 +2591,7 @@ def test_qdc_run_backfill_announcement_news_and_build_factors_with_fake_akshare(
               on n.trade_date = a.trade_date and n.instrument = a.instrument
             """
         ).fetchone()
-    assert row == (1.0, 1.0)
+    assert row is None
 
 
 def test_qdc_news_falls_back_to_global_stream_and_maps_instrument(
@@ -2505,14 +2712,14 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
                 "publish_date": "2026-05-10",
                 "instrument": "SH600000",
                 "title": "公司签订重大订单增长",
-                "source_id": "unit_test",
+                "source_id": "sina_finance_news",
             },
             {
                 "news_id": "n2",
                 "publish_date": "2026-05-11",
                 "instrument": "SH600000",
                 "title": "公司被立案调查存在退市风险",
-                "source_id": "unit_test",
+                "source_id": "sina_finance_news",
             },
         ]
     )
@@ -2523,14 +2730,14 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
                 "publish_date": "2026-05-10",
                 "instrument": "SH600000",
                 "title": "向特定对象发行股票募集资金",
-                "source_id": "unit_test",
+                "source_id": "cninfo_announcement",
             },
             {
                 "announcement_id": "a2",
                 "publish_date": "2026-05-11",
                 "instrument": "SH600000",
                 "title": "年度权益分派公告",
-                "source_id": "unit_test",
+                "source_id": "cninfo_announcement",
             },
         ]
     )
