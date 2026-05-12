@@ -27,7 +27,7 @@ DOCUMENT_TABLES = {"announcement", "news"}
 DOCUMENT_LOOKBACK_DAYS = 15
 DOCUMENT_FACTOR_SOURCE_IDS = {
     "announcement": ("cninfo_announcement", "sse_announcement"),
-    "news": ("sina_finance_news", "eastmoney_roll_news"),
+    "news": ("sina_finance_news", "eastmoney_roll_news", "nbd_company_news"),
 }
 
 NEWS_FACTOR_FIELDS = (

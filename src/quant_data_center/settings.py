@@ -32,10 +32,12 @@ class DailyPipelineSettings:
 
     universe: str | None
     source_id: str | None
+    source_ids: list[str] | None
     all_market: bool | None
     skip_stock_basic_refresh: bool | None
     batch_size: int | None
     limit_tasks: int | None
+    daily_parallelism: int | None
     provider_uri: str | None
     export_start: str | None
     market_name: str | None
@@ -46,6 +48,9 @@ class DailyPipelineSettings:
     crawl_page_size: int | None
     crawl_max_pages: int | None
     crawl_pdf_limit: int | None
+    crawl_parallelism: int | None
+    crawl_request_timeout_seconds: float | None
+    crawl_source_timeout_seconds: float | None
     skip_crawl_pdf_download: bool | None
     skip_factors: bool | None
     skip_sync: bool | None
@@ -187,10 +192,12 @@ class QdcSettings:
             "daily_pipeline": {
                 "universe": self.daily_pipeline.universe,
                 "source_id": self.daily_pipeline.source_id,
+                "source_ids": self.daily_pipeline.source_ids,
                 "all_market": self.daily_pipeline.all_market,
                 "skip_stock_basic_refresh": self.daily_pipeline.skip_stock_basic_refresh,
                 "batch_size": self.daily_pipeline.batch_size,
                 "limit_tasks": self.daily_pipeline.limit_tasks,
+                "daily_parallelism": self.daily_pipeline.daily_parallelism,
                 "provider_uri": self.daily_pipeline.provider_uri,
                 "export_start": self.daily_pipeline.export_start,
                 "market_name": self.daily_pipeline.market_name,
@@ -201,6 +208,11 @@ class QdcSettings:
                 "crawl_page_size": self.daily_pipeline.crawl_page_size,
                 "crawl_max_pages": self.daily_pipeline.crawl_max_pages,
                 "crawl_pdf_limit": self.daily_pipeline.crawl_pdf_limit,
+                "crawl_parallelism": self.daily_pipeline.crawl_parallelism,
+                "crawl_request_timeout_seconds": (
+                    self.daily_pipeline.crawl_request_timeout_seconds
+                ),
+                "crawl_source_timeout_seconds": self.daily_pipeline.crawl_source_timeout_seconds,
                 "skip_crawl_pdf_download": self.daily_pipeline.skip_crawl_pdf_download,
                 "skip_factors": self.daily_pipeline.skip_factors,
                 "skip_sync": self.daily_pipeline.skip_sync,
@@ -244,10 +256,12 @@ def _parse_daily_pipeline_settings(payload: Any) -> DailyPipelineSettings:
     return DailyPipelineSettings(
         universe=_optional_str(spec.get("universe")),
         source_id=_optional_str(spec.get("source_id")),
+        source_ids=_optional_str_list(spec.get("source_ids")),
         all_market=_optional_bool(spec.get("all_market")),
         skip_stock_basic_refresh=_optional_bool(spec.get("skip_stock_basic_refresh")),
         batch_size=_optional_int(spec.get("batch_size")),
         limit_tasks=_optional_int(spec.get("limit_tasks")),
+        daily_parallelism=_optional_int(spec.get("daily_parallelism")),
         provider_uri=_optional_str(spec.get("provider_uri")),
         export_start=_optional_str(spec.get("export_start")),
         market_name=_optional_str(spec.get("market_name")),
@@ -258,6 +272,11 @@ def _parse_daily_pipeline_settings(payload: Any) -> DailyPipelineSettings:
         crawl_page_size=_optional_int(spec.get("crawl_page_size")),
         crawl_max_pages=_optional_int(spec.get("crawl_max_pages")),
         crawl_pdf_limit=_optional_int(spec.get("crawl_pdf_limit")),
+        crawl_parallelism=_optional_int(spec.get("crawl_parallelism")),
+        crawl_request_timeout_seconds=_optional_float(
+            spec.get("crawl_request_timeout_seconds")
+        ),
+        crawl_source_timeout_seconds=_optional_float(spec.get("crawl_source_timeout_seconds")),
         skip_crawl_pdf_download=_optional_bool(spec.get("skip_crawl_pdf_download")),
         skip_factors=_optional_bool(spec.get("skip_factors")),
         skip_sync=_optional_bool(spec.get("skip_sync")),
@@ -271,6 +290,17 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _optional_str_list(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",")]
+    else:
+        items = [str(item).strip() for item in value or []]
+    result = [item for item in items if item]
+    return result or None
 
 
 def _optional_bool(value: Any) -> bool | None:
@@ -290,6 +320,12 @@ def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
 
 
 def _parse_text_event_classifier_settings(

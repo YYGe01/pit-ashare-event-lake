@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from quant_data_center.cli import _print_json, main
+from quant_data_center.cli import _crawl_exhausted_datasets, _print_json, main
 from quant_data_center.console import QdcConsoleData, _locked_api_payload
 from quant_data_center.jobs.backfill import parse_date, plan_backfill_tasks
 from quant_data_center.settings import QdcSettings
@@ -827,6 +827,22 @@ def test_qdc_console_daily_documents_use_crawler_sources_and_local_preview(
         content_hash=hashlib.sha256(news_raw_path.read_bytes()).hexdigest(),
         size_bytes=news_raw_path.stat().st_size,
     )
+    news_records_path = (
+        settings.raw_root / "documents" / "2026-05-11" / "sina_finance_news" / "records.jsonl"
+    )
+    news_records_path.parent.mkdir(parents=True)
+    news_records_path.write_text(
+        '{"instrument": "SH600000", "title": "浦发银行新闻"}\n',
+        encoding="utf-8",
+    )
+    news_records_id = database.insert_source_object(
+        dataset="news",
+        source_id="sina_finance_news",
+        layer="raw_records",
+        uri=str(news_records_path),
+        content_hash=hashlib.sha256(news_records_path.read_bytes()).hexdigest(),
+        size_bytes=news_records_path.stat().st_size,
+    )
     silver.upsert_announcements(
         [
             {
@@ -860,6 +876,7 @@ def test_qdc_console_daily_documents_use_crawler_sources_and_local_preview(
                 "title": "浦发银行新闻",
                 "url": "https://finance.sina.com.cn/n1",
                 "source_id": "sina_finance_news",
+                "raw_object_id": news_raw_id,
             },
             {
                 "news_id": "ak_n1",
@@ -889,7 +906,10 @@ def test_qdc_console_daily_documents_use_crawler_sources_and_local_preview(
     assert "正文文本" in announcement["content_label"]
     news = row["_news_documents"][0]
     assert news["source_ids"] == ["sina_finance_news"]
-    assert news["local_object_id"] == news_raw_id
+    assert news["raw_object_id"] == news_raw_id
+    assert news["metadata_object_id"] == news_records_id
+    assert news["local_object_id"] == news_records_id
+    assert news["local_object_kind"] == "metadata_records"
     assert news["content_status"] == "local_metadata"
 
     local_pdf = QdcConsoleData(settings).source_object_file(object_id=pdf_id)
@@ -2038,7 +2058,15 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
                 "name": "浦发银行",
                 "is_active": True,
                 "source_id": "unit_test",
-            }
+            },
+            {
+                "instrument": "SZ000001",
+                "symbol": "000001",
+                "exchange": "SZ",
+                "name": "平安银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
         ]
     )
     assert (
@@ -2137,6 +2165,256 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
     ]
 
 
+def test_qdc_crawl_run_real_nbd_news_with_fake_response(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    SilverStore(settings).upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-plan",
+                "--source-id",
+                "nbd_company_news",
+                "--date",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    class FakeResponse:
+        status_code = 200
+        text = """
+        <li>
+          <a href="https://www.nbd.com.cn/articles/2026-05-11/4389691.html"
+             target="_blank" title="浦发银行拟收购测试资产">
+            <span>浦发银行拟收购测试资产</span>
+          </a>
+          <span>2026-05-11 23:56:39</span>
+        </li>
+        <li>
+          <a href="https://www.nbd.com.cn/articles/2026-05-11/4389692.html"
+             target="_blank" title="平安银行拟收购测试资产">
+            <span>平安银行拟收购测试资产</span>
+          </a>
+          <span>2026-05-11 23:50:00</span>
+        </li>
+        <p class="u-channeltime">2026-05-10</p>
+        <li class="u-news-title">
+          <a href="https://www.nbd.com.cn/articles/2026-05-10/4380000.html"
+             target="_blank">浦发银行历史新闻</a>
+          <span>10:31:18</span>
+        </li>
+        """
+
+        def raise_for_status(self) -> None:
+            return None
+
+    calls = []
+
+    def fake_get(url, headers, timeout):
+        calls.append({"url": url, "headers": headers, "timeout": timeout})
+        return FakeResponse()
+
+    import requests
+    import quant_data_center.crawlers.sources.nbd as nbd_module
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(nbd_module, "sleep_with_deadline", lambda *args, **kwargs: None)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-run",
+                "--source-id",
+                "nbd_company_news",
+                "--page-size",
+                "5",
+                "--max-pages",
+                "1",
+                "--request-timeout-seconds",
+                "7",
+                "--symbols",
+                "SH600000",
+            ]
+        )
+        == 0
+    )
+
+    task = database.list_crawl_tasks(source_id="nbd_company_news")[0]
+    assert task["status"] == "success"
+    assert len(calls) == 1
+    assert calls[0]["url"] == "https://www.nbd.com.cn/columns/1285/"
+    assert calls[0]["timeout"] == 7
+    assert database.silver_table_counts()["news"] == 1
+    source_objects = database.list_source_objects(
+        dataset="news",
+        source_id="nbd_company_news",
+    )
+    assert {item["layer"] for item in source_objects} == {
+        "bronze",
+        "raw",
+        "raw_manifest",
+        "raw_records",
+    }
+    records_object = next(item for item in source_objects if item["layer"] == "raw_records")
+    records_lines = Path(records_object["uri"]).read_text(encoding="utf-8").splitlines()
+    assert len(records_lines) == 1
+    assert "浦发银行拟收购测试资产" in records_lines[0]
+    assert "平安银行" not in records_lines[0]
+    with database.connect() as conn:
+        rows = conn.execute(
+            """
+            select instrument, publish_date, publish_time, title, source_id
+            from qdc_silver.news
+            order by publish_date desc, title
+            """
+        ).fetchall()
+    assert rows == [
+        (
+            "SH600000",
+            datetime(2026, 5, 11).date(),
+            datetime(2026, 5, 11, 23, 56, 39),
+            "浦发银行拟收购测试资产",
+            "nbd_company_news",
+        ),
+    ]
+
+
+def test_qdc_parallel_crawl_keeps_successful_source_when_peer_times_out(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    SilverStore(settings).upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    for source_id in ("sina_finance_news", "eastmoney_roll_news"):
+        assert (
+            main(
+                [
+                    "--config",
+                    str(config_path),
+                    "crawl-plan",
+                    "--source-id",
+                    source_id,
+                    "--date",
+                    "2026-05-11",
+                ]
+            )
+            == 0
+        )
+
+    class EastmoneyResponse:
+        status_code = 200
+        text = """
+        <li><span>2026-05-11 18:20</span>[<a href="stock.html">股票</a>]
+        <a href="http://stock.eastmoney.com/a/202605111111.html"
+        title="浦发银行签订重大合同" target="_blank">浦发银行签订重大合同</a></li>
+        """
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_get(url, **kwargs):
+        if "feed.mix.sina.com.cn" in url:
+            raise TimeoutError("source timeout exceeded for sina_finance_news")
+        return EastmoneyResponse()
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-run",
+                "--dataset",
+                "news",
+                "--parallel-sources",
+                "2",
+                "--page-size",
+                "5",
+                "--max-pages",
+                "1",
+            ]
+        )
+        == 1
+    )
+
+    tasks = database.list_crawl_tasks(dataset="news")
+    assert {task["source_id"]: task["status"] for task in tasks} == {
+        "sina_finance_news": "failed",
+        "eastmoney_roll_news": "success",
+    }
+    assert "timeout" in str(
+        next(task["last_error"] for task in tasks if task["source_id"] == "sina_finance_news")
+    )
+    assert database.silver_table_counts()["news"] == 1
+
+
+def test_qdc_crawl_exhausted_dataset_tolerates_one_failed_source() -> None:
+    assert (
+        _crawl_exhausted_datasets(
+            selected_tasks=[
+                {"dataset": "news", "source_id": "sina_finance_news"},
+                {"dataset": "news", "source_id": "eastmoney_roll_news"},
+            ],
+            results=[
+                {"dataset": "news", "source_id": "sina_finance_news", "status": "failed"},
+                {"dataset": "news", "source_id": "eastmoney_roll_news", "status": "success"},
+            ],
+        )
+        == []
+    )
+    assert _crawl_exhausted_datasets(
+        selected_tasks=[
+            {"dataset": "announcement", "source_id": "cninfo_announcement"},
+            {"dataset": "announcement", "source_id": "sse_announcement"},
+        ],
+        results=[
+            {
+                "dataset": "announcement",
+                "source_id": "cninfo_announcement",
+                "status": "failed",
+            },
+            {"dataset": "announcement", "source_id": "sse_announcement", "status": "failed"},
+        ],
+    ) == ["announcement"]
+
+
 def test_qdc_crawl_run_unsupported_real_source_fails_explicitly(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
@@ -2175,12 +2453,13 @@ def test_qdc_crawl_daily_control_only_plans_and_runs_default_sources(tmp_path: P
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 4
+    assert len(tasks) == 5
     assert {task["source_id"] for task in tasks} == {
         "cninfo_announcement",
         "sse_announcement",
         "sina_finance_news",
         "eastmoney_roll_news",
+        "nbd_company_news",
     }
     assert {task["status"] for task in tasks} == {"success"}
     assert database.table_counts()["crawl_run"] == 1
@@ -2350,6 +2629,153 @@ def test_qdc_daily_pipeline_control_only_records_pipeline_job(
     assert pipeline_job is not None
     assert pipeline_job[0:3] == ("success", "daily_pipeline", "all_a")
     assert json.loads(pipeline_job[3])["symbol_count"] == 2
+
+
+def test_qdc_daily_pipeline_can_plan_multiple_structured_sources(tmp_path: Path) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """
+daily_pipeline:
+  universe: csi300
+  source_id: akshare
+  source_ids:
+    - akshare
+    - eastmoney
+    - sina
+  batch_size: 1
+  daily_parallelism: 2
+  crawl_documents: false
+""",
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "daily-pipeline",
+                "--date",
+                "2026-05-11",
+                "--symbols",
+                "SH600000",
+                "--control-only",
+                "--skip-factors",
+                "--skip-sync",
+                "--skip-quality",
+                "--skip-export",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    tasks = database.list_backfill_tasks()
+    assert len(tasks) == 10
+    assert {
+        (task["source_id"], task["dataset"])
+        for task in tasks
+    } == {
+        ("akshare", "trade_calendar"),
+        ("akshare", "daily_bar"),
+        ("akshare", "adj_factor"),
+        ("akshare", "price_limit"),
+        ("akshare", "trade_status"),
+        ("eastmoney", "daily_bar"),
+        ("eastmoney", "adj_factor"),
+        ("eastmoney", "price_limit"),
+        ("eastmoney", "trade_status"),
+        ("sina", "trade_calendar"),
+    }
+    assert {task["status"] for task in tasks} == {"success"}
+    with database.connect() as conn:
+        parameters_json = conn.execute(
+            """
+            select parameters_json
+            from qdc_meta.job_run
+            where job_type = 'daily_pipeline'
+            """
+        ).fetchone()[0]
+    parameters = json.loads(parameters_json)
+    assert parameters["source_ids"] == ["akshare", "eastmoney", "sina"]
+    assert parameters["daily_parallelism"] == 2
+
+
+def test_qdc_run_backfill_real_eastmoney_daily_bar_with_fake_akshare(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    def stock_zh_a_hist(symbol, period, start_date, end_date, adjust):
+        assert symbol == "600000"
+        assert period == "daily"
+        assert adjust == ""
+        return pd.DataFrame(
+            [
+                {
+                    "日期": "2026-05-10",
+                    "开盘": 9.0,
+                    "最高": 9.5,
+                    "最低": 8.8,
+                    "收盘": 9.1,
+                    "成交量": 1000,
+                    "成交额": 9100,
+                },
+                {
+                    "日期": "2026-05-11",
+                    "开盘": 10.0,
+                    "最高": 11.0,
+                    "最低": 9.8,
+                    "收盘": 10.5,
+                    "成交量": 2000,
+                    "成交额": 21000,
+                },
+            ]
+        )
+
+    monkeypatch.setitem(sys.modules, "akshare", SimpleNamespace(stock_zh_a_hist=stock_zh_a_hist))
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "plan-backfill",
+                "--dataset",
+                "daily_bar",
+                "--source-id",
+                "eastmoney",
+                "--start",
+                "2026-05-11",
+                "--end",
+                "2026-05-11",
+                "--symbols",
+                "SH600000",
+                "--batch-size",
+                "1",
+            ]
+        )
+        == 0
+    )
+    assert main(["--config", str(config_path), "run-backfill", "--dataset", "daily_bar"]) == 0
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    source_objects = database.list_source_objects(dataset="daily_bar", source_id="eastmoney")
+    assert {item["layer"] for item in source_objects} == {"bronze", "raw"}
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            select instrument, trade_date, open, close, pre_close, source_id
+            from qdc_silver.daily_bar
+            """
+        ).fetchone()
+    assert row == (
+        "SH600000",
+        datetime(2026, 5, 11).date(),
+        10.0,
+        10.5,
+        9.1,
+        "eastmoney",
+    )
 
 
 def test_qdc_daily_watch_outputs_backfill_progress(tmp_path: Path, capsys) -> None:
@@ -2533,12 +2959,13 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 4
+    assert len(tasks) == 5
     assert {task["source_id"] for task in tasks} == {
         "cninfo_announcement",
         "sse_announcement",
         "sina_finance_news",
         "eastmoney_roll_news",
+        "nbd_company_news",
     }
     assert {task["status"] for task in tasks} == {"success"}
     with database.connect() as conn:
@@ -2556,14 +2983,14 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
             """
         ).fetchone()
     assert crawl_run is not None
-    assert crawl_run[0:3] == ("success", 4, 4)
+    assert crawl_run[0:3] == ("success", 5, 5)
     assert json.loads(crawl_run[3])["command"] == "daily-pipeline"
     assert pipeline_job is not None
     parameters = json.loads(pipeline_job[0])
     assert parameters["crawl_documents"] is True
     assert parameters["crawl_status"] == "ok"
-    assert parameters["crawl_planned_count"] == 4
-    assert parameters["crawl_ran_count"] == 4
+    assert parameters["crawl_planned_count"] == 5
+    assert parameters["crawl_ran_count"] == 5
 
 
 def test_qdc_plan_backfill_rejects_unsupported_source(tmp_path: Path) -> None:

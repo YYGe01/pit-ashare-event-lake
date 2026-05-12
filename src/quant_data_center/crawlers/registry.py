@@ -98,6 +98,22 @@ DEFAULT_CRAWLER_SOURCES: dict[str, CrawlerSourceSpec] = {
             "explicit YYYY-MM-DD HH:MM publish time for the crawl date."
         ),
     ),
+    "nbd_company_news": CrawlerSourceSpec(
+        source_id="nbd_company_news",
+        source_type="news",
+        dataset="news",
+        base_url="https://www.nbd.com.cn/",
+        enabled=True,
+        robots_url="https://www.nbd.com.cn/robots.txt",
+        robots_status="manual_review_required",
+        terms_review_status="manual_review_required",
+        copyright_policy="metadata_only",
+        rate_limit_per_minute=20,
+        min_delay_seconds=3.0,
+        max_retry=3,
+        parser_version="nbd_company_news_v1",
+        notes="Manual/company-news metadata source for dated public article samples; body text is not retained.",
+    ),
 }
 
 CRAWL_DAILY_SOURCE_IDS = [
@@ -105,6 +121,7 @@ CRAWL_DAILY_SOURCE_IDS = [
     "sse_announcement",
     "sina_finance_news",
     "eastmoney_roll_news",
+    "nbd_company_news",
 ]
 
 

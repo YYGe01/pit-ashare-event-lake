@@ -37,13 +37,14 @@ DOCUMENT_DETAIL_LIMIT = 1000
 DAILY_DOCUMENT_DETAIL_LIMIT = 10000
 DAILY_DOCUMENT_SOURCE_IDS = {
     "announcement": ("cninfo_announcement", "sse_announcement"),
-    "news": ("sina_finance_news", "eastmoney_roll_news"),
+    "news": ("sina_finance_news", "eastmoney_roll_news", "nbd_company_news"),
 }
 DOCUMENT_SOURCE_PRIORITY = {
     "cninfo_announcement": 0,
     "sse_announcement": 1,
     "sina_finance_news": 0,
     "eastmoney_roll_news": 1,
+    "nbd_company_news": 2,
 }
 DOCUMENT_LOCAL_CONTENT_FIELDS = ("body_text", "content", "正文", "summary", "摘要")
 DOCUMENT_OBJECT_FIELDS = (
@@ -3218,8 +3219,11 @@ def _annotated_document_row(
     item = dict(row)
     source_id = str(item.get("source_id") or "")
     raw_object_id = str(item.get("raw_object_id") or raw_object_ids.get(source_id) or "")
+    metadata_object_id = str(raw_object_ids.get(source_id) or raw_object_id)
     if raw_object_id:
         item["raw_object_id"] = raw_object_id
+    if metadata_object_id:
+        item["metadata_object_id"] = metadata_object_id
     body_text = _first_document_text(item)
     pdf_object_id = str(item.get("pdf_object_id") or "")
     pdf_status = str(item.get("pdf_download_status") or "")
@@ -3230,10 +3234,10 @@ def _annotated_document_row(
     if body_text:
         item["content_status"] = "local_text"
         item["content_label"] = "已保存正文文本"
-        if raw_object_id:
-            item["local_object_id"] = raw_object_id
-            item["local_object_kind"] = "raw_json"
-            item["local_url"] = _source_object_url(raw_object_id)
+        if metadata_object_id:
+            item["local_object_id"] = metadata_object_id
+            item["local_object_kind"] = "metadata_records"
+            item["local_url"] = _source_object_url(metadata_object_id)
         return item
     if has_pdf:
         item["content_status"] = "local_pdf"
@@ -3242,13 +3246,13 @@ def _annotated_document_row(
         item["local_object_kind"] = "pdf"
         item["local_url"] = _source_object_url(pdf_object_id)
         return item
-    if raw_object_id:
+    if metadata_object_id:
         item["content_status"] = "local_metadata"
         pdf_note = f"，PDF 状态：{pdf_status}" if pdf_status else ""
         item["content_label"] = f"本地仅保存列表/元数据 JSON，未保存正文或 PDF{pdf_note}"
-        item["local_object_id"] = raw_object_id
-        item["local_object_kind"] = "raw_json"
-        item["local_url"] = _source_object_url(raw_object_id)
+        item["local_object_id"] = metadata_object_id
+        item["local_object_kind"] = "metadata_records"
+        item["local_url"] = _source_object_url(metadata_object_id)
         return item
     item["content_status"] = "missing_local_content"
     item["content_label"] = "本地未保存正文、PDF 或原始 JSON"

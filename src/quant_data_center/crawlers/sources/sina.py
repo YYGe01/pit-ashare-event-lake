@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import re
-import time
 from datetime import datetime
 from typing import Any
 
+from quant_data_center.crawlers.runtime import (
+    make_deadline,
+    raise_if_deadline_exceeded,
+    request_timeout,
+    sleep_with_deadline,
+)
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.database import QdcDatabase
 from quant_data_center.storage.objects import QdcObjectStore
 from quant_data_center.storage.silver import SilverStore
+from quant_data_center.utils.instruments import normalize_instrument
 
 
 SINA_ROLL_NEWS_URL = "https://feed.mix.sina.com.cn/api/roll/get"
@@ -34,19 +40,28 @@ class SinaFinanceNewsCrawler:
         page_size: int = 30,
         max_pages: int | None = None,
         min_delay_seconds: float = 3.0,
+        request_timeout_seconds: float = 30.0,
+        source_timeout_seconds: float | None = None,
+        instrument_filter: list[str] | None = None,
     ) -> dict[str, Any]:
         requests = __import__("requests")
+        deadline = make_deadline(source_timeout_seconds)
         pages = []
         provider_rows: list[dict[str, Any]] = []
         observed_at = _timestamp()
         page_count = max_pages or 1
         for page_num in range(1, page_count + 1):
+            raise_if_deadline_exceeded(deadline, source_id=source_id)
             params = _query_params(page_num=page_num, page_size=page_size)
             response = requests.get(
                 SINA_ROLL_NEWS_URL,
                 headers=_headers(),
                 params=params,
-                timeout=30,
+                timeout=request_timeout(
+                    deadline=deadline,
+                    default_seconds=request_timeout_seconds,
+                    source_id=source_id,
+                ),
             )
             response.raise_for_status()
             body = response.json()
@@ -62,7 +77,11 @@ class SinaFinanceNewsCrawler:
                 }
             )
             if page_num < page_count and min_delay_seconds > 0:
-                time.sleep(min_delay_seconds)
+                sleep_with_deadline(
+                    min_delay_seconds,
+                    deadline=deadline,
+                    source_id=source_id,
+                )
 
         raw_object_id = self.objects.put_json(
             dataset="news",
@@ -76,9 +95,25 @@ class SinaFinanceNewsCrawler:
                     "crawl_date": crawl_date,
                     "page_size": page_size,
                     "max_pages": max_pages,
+                    "instrument_filter": instrument_filter or [],
                 },
                 "pages": pages,
             },
+        )
+        bronze_object_id = self.objects.put_bronze_parquet(
+            dataset="news",
+            source_id=source_id,
+            partition_value=crawl_date,
+            stem=f"sina_finance_news_{crawl_date}",
+            records=provider_rows,
+        )
+        instrument_hints = self._instrument_hints(instrument_filter=instrument_filter)
+        records = _normalize_news(
+            source_id=source_id,
+            rows=provider_rows,
+            instrument_hints=instrument_hints,
+            observed_at=observed_at,
+            raw_object_id=raw_object_id,
         )
         document_bundle = self.objects.put_document_bundle(
             dataset="news",
@@ -90,23 +125,11 @@ class SinaFinanceNewsCrawler:
                 "url": SINA_ROLL_NEWS_URL,
                 "accepted_date_rule": "publish_time parsed from ctime/time/datetime/date is required; publish_date is derived from publish_time, not crawl_date",
                 "copyright_policy": "metadata_only",
+                "instrument_filter": instrument_filter or [],
                 "raw_object_id": raw_object_id,
+                "provider_record_count": len(provider_rows),
             },
-            records=provider_rows,
-        )
-        bronze_object_id = self.objects.put_bronze_parquet(
-            dataset="news",
-            source_id=source_id,
-            partition_value=crawl_date,
-            stem=f"sina_finance_news_{crawl_date}",
-            records=provider_rows,
-        )
-        records = _normalize_news(
-            source_id=source_id,
-            rows=provider_rows,
-            instrument_hints=self._instrument_hints(),
-            observed_at=observed_at,
-            raw_object_id=raw_object_id,
+            records=records,
         )
         row_count = self.silver.upsert_news(records)
         return {
@@ -124,7 +147,16 @@ class SinaFinanceNewsCrawler:
             "observed_at": observed_at,
         }
 
-    def _instrument_hints(self) -> list[dict[str, str]]:
+    def _instrument_hints(
+        self,
+        *,
+        instrument_filter: list[str] | None = None,
+    ) -> list[dict[str, str]]:
+        normalized_filter = (
+            {normalize_instrument(value) for value in instrument_filter}
+            if instrument_filter
+            else None
+        )
         with self.database.connect() as conn:
             rows = conn.execute(
                 """
@@ -134,6 +166,8 @@ class SinaFinanceNewsCrawler:
                 order by instrument
                 """
             ).fetchall()
+        if normalized_filter is not None:
+            rows = [row for row in rows if str(row[0]) in normalized_filter]
         return [
             {
                 "instrument": str(instrument),

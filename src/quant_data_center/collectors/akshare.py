@@ -702,8 +702,257 @@ class AkshareSilverCollector:
         )
 
 
+class EastmoneySilverCollector(AkshareSilverCollector):
+    """Collect core A-share daily datasets from Eastmoney endpoints through AkShare."""
+
+    def collect_daily_bar(
+        self,
+        *,
+        source_id: str,
+        start_date: str,
+        end_date: str,
+        instruments: list[str],
+        adjust: str = "",
+        lookback_days: int = 14,
+    ) -> int:
+        if not instruments:
+            raise ValueError("daily_bar backfill requires symbol batches")
+        akshare = __import__("akshare")
+        start_iso = _date_to_iso(start_date)
+        end_iso = _date_to_iso(end_date)
+        query_start = _date_to_compact(
+            datetime.strptime(start_iso, "%Y-%m-%d").date() - timedelta(days=lookback_days)
+        )
+        end_compact = end_iso.replace("-", "")
+        records = []
+        for raw_instrument in instruments:
+            instrument = normalize_instrument(raw_instrument)
+            provider_records = _eastmoney_hist_records(
+                akshare=akshare,
+                instrument=instrument,
+                start_date=query_start,
+                end_date=end_compact,
+                adjust=adjust,
+            )
+            self._write_source_objects(
+                dataset="daily_bar",
+                source_id=source_id,
+                partition_value=start_iso,
+                stem=f"{instrument}_{query_start}_{end_compact}",
+                raw_payload={
+                    "function": "stock_zh_a_hist",
+                    "params": {
+                        "instrument": instrument,
+                        "start_date": query_start,
+                        "end_date": end_compact,
+                        "adjust": adjust,
+                    },
+                    "records": provider_records,
+                },
+                bronze_records=provider_records,
+            )
+            rows = sorted(provider_records, key=_provider_trade_date)
+            for index, row in enumerate(rows):
+                trade_date = _provider_trade_date(row)
+                if trade_date < start_iso or trade_date > end_iso:
+                    continue
+                open_price = _as_float(_first_present(row, ("open", "开盘")))
+                close = _as_float(_first_present(row, ("close", "收盘")))
+                volume = _as_float(_first_present(row, ("volume", "成交量")))
+                amount = _as_float(_first_present(row, ("amount", "成交额")))
+                prev_close = (
+                    _as_float(_first_present(rows[index - 1], ("close", "收盘")))
+                    if index > 0
+                    else None
+                )
+                records.append(
+                    {
+                        "trade_date": trade_date,
+                        "instrument": instrument,
+                        "open": open_price,
+                        "high": _as_float(_first_present(row, ("high", "最高"))),
+                        "low": _as_float(_first_present(row, ("low", "最低"))),
+                        "close": close,
+                        "pre_close": prev_close,
+                        "volume": volume,
+                        "amount": amount,
+                        "vwap": _safe_vwap(amount=amount, volume=volume),
+                        "source_id": source_id,
+                    }
+                )
+        return self.silver.upsert_daily_bar(records)
+
+    def collect_adj_factor(
+        self,
+        *,
+        source_id: str,
+        start_date: str,
+        end_date: str,
+        instruments: list[str],
+    ) -> int:
+        if not instruments:
+            raise ValueError("adj_factor backfill requires symbol batches")
+        akshare = __import__("akshare")
+        start_iso = _date_to_iso(start_date)
+        end_iso = _date_to_iso(end_date)
+        start_compact = start_iso.replace("-", "")
+        end_compact = end_iso.replace("-", "")
+        records = []
+        for raw_instrument in instruments:
+            instrument = normalize_instrument(raw_instrument)
+            raw_records = _eastmoney_hist_records(
+                akshare=akshare,
+                instrument=instrument,
+                start_date=start_compact,
+                end_date=end_compact,
+                adjust="",
+            )
+            qfq_records = _eastmoney_hist_records(
+                akshare=akshare,
+                instrument=instrument,
+                start_date=start_compact,
+                end_date=end_compact,
+                adjust="qfq",
+            )
+            self._write_source_objects(
+                dataset="adj_factor",
+                source_id=source_id,
+                partition_value=start_iso,
+                stem=f"{instrument}_{start_compact}_{end_compact}",
+                raw_payload={
+                    "function": "stock_zh_a_hist",
+                    "derivation": "qfq_close_div_unadjusted_close",
+                    "params": {
+                        "instrument": instrument,
+                        "start_date": start_compact,
+                        "end_date": end_compact,
+                        "adjust_pair": ["", "qfq"],
+                    },
+                    "raw_records": raw_records,
+                    "qfq_records": qfq_records,
+                },
+                bronze_records=_combine_adjustment_bronze(
+                    raw_records=raw_records,
+                    qfq_records=qfq_records,
+                ),
+            )
+            qfq_by_date = {_provider_trade_date(row): row for row in qfq_records}
+            for raw_row in raw_records:
+                trade_date = _provider_trade_date(raw_row)
+                if trade_date < start_iso or trade_date > end_iso:
+                    continue
+                qfq_row = qfq_by_date.get(trade_date)
+                if qfq_row is None:
+                    continue
+                raw_close = _as_float(_first_present(raw_row, ("close", "收盘")))
+                qfq_close = _as_float(_first_present(qfq_row, ("close", "收盘")))
+                if raw_close in (None, 0) or qfq_close is None:
+                    continue
+                records.append(
+                    {
+                        "trade_date": trade_date,
+                        "instrument": instrument,
+                        "adj_factor": round(qfq_close / raw_close, 10),
+                        "factor_type": "eastmoney_qfq_close_ratio_v0_inferred",
+                        "source_id": source_id,
+                    }
+                )
+        return self.silver.upsert_adj_factor(records)
+
+    def collect_price_limit(
+        self,
+        *,
+        source_id: str,
+        start_date: str,
+        end_date: str,
+        instruments: list[str],
+        adjust: str = "",
+        lookback_days: int = 14,
+    ) -> int:
+        if not instruments:
+            raise ValueError("price_limit backfill requires symbol batches")
+        akshare = __import__("akshare")
+        start_iso = _date_to_iso(start_date)
+        end_iso = _date_to_iso(end_date)
+        query_start = _date_to_compact(
+            datetime.strptime(start_iso, "%Y-%m-%d").date() - timedelta(days=lookback_days)
+        )
+        end_compact = end_iso.replace("-", "")
+        records = []
+        for raw_instrument in instruments:
+            instrument = normalize_instrument(raw_instrument)
+            provider_records = _eastmoney_hist_records(
+                akshare=akshare,
+                instrument=instrument,
+                start_date=query_start,
+                end_date=end_compact,
+                adjust=adjust,
+            )
+            self._write_source_objects(
+                dataset="price_limit",
+                source_id=source_id,
+                partition_value=start_iso,
+                stem=f"{instrument}_{query_start}_{end_compact}",
+                raw_payload={
+                    "function": "stock_zh_a_hist",
+                    "derivation": "prev_close_rule_based_limit",
+                    "params": {
+                        "instrument": instrument,
+                        "start_date": query_start,
+                        "end_date": end_compact,
+                        "adjust": adjust,
+                    },
+                    "records": provider_records,
+                },
+                bronze_records=provider_records,
+            )
+            rows = sorted(provider_records, key=_provider_trade_date)
+            rate, limit_rule = _limit_rate(instrument)
+            for index, row in enumerate(rows):
+                trade_date = _provider_trade_date(row)
+                if trade_date < start_iso or trade_date > end_iso or index == 0:
+                    continue
+                prev_close = _as_float(_first_present(rows[index - 1], ("close", "收盘")))
+                if prev_close is None:
+                    continue
+                records.append(
+                    {
+                        "trade_date": trade_date,
+                        "instrument": instrument,
+                        "limit_up": round(prev_close * (1 + rate), 2),
+                        "limit_down": round(prev_close * (1 - rate), 2),
+                        "prev_close": prev_close,
+                        "limit_rule": limit_rule,
+                        "source_id": source_id,
+                    }
+                )
+        return self.silver.upsert_price_limit(records)
+
+
 def _records(df: Any) -> list[dict[str, Any]]:
     return [{str(key): _json_safe(value) for key, value in row.items()} for row in df.to_dict("records")]
+
+
+def _eastmoney_hist_records(
+    *,
+    akshare: Any,
+    instrument: str,
+    start_date: str,
+    end_date: str,
+    adjust: str,
+) -> list[dict[str, Any]]:
+    df = akshare.stock_zh_a_hist(
+        symbol=instrument_to_symbol(instrument),
+        period="daily",
+        start_date=start_date,
+        end_date=end_date,
+        adjust=adjust,
+    )
+    return _records(df)
+
+
+def _provider_trade_date(row: dict[str, Any]) -> str:
+    return _date_to_iso(_first_present(row, ("date", "日期", "trade_date")))
 
 
 def _first_present(record: dict[str, Any], names: tuple[str, ...]) -> Any:

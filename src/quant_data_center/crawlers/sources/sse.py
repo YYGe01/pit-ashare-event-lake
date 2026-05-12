@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import re
-import time
 from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin
 
+from quant_data_center.crawlers.runtime import (
+    make_deadline,
+    raise_if_deadline_exceeded,
+    request_timeout,
+    sleep_with_deadline,
+)
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.objects import QdcObjectStore
 from quant_data_center.storage.silver import SilverStore
@@ -39,14 +44,18 @@ class SseAnnouncementCrawler:
         download_pdfs: bool = True,
         pdf_limit: int | None = None,
         instrument_filter: list[str] | None = None,
+        request_timeout_seconds: float = 30.0,
+        source_timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         requests = __import__("requests")
+        deadline = make_deadline(source_timeout_seconds)
         pages = []
         announcements = []
         observed_at = _timestamp()
         page_count = 1
         page_num = 1
         while page_num <= page_count:
+            raise_if_deadline_exceeded(deadline, source_id=source_id)
             params = _query_params(
                 crawl_date=crawl_date,
                 page_num=page_num,
@@ -56,7 +65,11 @@ class SseAnnouncementCrawler:
                 SSE_ANNOUNCEMENT_URL,
                 headers=_headers(),
                 params=params,
-                timeout=30,
+                timeout=request_timeout(
+                    deadline=deadline,
+                    default_seconds=request_timeout_seconds,
+                    source_id=source_id,
+                ),
             )
             response.raise_for_status()
             body = response.json()
@@ -77,7 +90,11 @@ class SseAnnouncementCrawler:
             if max_pages is not None and page_num > max_pages:
                 break
             if page_num <= page_count and min_delay_seconds > 0:
-                time.sleep(min_delay_seconds)
+                sleep_with_deadline(
+                    min_delay_seconds,
+                    deadline=deadline,
+                    source_id=source_id,
+                )
 
         raw_object_id = self.objects.put_json(
             dataset="announcement",
@@ -120,6 +137,8 @@ class SseAnnouncementCrawler:
             enabled=download_pdfs,
             pdf_limit=pdf_limit,
             min_delay_seconds=min_delay_seconds,
+            request_timeout_seconds=45.0,
+            deadline=deadline,
         )
         document_bundle = self.objects.put_document_bundle(
             dataset="announcement",
@@ -277,6 +296,8 @@ def _attach_pdf_objects(
     enabled: bool,
     pdf_limit: int | None,
     min_delay_seconds: float,
+    request_timeout_seconds: float,
+    deadline: float | None,
 ) -> dict[str, int]:
     stats = {"downloaded": 0, "failed": 0, "skipped": 0}
     attempted = 0
@@ -295,7 +316,11 @@ def _attach_pdf_objects(
             stats["skipped"] += 1
             continue
         if attempted > 0 and min_delay_seconds > 0:
-            time.sleep(min_delay_seconds)
+            sleep_with_deadline(
+                min_delay_seconds,
+                deadline=deadline,
+                source_id=source_id,
+            )
         attempted += 1
         result = _download_pdf(
             requests_module=requests_module,
@@ -304,6 +329,8 @@ def _attach_pdf_objects(
             crawl_date=crawl_date,
             record=record,
             pdf_url=pdf_url,
+            request_timeout_seconds=request_timeout_seconds,
+            deadline=deadline,
         )
         _apply_pdf_result(record, result)
         if result["pdf_download_status"] == "success":
@@ -321,12 +348,19 @@ def _download_pdf(
     crawl_date: str,
     record: dict[str, Any],
     pdf_url: str,
+    request_timeout_seconds: float,
+    deadline: float | None,
 ) -> dict[str, Any]:
     try:
+        raise_if_deadline_exceeded(deadline, source_id=source_id)
         response = requests_module.get(
             pdf_url,
             headers={**_headers(), "Accept": "application/pdf,*/*"},
-            timeout=45,
+            timeout=request_timeout(
+                deadline=deadline,
+                default_seconds=request_timeout_seconds,
+                source_id=source_id,
+            ),
         )
         response.raise_for_status()
         content = bytes(response.content)

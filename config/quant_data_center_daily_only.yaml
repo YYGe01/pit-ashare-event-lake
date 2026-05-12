@@ -24,11 +24,19 @@ policy:
 daily_pipeline:
   universe: all_a
   source_id: akshare
+  source_ids:
+    - akshare
+    - eastmoney
+    - sina
   batch_size: 50
+  daily_parallelism: 8
   export_start: 2026-05-12
   market_name: all_a_daily
   crawl_documents: true
   crawl_page_size: 30
+  crawl_parallelism: 4
+  crawl_request_timeout_seconds: 30
+  crawl_source_timeout_seconds: 180
   skip_stock_basic_refresh: false
   skip_crawl_pdf_download: false
   skip_factors: false

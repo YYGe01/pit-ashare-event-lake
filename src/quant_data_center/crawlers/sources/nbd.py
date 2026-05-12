@@ -1,4 +1,4 @@
-"""Eastmoney rolling-news crawler used as a public metadata-only source."""
+"""NBD company-news crawler used as an optional metadata-only source."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import html
 import re
 from datetime import datetime
 from typing import Any
+from urllib.parse import urljoin
 
 from quant_data_center.crawlers.runtime import (
     make_deadline,
@@ -20,13 +21,15 @@ from quant_data_center.storage.silver import SilverStore
 from quant_data_center.utils.instruments import normalize_instrument
 
 
-EASTMONEY_ROLL_NEWS_URL_TEMPLATE = "https://roll.eastmoney.com/default_{page_num}.html"
-EASTMONEY_REFERER = "https://roll.eastmoney.com/"
-PARSER_VERSION = "eastmoney_roll_news_v1"
+NBD_ROOT = "https://www.nbd.com.cn/"
+NBD_COLUMN_URLS = (
+    "https://www.nbd.com.cn/columns/1285/",
+)
+PARSER_VERSION = "nbd_company_news_v1"
 
 
-class EastmoneyRollNewsCrawler:
-    """Fetch Eastmoney rolling-news metadata and map titles to known stocks."""
+class NbdCompanyNewsCrawler:
+    """Fetch NBD public list-page metadata and map titles to known stocks."""
 
     def __init__(self, settings: QdcSettings) -> None:
         self.settings = settings
@@ -52,34 +55,42 @@ class EastmoneyRollNewsCrawler:
         provider_rows: list[dict[str, Any]] = []
         observed_at = _timestamp()
         page_count = max_pages or 1
-        for page_num in range(1, page_count + 1):
-            raise_if_deadline_exceeded(deadline, source_id=source_id)
-            url = EASTMONEY_ROLL_NEWS_URL_TEMPLATE.format(page_num=page_num)
-            response = requests.get(
-                url,
-                headers=_headers(),
-                timeout=request_timeout(
-                    deadline=deadline,
-                    default_seconds=request_timeout_seconds,
-                    source_id=source_id,
-                ),
-            )
-            response.raise_for_status()
-            rows = _extract_rows(
-                text=response.text,
-                limit=page_size,
-            )
-            provider_rows.extend(rows)
-            pages.append(
-                {
-                    "page_num": page_num,
-                    "url": url,
-                    "status_code": response.status_code,
-                    "news_count": len(rows),
-                    "items": rows,
-                }
-            )
-            if page_num < page_count and min_delay_seconds > 0:
+        for column_url in NBD_COLUMN_URLS:
+            for page_num in range(1, page_count + 1):
+                raise_if_deadline_exceeded(deadline, source_id=source_id)
+                url = _column_page_url(column_url=column_url, page_num=page_num)
+                response = requests.get(
+                    url,
+                    headers=_headers(),
+                    timeout=request_timeout(
+                        deadline=deadline,
+                        default_seconds=request_timeout_seconds,
+                        source_id=source_id,
+                    ),
+                )
+                response.raise_for_status()
+                rows = [
+                    row
+                    for row in _extract_rows(text=response.text, limit=max(200, page_size * 5))
+                    if _row_publish_date(row) == crawl_date
+                ][:page_size]
+                provider_rows.extend(rows)
+                pages.append(
+                    {
+                        "page_num": page_num,
+                        "url": url,
+                        "status_code": response.status_code,
+                        "news_count": len(rows),
+                        "items": rows,
+                    }
+                )
+                if page_num < page_count and min_delay_seconds > 0:
+                    sleep_with_deadline(
+                        min_delay_seconds,
+                        deadline=deadline,
+                        source_id=source_id,
+                    )
+            if min_delay_seconds > 0:
                 sleep_with_deadline(
                     min_delay_seconds,
                     deadline=deadline,
@@ -90,13 +101,14 @@ class EastmoneyRollNewsCrawler:
             dataset="news",
             source_id=source_id,
             partition_value=crawl_date,
-            stem=f"eastmoney_roll_news_{crawl_date}",
+            stem=f"nbd_company_news_{crawl_date}",
             payload={
-                "function": "eastmoney_roll_news_html",
+                "function": "nbd_company_news_columns",
                 "params": {
                     "crawl_date": crawl_date,
                     "page_size": page_size,
                     "max_pages": max_pages,
+                    "column_urls": list(NBD_COLUMN_URLS),
                     "instrument_filter": instrument_filter or [],
                 },
                 "pages": pages,
@@ -106,7 +118,7 @@ class EastmoneyRollNewsCrawler:
             dataset="news",
             source_id=source_id,
             partition_value=crawl_date,
-            stem=f"eastmoney_roll_news_{crawl_date}",
+            stem=f"nbd_company_news_{crawl_date}",
             records=provider_rows,
         )
         instrument_hints = self._instrument_hints(instrument_filter=instrument_filter)
@@ -121,10 +133,10 @@ class EastmoneyRollNewsCrawler:
             dataset="news",
             source_id=source_id,
             partition_value=crawl_date,
-            stem=f"eastmoney_roll_news_{crawl_date}",
+            stem=f"nbd_company_news_{crawl_date}",
             manifest={
-                "function": "eastmoney_roll_news_html",
-                "accepted_date_rule": "publish_time in page HTML is required; publish_date is derived from publish_time, not crawl_date",
+                "function": "nbd_company_news_columns",
+                "accepted_date_rule": "publish_time parsed from NBD list pages is required; publish_date is derived from publish_time, not crawl_date",
                 "copyright_policy": "metadata_only",
                 "instrument_filter": instrument_filter or [],
                 "raw_object_id": raw_object_id,
@@ -179,39 +191,92 @@ class EastmoneyRollNewsCrawler:
         ]
 
 
+def _column_page_url(*, column_url: str, page_num: int) -> str:
+    if page_num <= 1:
+        return column_url
+    return urljoin(column_url, f"page/{page_num}/")
+
+
+def _row_publish_date(row: dict[str, Any]) -> str | None:
+    publish_time = _clean_text(row.get("publish_time"))
+    if publish_time:
+        return publish_time[:10]
+    return _clean_text(row.get("publish_date"))
+
+
 def _headers() -> dict[str, str]:
     return {
         "User-Agent": "Mozilla/5.0 QDC-Crawler/0.1 (+local research)",
-        "Referer": EASTMONEY_REFERER,
+        "Referer": NBD_ROOT,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
 
 
 def _extract_rows(*, text: str, limit: int) -> list[dict[str, str]]:
+    rows = _extract_full_timestamp_rows(text=text)
+    rows.extend(_extract_column_rows(text=text))
+    deduped: dict[str, dict[str, str]] = {}
+    for row in rows:
+        source_record_id = _article_id(row.get("url")) or row.get("url") or row.get("title")
+        if source_record_id:
+            deduped[source_record_id] = row
+        if len(deduped) >= limit:
+            break
+    return list(deduped.values())
+
+
+def _extract_full_timestamp_rows(*, text: str) -> list[dict[str, str]]:
     rows = []
     pattern = re.compile(
-        r"<li>\s*<span>\s*(?P<publish_time>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*</span>"
-        r"\s*\[<a[^>]*>(?P<category>.*?)</a>\]"
-        r"\s*<a\s+href=\"(?P<url>[^\"]+)\"\s+title=\"(?P<title>[^\"]+)\"",
+        r"<li[^>]*>.*?<a\s+href=\"(?P<url>[^\"]*?/articles/(?P<date>\d{4}-\d{2}-\d{2})/\d+\.html)\"[^>]*(?:title=\"(?P<title_attr>[^\"]*)\")?[^>]*>.*?</a>\s*<span>\s*(?P<publish_time>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s*</span>",
         flags=re.IGNORECASE | re.DOTALL,
     )
     for match in pattern.finditer(text):
+        title = _clean_text(html.unescape(match.group("title_attr") or ""))
+        if not title:
+            title = _title_from_anchor(match.group(0))
         publish_time = _clean_text(match.group("publish_time"))
-        if not publish_time:
-            continue
-        rows.append(
-            {
-                "publish_time": f"{publish_time}:00"
-                if len(publish_time) == 16
-                else publish_time,
-                "publish_date": publish_time[:10],
-                "category": _clean_text(_strip_tags(match.group("category"))) or "",
-                "url": html.unescape(match.group("url")),
-                "title": _clean_text(html.unescape(match.group("title"))) or "",
-            }
-        )
-        if len(rows) >= limit:
-            break
+        url = _absolute_url(match.group("url"))
+        if title and publish_time and url:
+            rows.append(
+                {
+                    "publish_date": publish_time[:10],
+                    "publish_time": publish_time,
+                    "url": url,
+                    "title": title,
+                }
+            )
+    return rows
+
+
+def _extract_column_rows(*, text: str) -> list[dict[str, str]]:
+    rows = []
+    block_pattern = re.compile(
+        r"<p\s+class=\"u-channeltime\">\s*(?P<date>\d{4}-\d{2}-\d{2})\s*</p>(?P<body>.*?)(?=<p\s+class=\"u-channeltime\">|</div>\s*<div\s+class=\"m-list\"|</body>|\Z)",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    item_pattern = re.compile(
+        r"<li[^>]*class=\"u-news-title\"[^>]*>.*?<a\s+href=\"(?P<url>[^\"]*?/articles/(?P<url_date>\d{4}-\d{2}-\d{2})/\d+\.html)\"[^>]*(?:title=\"(?P<title_attr>[^\"]*)\")?[^>]*>(?P<title_body>.*?)</a>\s*<span>\s*(?P<time>\d{2}:\d{2}:\d{2})\s*</span>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for block in block_pattern.finditer(text):
+        fallback_date = _clean_text(block.group("date"))
+        for match in item_pattern.finditer(block.group("body")):
+            title = _clean_text(html.unescape(match.group("title_attr") or ""))
+            if not title:
+                title = _clean_text(_strip_tags(html.unescape(match.group("title_body"))))
+            publish_date = _clean_text(match.group("url_date")) or fallback_date
+            publish_time = f"{publish_date} {_clean_text(match.group('time'))}"
+            url = _absolute_url(match.group("url"))
+            if title and publish_date and publish_time and url:
+                rows.append(
+                    {
+                        "publish_date": publish_date,
+                        "publish_time": publish_time,
+                        "url": url,
+                        "title": title,
+                    }
+                )
     return rows
 
 
@@ -233,7 +298,7 @@ def _normalize_news(
         url = _clean_text(row.get("url"))
         source_record_id = _article_id(url) or url or title
         for instrument in _match_instruments(title=title, url=url, hints=instrument_hints):
-            news_id = f"eastmoney_{_slug(source_record_id)}_{instrument}"
+            news_id = f"nbd_{_slug(source_record_id)}_{instrument}"
             records[news_id] = {
                 "news_id": news_id,
                 "publish_date": publish_date,
@@ -267,10 +332,26 @@ def _match_instruments(
     return sorted(set(matched))
 
 
+def _title_from_anchor(value: str) -> str | None:
+    span_match = re.search(r"<span>\s*(?P<title>.*?)\s*</span>", value, flags=re.DOTALL)
+    if span_match:
+        return _clean_text(_strip_tags(html.unescape(span_match.group("title"))))
+    anchor_match = re.search(r"<a[^>]*>(?P<title>.*?)</a>", value, flags=re.DOTALL)
+    if anchor_match:
+        return _clean_text(_strip_tags(html.unescape(anchor_match.group("title"))))
+    return None
+
+
+def _absolute_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    return urljoin(NBD_ROOT, html.unescape(value))
+
+
 def _article_id(url: str | None) -> str | None:
     if not url:
         return None
-    match = re.search(r"/a/(\d+)\.html", url)
+    match = re.search(r"/articles/\d{4}-\d{2}-\d{2}/(\d+)\.html", url)
     return match.group(1) if match else None
 
 

@@ -7,16 +7,18 @@ import json
 import math
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from quant_data_center.collectors.akshare import AkshareSilverCollector
+from quant_data_center.collectors.akshare import AkshareSilverCollector, EastmoneySilverCollector
 from quant_data_center.console import run_console
 from quant_data_center.crawlers.registry import crawler_source_spec, enabled_daily_source_specs
 from quant_data_center.crawlers.sources.cninfo import CninfoAnnouncementCrawler
 from quant_data_center.crawlers.sources.eastmoney import EastmoneyRollNewsCrawler
+from quant_data_center.crawlers.sources.nbd import NbdCompanyNewsCrawler
 from quant_data_center.crawlers.sources.sina import SinaFinanceNewsCrawler
 from quant_data_center.crawlers.sources.sse import SseAnnouncementCrawler
 from quant_data_center.exports.qlib import QlibExporter, QlibProviderVerifier
@@ -49,6 +51,17 @@ DAILY_DATASETS = [
     "price_limit",
     "trade_status",
 ]
+EASTMONEY_DAILY_DATASETS = [
+    "daily_bar",
+    "adj_factor",
+    "price_limit",
+    "trade_status",
+]
+SINA_DAILY_DATASETS = ["trade_calendar"]
+DEFAULT_CRAWL_SOURCE_PARALLELISM = 4
+DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS = 30.0
+DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS = 180.0
+DEFAULT_DAILY_TASK_PARALLELISM = 1
 
 
 def default_config_path() -> Path:
@@ -537,6 +550,9 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
         download_pdfs=not bool(args.skip_pdf_download),
         pdf_limit=args.pdf_limit,
         instrument_filter=parse_symbols(args.symbols),
+        parallelism=args.parallel_sources,
+        request_timeout_seconds=args.request_timeout_seconds,
+        source_timeout_seconds=args.source_timeout_seconds,
         watch=False,
     )
     run_id = database.record_crawl_run(
@@ -557,6 +573,9 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
             "download_pdfs": not bool(args.skip_pdf_download),
             "pdf_limit": args.pdf_limit,
             "instrument_filter": parse_symbols(args.symbols),
+            "parallel_sources": args.parallel_sources,
+            "request_timeout_seconds": args.request_timeout_seconds,
+            "source_timeout_seconds": args.source_timeout_seconds,
         },
     )
     _print_json(
@@ -612,6 +631,9 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         download_pdfs=not bool(args.skip_pdf_download),
         pdf_limit=args.pdf_limit,
         instrument_filter=parse_symbols(args.symbols),
+        parallelism=args.parallel_sources,
+        request_timeout_seconds=args.request_timeout_seconds,
+        source_timeout_seconds=args.source_timeout_seconds,
         watch=False,
     )
     status = "partial" if has_failures or len(selected_tasks) < len(tasks) else "ok"
@@ -633,6 +655,9 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
             "download_pdfs": not bool(args.skip_pdf_download),
             "pdf_limit": args.pdf_limit,
             "instrument_filter": parse_symbols(args.symbols),
+            "parallel_sources": args.parallel_sources,
+            "request_timeout_seconds": args.request_timeout_seconds,
+            "source_timeout_seconds": args.source_timeout_seconds,
         },
     )
     _print_json(
@@ -708,75 +733,148 @@ def _run_crawl_tasks(
     download_pdfs: bool,
     pdf_limit: int | None,
     instrument_filter: list[str] | None = None,
+    parallelism: int = DEFAULT_CRAWL_SOURCE_PARALLELISM,
+    request_timeout_seconds: float = DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
+    source_timeout_seconds: float | None = DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
     watch: bool = False,
 ) -> tuple[list[dict[str, Any]], bool]:
-    results = []
-    has_failures = False
     total_tasks = len(tasks)
-    for index, task in enumerate(tasks, start=1):
-        task_id = str(task["task_id"])
-        source_id = str(task["source_id"])
-        dataset = str(task["dataset"])
-        crawl_date = str(task["crawl_date"])
+    if total_tasks == 0:
+        return [], False
+    max_workers = max(1, min(int(parallelism or 1), total_tasks))
+    task_items = list(enumerate(tasks, start=1))
+    if max_workers == 1:
+        ordered = [
+            _run_one_crawl_task(
+                settings=settings,
+                database=database,
+                task=task,
+                index=index,
+                total_tasks=total_tasks,
+                control_only=control_only,
+                page_size=page_size,
+                max_pages=max_pages,
+                download_pdfs=download_pdfs,
+                pdf_limit=pdf_limit,
+                instrument_filter=instrument_filter,
+                request_timeout_seconds=request_timeout_seconds,
+                source_timeout_seconds=source_timeout_seconds,
+                watch=watch,
+            )
+            for index, task in task_items
+        ]
+    else:
+        ordered = []
         _watch_print(
             watch,
-            f"{_watch_task_prefix(phase='CRAWL', index=index, total=total_tasks)} RUNNING task_id={task_id} source={source_id} dataset={dataset} date={crawl_date}",
+            f"{_watch_task_prefix(phase='CRAWL', index=0, total=total_tasks)} PARALLEL sources={max_workers} request_timeout={request_timeout_seconds}s source_timeout={source_timeout_seconds}s",
         )
-        database.mark_crawl_task_running(task_id)
-        try:
-            if control_only:
-                result = {"document_count": 0, "raw_object_count": 0}
-            else:
-                result = _run_real_crawl_task(
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(
+                    _run_one_crawl_task,
                     settings=settings,
+                    database=database,
                     task=task,
+                    index=index,
+                    total_tasks=total_tasks,
+                    control_only=control_only,
                     page_size=page_size,
                     max_pages=max_pages,
                     download_pdfs=download_pdfs,
                     pdf_limit=pdf_limit,
                     instrument_filter=instrument_filter,
+                    request_timeout_seconds=request_timeout_seconds,
+                    source_timeout_seconds=source_timeout_seconds,
+                    watch=watch,
                 )
-            database.finish_crawl_task(task_id=task_id, status="success")
-            results.append(
-                {
-                    "task_id": task_id,
-                    "source_id": task["source_id"],
-                    "dataset": task["dataset"],
-                    "status": "success",
-                    "document_count": int(result.get("document_count", 0)),
-                    "raw_object_count": int(result.get("raw_object_count", 0)),
-                    "provider_record_count": int(result.get("provider_record_count", 0)),
-                    "pdf_downloaded_count": int(result.get("pdf_downloaded_count", 0)),
-                    "pdf_failed_count": int(result.get("pdf_failed_count", 0)),
-                    "pdf_skipped_count": int(result.get("pdf_skipped_count", 0)),
-                }
-            )
-            _watch_print(
-                watch,
-                f"{_watch_task_prefix(phase='CRAWL', index=index, total=total_tasks)} OK task_id={task_id} docs={int(result.get('document_count', 0))} raws={int(result.get('raw_object_count', 0))}",
-            )
-        except Exception as exc:
-            has_failures = True
-            error_message = str(exc)[:1000]
-            database.finish_crawl_task(
-                task_id=task_id,
-                status="failed",
-                last_error=error_message,
-            )
-            results.append(
-                {
-                    "task_id": task_id,
-                    "source_id": task["source_id"],
-                    "dataset": task["dataset"],
-                    "status": "failed",
-                    "error_message": error_message,
-                }
-            )
-            _watch_print(
-                watch,
-                f"{_watch_task_prefix(phase='CRAWL', index=index, total=total_tasks)} FAIL task_id={task_id} error={error_message[:300]}",
-            )
+                for index, task in task_items
+            ]
+            ordered = [future.result() for future in as_completed(futures)]
+    ordered.sort(key=lambda item: item[0])
+    results = [item[1] for item in ordered]
+    has_failures = any(item["status"] == "failed" for item in results)
     return results, has_failures
+
+
+def _run_one_crawl_task(
+    *,
+    settings: QdcSettings,
+    database: QdcDatabase,
+    task: dict[str, Any],
+    index: int,
+    total_tasks: int,
+    control_only: bool,
+    page_size: int,
+    max_pages: int | None,
+    download_pdfs: bool,
+    pdf_limit: int | None,
+    instrument_filter: list[str] | None,
+    request_timeout_seconds: float,
+    source_timeout_seconds: float | None,
+    watch: bool,
+) -> tuple[int, dict[str, Any]]:
+    task_id = str(task["task_id"])
+    source_id = str(task["source_id"])
+    dataset = str(task["dataset"])
+    crawl_date = str(task["crawl_date"])
+    _watch_print(
+        watch,
+        f"{_watch_task_prefix(phase='CRAWL', index=index, total=total_tasks)} RUNNING task_id={task_id} source={source_id} dataset={dataset} date={crawl_date}",
+    )
+    database.mark_crawl_task_running(task_id)
+    try:
+        if control_only:
+            result = {"document_count": 0, "raw_object_count": 0}
+        else:
+            result = _run_real_crawl_task(
+                settings=settings,
+                task=task,
+                page_size=page_size,
+                max_pages=max_pages,
+                download_pdfs=download_pdfs,
+                pdf_limit=pdf_limit,
+                instrument_filter=instrument_filter,
+                request_timeout_seconds=request_timeout_seconds,
+                source_timeout_seconds=source_timeout_seconds,
+            )
+        database.finish_crawl_task(task_id=task_id, status="success")
+        output = {
+            "task_id": task_id,
+            "source_id": task["source_id"],
+            "dataset": task["dataset"],
+            "status": "success",
+            "document_count": int(result.get("document_count", 0)),
+            "raw_object_count": int(result.get("raw_object_count", 0)),
+            "provider_record_count": int(result.get("provider_record_count", 0)),
+            "pdf_downloaded_count": int(result.get("pdf_downloaded_count", 0)),
+            "pdf_failed_count": int(result.get("pdf_failed_count", 0)),
+            "pdf_skipped_count": int(result.get("pdf_skipped_count", 0)),
+        }
+        _watch_print(
+            watch,
+            f"{_watch_task_prefix(phase='CRAWL', index=index, total=total_tasks)} OK task_id={task_id} docs={int(result.get('document_count', 0))} raws={int(result.get('raw_object_count', 0))}",
+        )
+        return index, output
+    except Exception as exc:
+        error_message = str(exc)[:1000]
+        database.finish_crawl_task(
+            task_id=task_id,
+            status="failed",
+            last_error=error_message,
+        )
+        output = {
+            "task_id": task_id,
+            "source_id": task["source_id"],
+            "dataset": task["dataset"],
+            "status": "failed",
+            "error_message": error_message,
+        }
+        _watch_print(
+            watch,
+            f"{_watch_task_prefix(phase='CRAWL', index=index, total=total_tasks)} FAIL task_id={task_id} error={error_message[:300]}",
+        )
+        return index, output
 
 
 def _run_real_crawl_task(
@@ -788,6 +886,8 @@ def _run_real_crawl_task(
     download_pdfs: bool,
     pdf_limit: int | None,
     instrument_filter: list[str] | None = None,
+    request_timeout_seconds: float = DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
+    source_timeout_seconds: float | None = DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     source_id = str(task["source_id"])
     if source_id == "cninfo_announcement":
@@ -801,6 +901,8 @@ def _run_real_crawl_task(
             download_pdfs=download_pdfs,
             pdf_limit=pdf_limit,
             instrument_filter=instrument_filter,
+            request_timeout_seconds=request_timeout_seconds,
+            source_timeout_seconds=source_timeout_seconds,
         )
     if source_id == "sse_announcement":
         spec = crawler_source_spec(source_id)
@@ -813,6 +915,8 @@ def _run_real_crawl_task(
             download_pdfs=download_pdfs,
             pdf_limit=pdf_limit,
             instrument_filter=instrument_filter,
+            request_timeout_seconds=request_timeout_seconds,
+            source_timeout_seconds=source_timeout_seconds,
         )
     if source_id == "sina_finance_news":
         spec = crawler_source_spec(source_id)
@@ -822,6 +926,9 @@ def _run_real_crawl_task(
             page_size=page_size,
             max_pages=max_pages,
             min_delay_seconds=spec.min_delay_seconds,
+            instrument_filter=instrument_filter,
+            request_timeout_seconds=request_timeout_seconds,
+            source_timeout_seconds=source_timeout_seconds,
         )
     if source_id == "eastmoney_roll_news":
         spec = crawler_source_spec(source_id)
@@ -831,6 +938,21 @@ def _run_real_crawl_task(
             page_size=page_size,
             max_pages=max_pages,
             min_delay_seconds=spec.min_delay_seconds,
+            instrument_filter=instrument_filter,
+            request_timeout_seconds=request_timeout_seconds,
+            source_timeout_seconds=source_timeout_seconds,
+        )
+    if source_id == "nbd_company_news":
+        spec = crawler_source_spec(source_id)
+        return NbdCompanyNewsCrawler(settings).crawl_date(
+            source_id=source_id,
+            crawl_date=str(task["crawl_date"]),
+            page_size=page_size,
+            max_pages=max_pages,
+            min_delay_seconds=spec.min_delay_seconds,
+            instrument_filter=instrument_filter,
+            request_timeout_seconds=request_timeout_seconds,
+            source_timeout_seconds=source_timeout_seconds,
         )
     raise ValueError(f"unsupported real crawler source_id: {source_id}")
 
@@ -838,44 +960,56 @@ def _run_real_crawl_task(
 def _plan_daily_tasks(
     *,
     database: QdcDatabase,
-    source_id: str,
+    source_ids: list[str],
     universe: str,
     run_date: str,
     symbols: list[str],
     batch_size: int,
 ) -> list[dict[str, Any]]:
     planned = []
-    for dataset in DAILY_DATASETS:
-        _validate_backfill_plan_support(dataset=dataset, source_id=source_id)
-        task_symbols = symbols if dataset in SYMBOL_BATCH_REQUIRED_DATASETS else []
-        specs = plan_backfill_tasks(
-            dataset=dataset,
-            source_id=source_id,
-            universe=universe if dataset in SYMBOL_BATCH_REQUIRED_DATASETS else "",
-            start_date=parse_date(run_date),
-            end_date=parse_date(run_date),
-            symbols=task_symbols,
-            batch_size=batch_size,
-            chunk_days=1,
-        )
-        for spec in specs:
-            task_id, inserted = database.insert_backfill_task(
-                dataset=spec.dataset,
-                source_id=spec.source_id,
-                universe=spec.universe,
-                start_date=spec.start_date.isoformat(),
-                end_date=spec.end_date.isoformat(),
-                symbols=spec.symbols,
+    for source_id in source_ids:
+        for dataset in _daily_datasets_for_source(source_id):
+            _validate_backfill_plan_support(dataset=dataset, source_id=source_id)
+            task_symbols = symbols if dataset in SYMBOL_BATCH_REQUIRED_DATASETS else []
+            specs = plan_backfill_tasks(
+                dataset=dataset,
+                source_id=source_id,
+                universe=universe if dataset in SYMBOL_BATCH_REQUIRED_DATASETS else "",
+                start_date=parse_date(run_date),
+                end_date=parse_date(run_date),
+                symbols=task_symbols,
+                batch_size=batch_size,
+                chunk_days=1,
             )
-            planned.append(
-                {
-                    "task_id": task_id,
-                    "inserted": inserted,
-                    "dataset": spec.dataset,
-                    "symbols": spec.symbols,
-                }
-            )
+            for spec in specs:
+                task_id, inserted = database.insert_backfill_task(
+                    dataset=spec.dataset,
+                    source_id=spec.source_id,
+                    universe=spec.universe,
+                    start_date=spec.start_date.isoformat(),
+                    end_date=spec.end_date.isoformat(),
+                    symbols=spec.symbols,
+                )
+                planned.append(
+                    {
+                        "task_id": task_id,
+                        "inserted": inserted,
+                        "dataset": spec.dataset,
+                        "source_id": spec.source_id,
+                        "symbols": spec.symbols,
+                    }
+                )
     return planned
+
+
+def _daily_datasets_for_source(source_id: str) -> list[str]:
+    if source_id == "akshare" or source_id.startswith("akshare"):
+        return list(DAILY_DATASETS)
+    if source_id == "eastmoney":
+        return list(EASTMONEY_DAILY_DATASETS)
+    if source_id == "sina":
+        return list(SINA_DAILY_DATASETS)
+    raise ValueError(f"unsupported qdc daily source_id: {source_id}")
 
 
 def cmd_daily(args: argparse.Namespace) -> int:
@@ -897,7 +1031,7 @@ def cmd_daily(args: argparse.Namespace) -> int:
     universe = _daily_task_universe(args.universe, all_market=bool(args.all_market))
     planned = _plan_daily_tasks(
         database=database,
-        source_id=args.source_id,
+        source_ids=[args.source_id],
         universe=universe,
         run_date=run_date,
         symbols=symbols,
@@ -967,6 +1101,22 @@ def _daily_pipeline_option(
     return fallback
 
 
+def _daily_pipeline_source_ids(
+    *,
+    args: argparse.Namespace,
+    settings: QdcSettings,
+    fallback: str,
+) -> list[str]:
+    raw_cli = getattr(args, "source_ids", None)
+    if raw_cli:
+        return parse_symbols(raw_cli)
+    if getattr(args, "source_id", None) is not None:
+        return [fallback]
+    if settings.daily_pipeline.source_ids:
+        return list(settings.daily_pipeline.source_ids)
+    return [fallback]
+
+
 def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     database = QdcDatabase(settings)
@@ -974,6 +1124,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     run_date = parse_date(args.date).isoformat() if args.date else _today(settings)
     pipeline_universe = _daily_pipeline_option(args, settings, "universe", "all_a")
     source_id = _daily_pipeline_option(args, settings, "source_id", "akshare")
+    source_ids = _daily_pipeline_source_ids(args=args, settings=settings, fallback=source_id)
     all_market = bool(
         _daily_pipeline_option(args, settings, "all_market", False)
     ) or _is_full_market_universe(pipeline_universe)
@@ -982,6 +1133,14 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     )
     batch_size = int(_daily_pipeline_option(args, settings, "batch_size", 50))
     limit_tasks = _daily_pipeline_option(args, settings, "limit_tasks")
+    daily_parallelism = int(
+        _daily_pipeline_option(
+            args,
+            settings,
+            "daily_parallelism",
+            DEFAULT_DAILY_TASK_PARALLELISM,
+        )
+    )
     provider_uri = _daily_pipeline_option(args, settings, "provider_uri")
     export_start = _daily_pipeline_option(args, settings, "export_start")
     market_name = _daily_pipeline_option(args, settings, "market_name")
@@ -994,6 +1153,30 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     crawl_page_size = int(_daily_pipeline_option(args, settings, "crawl_page_size", 30))
     crawl_max_pages = _daily_pipeline_option(args, settings, "crawl_max_pages")
     crawl_pdf_limit = _daily_pipeline_option(args, settings, "crawl_pdf_limit")
+    crawl_parallelism = int(
+        _daily_pipeline_option(
+            args,
+            settings,
+            "crawl_parallelism",
+            DEFAULT_CRAWL_SOURCE_PARALLELISM,
+        )
+    )
+    crawl_request_timeout_seconds = float(
+        _daily_pipeline_option(
+            args,
+            settings,
+            "crawl_request_timeout_seconds",
+            DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
+        )
+    )
+    crawl_source_timeout_seconds = _daily_pipeline_option(
+        args,
+        settings,
+        "crawl_source_timeout_seconds",
+        DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
+    )
+    if crawl_source_timeout_seconds is not None:
+        crawl_source_timeout_seconds = float(crawl_source_timeout_seconds)
     skip_crawl_pdf_download = bool(
         _daily_pipeline_option(args, settings, "skip_crawl_pdf_download", False)
     )
@@ -1020,7 +1203,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     has_failures = False
     planned = _plan_daily_tasks(
         database=database,
-        source_id=source_id,
+        source_ids=source_ids,
         universe=universe,
         run_date=run_date,
         symbols=symbols,
@@ -1057,6 +1240,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         database=database,
         tasks=selected_tasks,
         control_only=bool(args.control_only),
+        parallelism=daily_parallelism,
         watch=bool(args.watch),
     )
     if args.watch:
@@ -1097,6 +1281,9 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             download_pdfs=not skip_crawl_pdf_download,
             pdf_limit=crawl_pdf_limit,
             instrument_filter=symbols,
+            parallelism=crawl_parallelism,
+            request_timeout_seconds=crawl_request_timeout_seconds,
+            source_timeout_seconds=crawl_source_timeout_seconds,
             watch=bool(args.watch),
         )
         steps.append({"step": "crawl_documents", **crawl_result})
@@ -1189,14 +1376,20 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         end_date=run_date,
         parameters={
             "all_market": all_market,
+            "source_ids": source_ids,
             "symbol_count": len(symbols),
             "planned_count": len(planned),
             "ran_count": len(daily_results),
             "control_only": bool(args.control_only),
+            "daily_parallelism": daily_parallelism,
             "crawl_documents": crawl_documents,
             "crawl_status": crawl_result["status"] if crawl_result else None,
             "crawl_planned_count": crawl_result["planned_count"] if crawl_result else 0,
             "crawl_ran_count": crawl_result["ran_count"] if crawl_result else 0,
+            "crawl_failed_count": crawl_result["failed_count"] if crawl_result else 0,
+            "crawl_parallel_sources": crawl_parallelism,
+            "crawl_request_timeout_seconds": crawl_request_timeout_seconds,
+            "crawl_source_timeout_seconds": crawl_source_timeout_seconds,
             "quality_status": quality_result["status"] if quality_result else None,
         },
     )
@@ -1228,6 +1421,9 @@ def _run_daily_pipeline_crawl_documents(
     download_pdfs: bool,
     pdf_limit: int | None,
     instrument_filter: list[str] | None,
+    parallelism: int,
+    request_timeout_seconds: float,
+    source_timeout_seconds: float | None,
     watch: bool,
 ) -> dict[str, Any]:
     _watch_print(
@@ -1249,7 +1445,7 @@ def _run_daily_pipeline_crawl_documents(
         if task["crawl_date"] == run_date
     ]
     selected_tasks = tasks[:limit_tasks] if limit_tasks else tasks
-    results, has_failures = _run_crawl_tasks(
+    results, _has_failures = _run_crawl_tasks(
         settings=settings,
         database=database,
         tasks=selected_tasks,
@@ -1259,17 +1455,23 @@ def _run_daily_pipeline_crawl_documents(
         download_pdfs=download_pdfs,
         pdf_limit=pdf_limit,
         instrument_filter=instrument_filter,
+        parallelism=parallelism,
+        request_timeout_seconds=request_timeout_seconds,
+        source_timeout_seconds=source_timeout_seconds,
         watch=watch,
     )
     remaining_task_count = len(tasks) - len(selected_tasks)
-    status = "partial" if has_failures or remaining_task_count else "ok"
+    success_count = sum(1 for item in results if item["status"] == "success")
+    failed_count = sum(1 for item in results if item["status"] == "failed")
+    exhausted_datasets = _crawl_exhausted_datasets(selected_tasks=selected_tasks, results=results)
+    status = "partial" if remaining_task_count or exhausted_datasets else "ok"
     run_id = database.record_crawl_run(
         status="success" if status == "ok" else "failed",
         source_id=source_id,
         crawl_date=run_date,
         planned_count=len(planned),
-        success_count=sum(1 for item in results if item["status"] == "success"),
-        failed_count=sum(1 for item in results if item["status"] == "failed"),
+        success_count=success_count,
+        failed_count=failed_count,
         document_count=sum(int(item.get("document_count", 0)) for item in results),
         raw_object_count=sum(int(item.get("raw_object_count", 0)) for item in results),
         parameters={
@@ -1277,11 +1479,16 @@ def _run_daily_pipeline_crawl_documents(
             "command": "daily-pipeline",
             "ran_count": len(results),
             "remaining_task_count": remaining_task_count,
+            "source_failure_count": failed_count,
+            "exhausted_datasets": exhausted_datasets,
             "page_size": page_size,
             "max_pages": max_pages,
             "download_pdfs": download_pdfs,
             "pdf_limit": pdf_limit,
             "instrument_filter": instrument_filter or [],
+            "parallel_sources": parallelism,
+            "request_timeout_seconds": request_timeout_seconds,
+            "source_timeout_seconds": source_timeout_seconds,
         },
     )
     return {
@@ -1290,8 +1497,23 @@ def _run_daily_pipeline_crawl_documents(
         "planned_count": len(planned),
         "ran_count": len(results),
         "remaining_task_count": remaining_task_count,
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "exhausted_datasets": exhausted_datasets,
         "results": results,
     }
+
+
+def _crawl_exhausted_datasets(
+    *,
+    selected_tasks: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+) -> list[str]:
+    planned_datasets = {str(task["dataset"]) for task in selected_tasks}
+    successful_datasets = {
+        str(result["dataset"]) for result in results if result.get("status") == "success"
+    }
+    return sorted(planned_datasets - successful_datasets)
 
 
 def _run_backfill_tasks(
@@ -1300,103 +1522,160 @@ def _run_backfill_tasks(
     database: QdcDatabase,
     tasks: list[dict[str, object]],
     control_only: bool,
+    parallelism: int = DEFAULT_DAILY_TASK_PARALLELISM,
     watch: bool = False,
 ) -> tuple[list[dict[str, object]], bool]:
-    results = []
-    has_failures = False
     total_tasks = len(tasks)
-    for index, task in enumerate(tasks, start=1):
-        task_id = str(task["task_id"])
-        symbols = [str(symbol) for symbol in (task.get("symbol_batch_json") or [])]
-        dataset = str(task["dataset"])
-        source_id = str(task["source_id"])
-        start_date = str(task["start_date"])
-        end_date = str(task["end_date"])
+    if total_tasks == 0:
+        return [], False
+    max_workers = max(1, min(int(parallelism or 1), total_tasks))
+    task_items = list(enumerate(tasks, start=1))
+    if max_workers == 1:
+        ordered = [
+            _run_one_backfill_task(
+                settings=settings,
+                database=database,
+                task=task,
+                index=index,
+                total_tasks=total_tasks,
+                control_only=control_only,
+                watch=watch,
+            )
+            for index, task in task_items
+        ]
+    else:
         _watch_print(
             watch,
-            f"{_watch_task_prefix(phase='BACKFILL', index=index, total=total_tasks)} RUNNING task_id={task_id} "
-            f"dataset={dataset} source={source_id} date={start_date}:{end_date} symbols={_short_symbol_preview(symbols)}",
+            f"{_watch_task_prefix(phase='BACKFILL', index=0, total=total_tasks)} PARALLEL tasks={max_workers}",
         )
-        database.mark_backfill_task_running(task_id)
-        try:
-            if control_only:
-                row_count = 0
-                job_type = "backfill_control_only"
-            else:
-                row_count = _run_real_backfill_task(settings=settings, task=task)
-                job_type = "backfill"
-            job_id = database.record_job_run(
-                job_type=job_type,
-                status="success",
-                dataset=str(task["dataset"]),
-                source_id=str(task["source_id"]),
-                universe=str(task.get("universe") or ""),
-                start_date=str(task["start_date"]),
-                end_date=str(task["end_date"]),
-                parameters={
-                    "task_id": task_id,
-                    "symbols": task.get("symbol_batch_json") or [],
-                    "control_only": control_only,
-                    "row_count": row_count,
-                },
-            )
-            database.finish_backfill_task(task_id=task_id, status="success")
-            database.upsert_dataset_watermark(
-                dataset=str(task["dataset"]),
-                source_id=str(task["source_id"]),
-                universe=str(task.get("universe") or ""),
-                start_date=str(task["start_date"]),
-                end_date=str(task["end_date"]),
-                job_id=job_id,
-            )
-            results.append(
-                {"task_id": task_id, "job_id": job_id, "status": "success", "row_count": row_count}
-            )
-            _watch_print(
-                watch,
-                f"{_watch_task_prefix(phase='BACKFILL', index=index, total=total_tasks)} OK task_id={task_id} rows={row_count}",
-            )
-        except Exception as exc:
-            has_failures = True
-            error_message = str(exc)[:1000]
-            job_id = database.record_job_run(
-                job_type="backfill",
-                status="failed",
-                dataset=str(task["dataset"]),
-                source_id=str(task["source_id"]),
-                universe=str(task.get("universe") or ""),
-                start_date=str(task["start_date"]),
-                end_date=str(task["end_date"]),
-                parameters={"task_id": task_id, "symbols": task.get("symbol_batch_json") or []},
-                error_message=error_message,
-            )
-            database.finish_backfill_task(
-                task_id=task_id,
-                status="failed",
-                last_error=error_message,
-            )
-            results.append(
-                {
-                    "task_id": task_id,
-                    "job_id": job_id,
-                    "status": "failed",
-                    "error_message": error_message,
-                }
-            )
-            _watch_print(
-                watch,
-                f"{_watch_task_prefix(phase='BACKFILL', index=index, total=total_tasks)} FAIL task_id={task_id} error={error_message[:300]}",
-            )
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(
+                    _run_one_backfill_task,
+                    settings=settings,
+                    database=database,
+                    task=task,
+                    index=index,
+                    total_tasks=total_tasks,
+                    control_only=control_only,
+                    watch=watch,
+                )
+                for index, task in task_items
+            ]
+            ordered = [future.result() for future in as_completed(futures)]
+    ordered.sort(key=lambda item: item[0])
+    results = [item[1] for item in ordered]
+    has_failures = any(item["status"] == "failed" for item in results)
     return results, has_failures
+
+
+def _run_one_backfill_task(
+    *,
+    settings: QdcSettings,
+    database: QdcDatabase,
+    task: dict[str, object],
+    index: int,
+    total_tasks: int,
+    control_only: bool,
+    watch: bool,
+) -> tuple[int, dict[str, object]]:
+    task_id = str(task["task_id"])
+    symbols = [str(symbol) for symbol in (task.get("symbol_batch_json") or [])]
+    dataset = str(task["dataset"])
+    source_id = str(task["source_id"])
+    start_date = str(task["start_date"])
+    end_date = str(task["end_date"])
+    _watch_print(
+        watch,
+        f"{_watch_task_prefix(phase='BACKFILL', index=index, total=total_tasks)} RUNNING task_id={task_id} "
+        f"dataset={dataset} source={source_id} date={start_date}:{end_date} symbols={_short_symbol_preview(symbols)}",
+    )
+    database.mark_backfill_task_running(task_id)
+    try:
+        if control_only:
+            row_count = 0
+            job_type = "backfill_control_only"
+        else:
+            row_count = _run_real_backfill_task(settings=settings, task=task)
+            job_type = "backfill"
+        job_id = database.record_job_run(
+            job_type=job_type,
+            status="success",
+            dataset=str(task["dataset"]),
+            source_id=str(task["source_id"]),
+            universe=str(task.get("universe") or ""),
+            start_date=str(task["start_date"]),
+            end_date=str(task["end_date"]),
+            parameters={
+                "task_id": task_id,
+                "symbols": task.get("symbol_batch_json") or [],
+                "control_only": control_only,
+                "row_count": row_count,
+            },
+        )
+        database.finish_backfill_task(task_id=task_id, status="success")
+        database.upsert_dataset_watermark(
+            dataset=str(task["dataset"]),
+            source_id=str(task["source_id"]),
+            universe=str(task.get("universe") or ""),
+            start_date=str(task["start_date"]),
+            end_date=str(task["end_date"]),
+            job_id=job_id,
+        )
+        output = {"task_id": task_id, "job_id": job_id, "status": "success", "row_count": row_count}
+        _watch_print(
+            watch,
+            f"{_watch_task_prefix(phase='BACKFILL', index=index, total=total_tasks)} OK task_id={task_id} rows={row_count}",
+        )
+        return index, output
+    except Exception as exc:
+        error_message = str(exc)[:1000]
+        job_id = database.record_job_run(
+            job_type="backfill",
+            status="failed",
+            dataset=str(task["dataset"]),
+            source_id=str(task["source_id"]),
+            universe=str(task.get("universe") or ""),
+            start_date=str(task["start_date"]),
+            end_date=str(task["end_date"]),
+            parameters={"task_id": task_id, "symbols": task.get("symbol_batch_json") or []},
+            error_message=error_message,
+        )
+        database.finish_backfill_task(
+            task_id=task_id,
+            status="failed",
+            last_error=error_message,
+        )
+        output = {
+            "task_id": task_id,
+            "job_id": job_id,
+            "status": "failed",
+            "error_message": error_message,
+        }
+        _watch_print(
+            watch,
+            f"{_watch_task_prefix(phase='BACKFILL', index=index, total=total_tasks)} FAIL task_id={task_id} error={error_message[:300]}",
+        )
+        return index, output
 
 
 def _run_real_backfill_task(*, settings: QdcSettings, task: dict[str, object]) -> int:
     dataset = str(task["dataset"])
     source_id = str(task["source_id"])
-    if not source_id.startswith("akshare") and source_id != "akshare":
+    _validate_backfill_plan_support(dataset=dataset, source_id=source_id)
+    if source_id == "eastmoney":
+        collector = EastmoneySilverCollector(settings)
+    elif source_id == "sina":
+        collector = AkshareSilverCollector(settings)
+        if dataset != "trade_calendar":
+            raise ValueError(f"unsupported qdc dataset for sina real backfill: {dataset}")
+    elif source_id == "akshare" or source_id.startswith("akshare"):
+        collector = AkshareSilverCollector(settings)
+    else:
         raise ValueError(f"unsupported qdc source_id for real backfill: {source_id}")
-    collector = AkshareSilverCollector(settings)
     if dataset == "stock_basic":
+        if not isinstance(collector, AkshareSilverCollector) or source_id in {"eastmoney", "sina"}:
+            raise ValueError(f"unsupported qdc dataset for {source_id} real backfill: {dataset}")
         return collector.collect_stock_basic(source_id=source_id)
     if dataset == "trade_calendar":
         return collector.collect_trade_calendar(
@@ -1585,6 +1864,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Universe id; all_a/all/ashare/cn_ashare mean full A-share market",
     )
     daily_pipeline_parser.add_argument("--source-id")
+    daily_pipeline_parser.add_argument(
+        "--source-ids",
+        help="Comma-separated structured daily sources; overrides daily_pipeline.source_ids",
+    )
     daily_pipeline_parser.add_argument("--symbols", help="Comma-separated symbols for smoke runs")
     daily_pipeline_parser.add_argument(
         "--all-market",
@@ -1600,6 +1883,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daily_pipeline_parser.add_argument("--batch-size", type=int)
     daily_pipeline_parser.add_argument("--limit-tasks", type=int)
+    daily_pipeline_parser.add_argument("--daily-parallelism", type=int)
     daily_pipeline_parser.add_argument("--provider-uri")
     daily_pipeline_parser.add_argument(
         "--export-start",
@@ -1631,13 +1915,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--crawl-source-id",
         help=(
             "Optional crawler source filter, for example cninfo_announcement, "
-            "sse_announcement, sina_finance_news, or eastmoney_roll_news"
+            "sse_announcement, sina_finance_news, eastmoney_roll_news, or nbd_company_news"
         ),
     )
     daily_pipeline_parser.add_argument("--crawl-limit-tasks", type=int)
     daily_pipeline_parser.add_argument("--crawl-page-size", type=int)
     daily_pipeline_parser.add_argument("--crawl-max-pages", type=int)
     daily_pipeline_parser.add_argument("--crawl-pdf-limit", type=int)
+    daily_pipeline_parser.add_argument("--crawl-parallelism", type=int)
+    daily_pipeline_parser.add_argument("--crawl-request-timeout-seconds", type=float)
+    daily_pipeline_parser.add_argument("--crawl-source-timeout-seconds", type=float)
     daily_pipeline_parser.add_argument(
         "--skip-crawl-pdf-download",
         action=argparse.BooleanOptionalAction,
@@ -1690,6 +1977,21 @@ def build_parser() -> argparse.ArgumentParser:
     crawl_run_parser.add_argument("--max-pages", type=int)
     crawl_run_parser.add_argument("--pdf-limit", type=int)
     crawl_run_parser.add_argument(
+        "--parallel-sources",
+        type=int,
+        default=DEFAULT_CRAWL_SOURCE_PARALLELISM,
+    )
+    crawl_run_parser.add_argument(
+        "--request-timeout-seconds",
+        type=float,
+        default=DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
+    )
+    crawl_run_parser.add_argument(
+        "--source-timeout-seconds",
+        type=float,
+        default=DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
+    )
+    crawl_run_parser.add_argument(
         "--skip-pdf-download",
         action="store_true",
         help="Only collect announcement metadata; do not download public PDF files",
@@ -1719,6 +2021,21 @@ def build_parser() -> argparse.ArgumentParser:
     crawl_daily_parser.add_argument("--page-size", type=int, default=30)
     crawl_daily_parser.add_argument("--max-pages", type=int)
     crawl_daily_parser.add_argument("--pdf-limit", type=int)
+    crawl_daily_parser.add_argument(
+        "--parallel-sources",
+        type=int,
+        default=DEFAULT_CRAWL_SOURCE_PARALLELISM,
+    )
+    crawl_daily_parser.add_argument(
+        "--request-timeout-seconds",
+        type=float,
+        default=DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
+    )
+    crawl_daily_parser.add_argument(
+        "--source-timeout-seconds",
+        type=float,
+        default=DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
+    )
     crawl_daily_parser.add_argument(
         "--skip-pdf-download",
         action="store_true",
@@ -1809,11 +2126,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _validate_backfill_plan_support(*, dataset: str, source_id: str) -> None:
-    if source_id != "akshare" and not source_id.startswith("akshare"):
+    if source_id == "akshare" or source_id.startswith("akshare"):
+        supported = SUPPORTED_AKSHARE_DATASETS
+    elif source_id == "eastmoney":
+        supported = set(EASTMONEY_DAILY_DATASETS)
+    elif source_id == "sina":
+        supported = set(SINA_DAILY_DATASETS)
+    else:
         raise ValueError(f"unsupported qdc source_id for plan-backfill: {source_id}")
-    if dataset not in SUPPORTED_AKSHARE_DATASETS:
-        supported = ", ".join(sorted(SUPPORTED_AKSHARE_DATASETS))
-        raise ValueError(f"unsupported qdc dataset for plan-backfill: {dataset}; supported: {supported}")
+    if dataset not in supported:
+        supported_text = ", ".join(sorted(supported))
+        raise ValueError(
+            f"unsupported qdc dataset for plan-backfill: {dataset}; supported: {supported_text}"
+        )
 
 
 def _resolve_plan_symbols(
