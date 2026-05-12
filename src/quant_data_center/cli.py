@@ -16,6 +16,7 @@ from quant_data_center.collectors.akshare import AkshareSilverCollector
 from quant_data_center.console import run_console
 from quant_data_center.crawlers.registry import crawler_source_spec, enabled_daily_source_specs
 from quant_data_center.crawlers.sources.cninfo import CninfoAnnouncementCrawler
+from quant_data_center.crawlers.sources.sina import SinaFinanceNewsCrawler
 from quant_data_center.exports.qlib import QlibExporter, QlibProviderVerifier
 from quant_data_center.factor_engine import build_text_event_classifier
 from quant_data_center.factors import FactorBuilder
@@ -753,6 +754,15 @@ def _run_real_crawl_task(
             min_delay_seconds=spec.min_delay_seconds,
             download_pdfs=download_pdfs,
             pdf_limit=pdf_limit,
+        )
+    if source_id == "sina_finance_news":
+        spec = crawler_source_spec(source_id)
+        return SinaFinanceNewsCrawler(settings).crawl_date(
+            source_id=source_id,
+            crawl_date=str(task["crawl_date"]),
+            page_size=page_size,
+            max_pages=max_pages,
+            min_delay_seconds=spec.min_delay_seconds,
         )
     raise ValueError(f"unsupported real crawler source_id: {source_id}")
 
