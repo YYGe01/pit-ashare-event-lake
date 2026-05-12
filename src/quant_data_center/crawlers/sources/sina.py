@@ -88,7 +88,7 @@ class SinaFinanceNewsCrawler:
             manifest={
                 "function": "sina_finance_roll_news",
                 "url": SINA_ROLL_NEWS_URL,
-                "accepted_date_rule": "publish_time parsed from ctime/time/datetime/date must equal crawl_date",
+                "accepted_date_rule": "publish_time parsed from ctime/time/datetime/date is required; publish_date is derived from publish_time, not crawl_date",
                 "copyright_policy": "metadata_only",
                 "raw_object_id": raw_object_id,
             },
@@ -103,9 +103,10 @@ class SinaFinanceNewsCrawler:
         )
         records = _normalize_news(
             source_id=source_id,
-            crawl_date=crawl_date,
             rows=provider_rows,
             instrument_hints=self._instrument_hints(),
+            observed_at=observed_at,
+            raw_object_id=raw_object_id,
         )
         row_count = self.silver.upsert_news(records)
         return {
@@ -169,9 +170,10 @@ def _extract_rows(body: dict[str, Any]) -> list[dict[str, Any]]:
 def _normalize_news(
     *,
     source_id: str,
-    crawl_date: str,
     rows: list[dict[str, Any]],
     instrument_hints: list[dict[str, str]],
+    observed_at: str,
+    raw_object_id: str,
 ) -> list[dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -179,9 +181,9 @@ def _normalize_news(
         if not title:
             continue
         publish_time = _publish_time(row)
-        publish_date = publish_time[:10] if publish_time else crawl_date
-        if publish_date != crawl_date:
+        if not publish_time:
             continue
+        publish_date = publish_time[:10]
         url = _clean_text(row.get("url") or row.get("wapurl"))
         source_record_id = _clean_text(row.get("id") or row.get("docid") or url or title)
         for instrument in _match_instruments(title=title, url=url, hints=instrument_hints):
@@ -189,10 +191,16 @@ def _normalize_news(
             records[news_id] = {
                 "news_id": news_id,
                 "publish_date": publish_date,
+                "publish_time": publish_time,
                 "instrument": instrument,
                 "title": title,
                 "url": url,
                 "source_id": source_id,
+                "source_record_id": source_record_id,
+                "observed_at": observed_at,
+                "collect_time": observed_at,
+                "raw_object_id": raw_object_id,
+                "parser_version": PARSER_VERSION,
             }
     return list(records.values())
 

@@ -70,6 +70,16 @@ DAILY_COLLECTION_DATASETS = (
     "daily_announcement_factor",
 )
 DAILY_BATCH_DATASETS = ("daily_bar", "adj_factor", "price_limit", "news")
+DAILY_SOURCE_DIMENSIONS = {
+    "daily_bar": ("open", "high", "low", "close", "pre_close", "volume", "amount", "vwap"),
+    "adj_factor": ("adj_factor",),
+    "price_limit": ("limit_up", "limit_down", "prev_close"),
+    "trade_status": ("trade_status",),
+}
+DAILY_DOCUMENT_DIMENSIONS = {
+    "announcement": ("publish_time", "title"),
+    "news": ("publish_time", "title"),
+}
 DAILY_RAW_WIDE_TABLES = {
     "daily_bar": [
         "open",
@@ -422,6 +432,13 @@ class QdcConsoleData:
                 control_tables=control_tables,
                 date=resolved_date,
             )
+            source_dimension_rows = self._daily_source_dimension_rows(
+                conn,
+                control_tables=control_tables,
+                silver_tables=silver_tables,
+                date=resolved_date,
+                expected_count=len(reference_rows),
+            )
         issue_rows = _daily_issue_rows(reference_rows, required_sets)
         daily_bar_count = len(required_sets.get("daily_bar", set()))
         core_complete_count = len(set.intersection(*required_sets.values())) if required_sets else 0
@@ -448,6 +465,7 @@ class QdcConsoleData:
             "batches": batch_summary,
             "batch_rows": batch_rows,
             "dataset_rows": dataset_rows,
+            "source_dimension_rows": source_dimension_rows,
             "issue_rows": issue_rows,
         }
 
@@ -663,6 +681,287 @@ class QdcConsoleData:
                 }
             )
         return rows
+
+    def _daily_source_dimension_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        silver_tables: set[str],
+        date: str,
+        expected_count: int,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for dataset, dimensions in DAILY_SOURCE_DIMENSIONS.items():
+            source_ids = self._daily_dataset_source_ids(
+                conn,
+                control_tables=control_tables,
+                silver_tables=silver_tables,
+                dataset=dataset,
+                date=date,
+            )
+            if not source_ids:
+                source_ids = [""]
+            task_stats = self._daily_task_failure_stats(
+                conn,
+                control_tables=control_tables,
+                dataset=dataset,
+                date=date,
+            )
+            columns = self._columns(conn, SILVER_SCHEMA, dataset) if dataset in silver_tables else []
+            for source_id in source_ids:
+                source_task_stats = task_stats.get(source_id, {})
+                for dimension in dimensions:
+                    success_count = 0
+                    if (
+                        dataset in silver_tables
+                        and "source_id" in columns
+                        and "instrument" in columns
+                        and "trade_date" in columns
+                        and dimension in columns
+                        and source_id
+                    ):
+                        success_count = int(
+                            conn.execute(
+                                f"""
+                                select count(distinct instrument)
+                                from {SILVER_SCHEMA}.{dataset}
+                                where trade_date = ?
+                                  and source_id = ?
+                                  and {dimension} is not null
+                                """,
+                                [date, source_id],
+                            ).fetchone()[0]
+                            or 0
+                        )
+                    failed_count = max(expected_count - success_count, 0)
+                    explicit_failed = int(source_task_stats.get("failed_symbol_count") or 0)
+                    if explicit_failed:
+                        failed_count = max(failed_count, explicit_failed)
+                    rows.append(
+                        {
+                            "dataset": dataset,
+                            "dimension": dimension,
+                            "source_id": source_id or "-",
+                            "expected_instrument_count": expected_count,
+                            "success_instrument_count": success_count,
+                            "failed_instrument_count": failed_count,
+                            "timeout_count": int(source_task_stats.get("timeout_count") or 0),
+                            "error_count": int(source_task_stats.get("error_count") or 0),
+                            "failed_task_count": int(source_task_stats.get("failed_task_count") or 0),
+                            "last_error": source_task_stats.get("last_error"),
+                        }
+                    )
+
+        for dataset, dimensions in DAILY_DOCUMENT_DIMENSIONS.items():
+            source_ids = self._daily_dataset_source_ids(
+                conn,
+                control_tables=control_tables,
+                silver_tables=silver_tables,
+                dataset=dataset,
+                date=date,
+            )
+            task_stats = self._daily_crawl_failure_stats(
+                conn,
+                control_tables=control_tables,
+                dataset=dataset,
+                date=date,
+            )
+            columns = self._columns(conn, SILVER_SCHEMA, dataset) if dataset in silver_tables else []
+            for source_id in source_ids or sorted(task_stats):
+                source_task_stats = task_stats.get(source_id, {})
+                for dimension in dimensions:
+                    present_count = None
+                    if (
+                        dataset in silver_tables
+                        and "source_id" in columns
+                        and "publish_date" in columns
+                        and dimension in columns
+                        and source_id
+                    ):
+                        present_count = int(
+                            conn.execute(
+                                f"""
+                                select count(*)
+                                from {SILVER_SCHEMA}.{dataset}
+                                where publish_date = ?
+                                  and source_id = ?
+                                  and {dimension} is not null
+                                """,
+                                [date, source_id],
+                            ).fetchone()[0]
+                            or 0
+                        )
+                    rows.append(
+                        {
+                            "dataset": dataset,
+                            "dimension": dimension,
+                            "source_id": source_id or "-",
+                            "expected_instrument_count": None,
+                            "success_instrument_count": present_count,
+                            "failed_instrument_count": None,
+                            "timeout_count": int(source_task_stats.get("timeout_count") or 0),
+                            "error_count": int(source_task_stats.get("error_count") or 0),
+                            "failed_task_count": int(source_task_stats.get("failed_task_count") or 0),
+                            "last_error": source_task_stats.get("last_error"),
+                        }
+                    )
+        rows.sort(
+            key=lambda row: (
+                -(int(row.get("failed_instrument_count") or 0)),
+                -(int(row.get("failed_task_count") or 0)),
+                str(row.get("dataset") or ""),
+                str(row.get("dimension") or ""),
+                str(row.get("source_id") or ""),
+            )
+        )
+        return rows
+
+    def _daily_dataset_source_ids(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        silver_tables: set[str],
+        dataset: str,
+        date: str,
+    ) -> list[str]:
+        source_ids: set[str] = set()
+        if dataset in silver_tables:
+            columns = self._columns(conn, SILVER_SCHEMA, dataset)
+            date_column = "publish_date" if dataset in DAILY_DOCUMENT_DIMENSIONS else "trade_date"
+            if "source_id" in columns and date_column in columns:
+                rows = conn.execute(
+                    f"""
+                    select distinct source_id
+                    from {SILVER_SCHEMA}.{dataset}
+                    where {date_column} = ?
+                      and source_id is not null
+                    order by source_id
+                    """,
+                    [date],
+                ).fetchall()
+                source_ids.update(str(row[0]) for row in rows if row[0])
+        if "backfill_task" in control_tables and dataset in DAILY_SOURCE_DIMENSIONS:
+            rows = conn.execute(
+                f"""
+                select distinct source_id
+                from {CONTROL_SCHEMA}.backfill_task
+                where start_date <= ?
+                  and end_date >= ?
+                  and dataset = ?
+                  and source_id is not null
+                order by source_id
+                """,
+                [date, date, dataset],
+            ).fetchall()
+            source_ids.update(str(row[0]) for row in rows if row[0])
+        if "crawl_task" in control_tables and dataset in DAILY_DOCUMENT_DIMENSIONS:
+            rows = conn.execute(
+                f"""
+                select distinct source_id
+                from {CONTROL_SCHEMA}.crawl_task
+                where crawl_date = ?
+                  and dataset = ?
+                  and source_id is not null
+                order by source_id
+                """,
+                [date, dataset],
+            ).fetchall()
+            source_ids.update(str(row[0]) for row in rows if row[0])
+        return sorted(source_ids)
+
+    def _daily_task_failure_stats(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        dataset: str,
+        date: str,
+    ) -> dict[str, dict[str, Any]]:
+        if "backfill_task" not in control_tables:
+            return {}
+        tasks = _query_dicts(
+            conn,
+            f"""
+            select source_id, symbol_batch_json, status, last_error, updated_at
+            from {CONTROL_SCHEMA}.backfill_task
+            where start_date <= ?
+              and end_date >= ?
+              and dataset = ?
+              and status <> 'superseded'
+            order by updated_at desc
+            """,
+            [date, date, dataset],
+        )
+        stats: dict[str, dict[str, Any]] = {}
+        for task in tasks:
+            source_id = str(task.get("source_id") or "")
+            item = stats.setdefault(
+                source_id,
+                {
+                    "failed_task_count": 0,
+                    "failed_symbol_count": 0,
+                    "timeout_count": 0,
+                    "error_count": 0,
+                    "last_error": None,
+                },
+            )
+            if task.get("status") != "failed":
+                continue
+            symbols = task.get("symbol_batch_json") or []
+            if not isinstance(symbols, list):
+                symbols = []
+            error = str(task.get("last_error") or "")
+            item["failed_task_count"] += 1
+            item["failed_symbol_count"] += len(symbols)
+            if _looks_like_timeout(error):
+                item["timeout_count"] += 1
+            else:
+                item["error_count"] += 1
+            if error and not item.get("last_error"):
+                item["last_error"] = error[:300]
+        return stats
+
+    def _daily_crawl_failure_stats(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        dataset: str,
+        date: str,
+    ) -> dict[str, dict[str, Any]]:
+        if "crawl_task" not in control_tables:
+            return {}
+        tasks = _query_dicts(
+            conn,
+            f"""
+            select source_id, status, last_error, updated_at
+            from {CONTROL_SCHEMA}.crawl_task
+            where crawl_date = ?
+              and dataset = ?
+            order by updated_at desc
+            """,
+            [date, dataset],
+        )
+        stats: dict[str, dict[str, Any]] = {}
+        for task in tasks:
+            source_id = str(task.get("source_id") or "")
+            item = stats.setdefault(
+                source_id,
+                {"failed_task_count": 0, "timeout_count": 0, "error_count": 0, "last_error": None},
+            )
+            if task.get("status") != "failed":
+                continue
+            error = str(task.get("last_error") or "")
+            item["failed_task_count"] += 1
+            if _looks_like_timeout(error):
+                item["timeout_count"] += 1
+            else:
+                item["error_count"] += 1
+            if error and not item.get("last_error"):
+                item["last_error"] = error[:300]
+        return stats
 
     def _daily_instrument_set(
         self,
@@ -4046,6 +4345,11 @@ def _daily_batch_summary(batch_rows: list[dict[str, Any]]) -> dict[str, Any]:
         "stale_running_count": stale,
         "complete_percent": _percent(success, total),
     }
+
+
+def _looks_like_timeout(message: str) -> bool:
+    text = str(message or "").lower()
+    return any(token in text for token in ("timeout", "timed out", "read timed", "connect timed", "超时"))
 
 
 def _daily_preview_columns(mode: str) -> list[str]:

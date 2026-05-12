@@ -125,7 +125,9 @@ button { color: inherit; }
   background: rgba(255, 253, 248, 0.94);
 }
 .input { padding: 0 12px; color: var(--ink); }
+.search-input { min-width: 260px; }
 .btn { padding: 0 16px; cursor: pointer; }
+.btn:disabled { color: #a8a095; background: #eee7db; cursor: not-allowed; }
 .btn-primary { border-color: var(--blue); color: #fff; background: var(--blue); }
 
 .error-banner { margin-bottom: 16px; padding: 12px 14px; border: 1px solid #e8a196; border-radius: 16px; color: var(--red); background: var(--red-soft); }
@@ -185,6 +187,26 @@ button { color: inherit; }
 .data-table th:first-child { z-index: 4; background: var(--surface-soft); }
 .data-table td { overflow: hidden; text-overflow: ellipsis; }
 
+.sort-button {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.sort-button:hover {
+  color: var(--blue);
+}
+
 .empty { padding: 32px 16px; color: var(--muted); text-align: center; }
 
 .tag { display: inline-flex; align-items: center; min-height: 25px; width: fit-content; padding: 0 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--surface); font-size: 12px; white-space: nowrap; }
@@ -199,6 +221,28 @@ button { color: inherit; }
 .link-button { padding: 0; border: 0; color: var(--blue); background: transparent; cursor: pointer; font-weight: 800; }
 .link-button:hover { text-decoration: underline; }
 
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  background: rgba(247, 241, 228, 0.58);
+}
+
+.pagination-info,
+.pagination-page {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .modal { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; }
 .modal-backdrop { position: absolute; inset: 0; background: rgba(16, 24, 22, 0.48); backdrop-filter: blur(6px); }
 .modal-card { position: relative; z-index: 1; width: min(900px, 96vw); max-height: 86vh; overflow: hidden; border-radius: 26px; background: var(--surface); box-shadow: 0 30px 90px rgba(0, 0, 0, 0.24); }
@@ -210,6 +254,16 @@ button { color: inherit; }
 .document-item h3 { margin: 0; font-size: 14px; line-height: 1.45; }
 .document-item a { color: var(--blue); text-decoration: none; }
 .document-item p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.document-title-button { padding: 0; border: 0; color: var(--blue); background: transparent; cursor: pointer; font: inherit; font-weight: 900; text-align: left; }
+.document-title-button:hover { text-decoration: underline; }
+.document-content-status { display: inline-flex; width: fit-content; padding: 4px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+.document-content-local_pdf,
+.document-content-local_text { color: var(--green); background: var(--green-soft); }
+.document-content-local_metadata { color: var(--amber); background: var(--amber-soft); }
+.document-content-missing_local_content { color: var(--red); background: var(--red-soft); }
+.document-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 12px; }
+.document-body-text { max-height: 220px; margin: 10px 0 0; padding: 10px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 10px; background: #fffdf8; color: var(--ink); white-space: pre-wrap; }
+.document-local-preview { width: 100%; height: 420px; margin-top: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 
 @media (max-width: 1180px) {
   .hero-panel { grid-template-columns: 1fr; }
@@ -223,7 +277,8 @@ button { color: inherit; }
   .nav-item { text-align: center; }
   .main { padding: 18px; }
   .topbar, .panel-header, .modal-header { flex-direction: column; align-items: stretch; }
-  .topbar-actions { justify-content: flex-start; }
+  .topbar-actions, .filters, .pagination-bar, .pagination-actions { justify-content: flex-start; }
+  .pagination-bar { align-items: stretch; flex-direction: column; }
   .kpi-grid, .summary-strip { grid-template-columns: 1fr; }
-  .input { width: 100%; }
+  .input, .search-input { width: 100%; min-width: 0; }
 }

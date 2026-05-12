@@ -48,7 +48,6 @@ class EastmoneyRollNewsCrawler:
             response.raise_for_status()
             rows = _extract_rows(
                 text=response.text,
-                crawl_date=crawl_date,
                 limit=page_size,
             )
             provider_rows.extend(rows)
@@ -86,7 +85,7 @@ class EastmoneyRollNewsCrawler:
             stem=f"eastmoney_roll_news_{crawl_date}",
             manifest={
                 "function": "eastmoney_roll_news_html",
-                "accepted_date_rule": "publish_time in page HTML must equal crawl_date",
+                "accepted_date_rule": "publish_time in page HTML is required; publish_date is derived from publish_time, not crawl_date",
                 "copyright_policy": "metadata_only",
                 "raw_object_id": raw_object_id,
             },
@@ -101,9 +100,10 @@ class EastmoneyRollNewsCrawler:
         )
         records = _normalize_news(
             source_id=source_id,
-            crawl_date=crawl_date,
             rows=provider_rows,
             instrument_hints=self._instrument_hints(),
+            observed_at=observed_at,
+            raw_object_id=raw_object_id,
         )
         row_count = self.silver.upsert_news(records)
         return {
@@ -149,7 +149,7 @@ def _headers() -> dict[str, str]:
     }
 
 
-def _extract_rows(*, text: str, crawl_date: str, limit: int) -> list[dict[str, str]]:
+def _extract_rows(*, text: str, limit: int) -> list[dict[str, str]]:
     rows = []
     pattern = re.compile(
         r"<li>\s*<span>\s*(?P<publish_time>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*</span>"
@@ -159,7 +159,7 @@ def _extract_rows(*, text: str, crawl_date: str, limit: int) -> list[dict[str, s
     )
     for match in pattern.finditer(text):
         publish_time = _clean_text(match.group("publish_time"))
-        if not publish_time or publish_time[:10] != crawl_date:
+        if not publish_time:
             continue
         rows.append(
             {
@@ -180,16 +180,17 @@ def _extract_rows(*, text: str, crawl_date: str, limit: int) -> list[dict[str, s
 def _normalize_news(
     *,
     source_id: str,
-    crawl_date: str,
     rows: list[dict[str, Any]],
     instrument_hints: list[dict[str, str]],
+    observed_at: str,
+    raw_object_id: str,
 ) -> list[dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
     for row in rows:
         title = _clean_text(row.get("title"))
         publish_time = _clean_text(row.get("publish_time"))
         publish_date = publish_time[:10] if publish_time else _clean_text(row.get("publish_date"))
-        if not title or publish_date != crawl_date:
+        if not title or not publish_time or not publish_date:
             continue
         url = _clean_text(row.get("url"))
         source_record_id = _article_id(url) or url or title
@@ -198,10 +199,16 @@ def _normalize_news(
             records[news_id] = {
                 "news_id": news_id,
                 "publish_date": publish_date,
+                "publish_time": publish_time,
                 "instrument": instrument,
                 "title": title,
                 "url": url,
                 "source_id": source_id,
+                "source_record_id": source_record_id,
+                "observed_at": observed_at,
+                "collect_time": observed_at,
+                "raw_object_id": raw_object_id,
+                "parser_version": PARSER_VERSION,
             }
     return list(records.values())
 

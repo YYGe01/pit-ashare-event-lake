@@ -27,7 +27,14 @@ DOCUMENT_OPTIONAL_FIELDS = {
         "raw_object_id",
         "parser_version",
     ],
-    "news": [],
+    "news": [
+        "publish_time",
+        "source_record_id",
+        "observed_at",
+        "collect_time",
+        "raw_object_id",
+        "parser_version",
+    ],
 }
 PDF_METADATA_FIELDS = {"pdf_sha256", "pdf_size_bytes", "pdf_object_id"}
 

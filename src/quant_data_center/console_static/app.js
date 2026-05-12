@@ -100,12 +100,16 @@ const STATUS_LABELS = {
 
 const moneyFormatter = new Intl.NumberFormat("zh-CN");
 const $ = (id) => document.getElementById(id);
+const PAGE_SIZE = 10;
 
 let state = {
   activeSection: "dashboard",
   previewMode: "raw",
   statusPayload: null,
   previewPayload: null,
+  issuePage: 1,
+  widePage: 1,
+  sort: {},
   loading: false,
   previewLoading: false,
   autoRefreshTimer: null,
@@ -197,18 +201,97 @@ function setActiveDate(date) {
   }
 }
 
-function table(columns, rows, emptyText = "暂无数据") {
+function table(columns, rows, emptyText = "暂无数据", options = {}) {
   if (!rows || rows.length === 0) {
     return `<div class="empty">${escapeHtml(emptyText)}</div>`;
   }
+  const sort = options.sort || {};
   return `
     <div class="table-wrap">
       <table class="data-table">
-        <thead><tr>${columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("")}</tr></thead>
+        <thead><tr>${columns.map((column) => headerCell(column, sort, options.sortKind)).join("")}</tr></thead>
         <tbody>
           ${rows.map((row) => `<tr>${columns.map((column) => `<td>${cell(column, row)}</td>`).join("")}</tr>`).join("")}
         </tbody>
       </table>
+    </div>
+  `;
+}
+
+function headerCell(column, sort, sortKind) {
+  if (!sortKind || column.sortable === false) {
+    return `<th>${escapeHtml(column.label)}</th>`;
+  }
+  const active = sort.key === column.key;
+  const direction = active ? sort.direction : "";
+  const marker = active ? (direction === "asc" ? " ↑" : " ↓") : "";
+  return `<th><button class="sort-button" data-sort-kind="${sortKind}" data-sort-key="${escapeHtml(column.key)}" type="button">${escapeHtml(column.label)}${marker}</button></th>`;
+}
+
+function filterInstrumentRows(rows, query) {
+  const text = String(query || "").trim().toUpperCase();
+  if (!text) return rows || [];
+  return (rows || []).filter((row) => {
+    const haystack = [
+      row.instrument,
+      row.symbol,
+      row.exchange,
+      row.name,
+      row.industry,
+    ].filter(Boolean).join(" ").toUpperCase();
+    return haystack.includes(text);
+  });
+}
+
+function paginateRows(rows, page) {
+  const safePage = Math.max(1, Number(page || 1));
+  const totalRows = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
+  const currentPage = Math.min(safePage, totalPages);
+  const start = (currentPage - 1) * PAGE_SIZE;
+  return {
+    rows: rows.slice(start, start + PAGE_SIZE),
+    totalRows,
+    totalPages,
+    page: currentPage,
+    start,
+  };
+}
+
+function sortedRows(rows, sort) {
+  if (!sort?.key) return rows;
+  const direction = sort.direction === "asc" ? 1 : -1;
+  const key = sort.key;
+  return [...rows].sort((left, right) => compareValues(valueForSort(left[key]), valueForSort(right[key])) * direction);
+}
+
+function valueForSort(value) {
+  if (Array.isArray(value)) return value.join(",");
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  if (!Number.isNaN(numeric) && String(value).trim?.() !== "") return numeric;
+  return String(value).toUpperCase();
+}
+
+function compareValues(left, right) {
+  if (left === null && right === null) return 0;
+  if (left === null) return 1;
+  if (right === null) return -1;
+  if (typeof left === "number" && typeof right === "number") return left - right;
+  return String(left).localeCompare(String(right), "zh-CN");
+}
+
+function pagination(kind, pageInfo) {
+  const from = pageInfo.totalRows ? pageInfo.start + 1 : 0;
+  const to = Math.min(pageInfo.start + PAGE_SIZE, pageInfo.totalRows);
+  return `
+    <div class="pagination-bar">
+      <div class="pagination-info">显示 ${number(from)}-${number(to)} / ${number(pageInfo.totalRows)}，每页 ${number(PAGE_SIZE)} 行</div>
+      <div class="pagination-actions">
+        <button class="btn page-btn" data-page-kind="${kind}" data-page-delta="-1" type="button" ${pageInfo.page <= 1 ? "disabled" : ""}>上一页</button>
+        <span class="pagination-page">第 ${number(pageInfo.page)} / ${number(pageInfo.totalPages)} 页</span>
+        <button class="btn page-btn" data-page-kind="${kind}" data-page-delta="1" type="button" ${pageInfo.page >= pageInfo.totalPages ? "disabled" : ""}>下一页</button>
+      </div>
     </div>
   `;
 }
@@ -274,6 +357,7 @@ function renderDashboard(payload) {
 }
 
 function renderBatchTable(rows) {
+  const sorted = sortedRows(rows, state.sort.batch);
   $("batch-table").innerHTML = table(
     [
       { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel, maxLength: 90 },
@@ -288,12 +372,14 @@ function renderBatchTable(rows) {
       { key: "complete_percent", label: fieldLabel("complete_percent"), value: (row) => percent(row.complete_percent) },
       { key: "latest_updated_at", label: fieldLabel("latest_updated_at"), maxLength: 100 },
     ],
-    rows,
+    sorted,
     "当前日期暂无每日采集批次。",
+    { sortKind: "batch", sort: state.sort.batch || {} },
   );
 }
 
 function renderDatasetCoverage(rows) {
+  const sorted = sortedRows(rows, state.sort.coverage);
   $("dataset-coverage-table").innerHTML = table(
     [
       { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel, maxLength: 90 },
@@ -304,13 +390,18 @@ function renderDatasetCoverage(rows) {
       { key: "coverage_percent", label: fieldLabel("coverage_percent"), value: (row) => row.coverage_percent === null ? "-" : percent(row.coverage_percent) },
       { key: "latest_updated_at", label: fieldLabel("latest_updated_at"), maxLength: 100 },
     ],
-    rows,
+    sorted,
     "暂无覆盖统计。",
+    { sortKind: "coverage", sort: state.sort.coverage || {} },
   );
 }
 
 function renderIssueTable(rows) {
-  $("issue-table").innerHTML = table(
+  const filtered = filterInstrumentRows(rows, $("issue-search")?.value);
+  const sorted = sortedRows(filtered, state.sort.issue);
+  const pageInfo = paginateRows(sorted, state.issuePage);
+  state.issuePage = pageInfo.page;
+  $("issue-table").innerHTML = pagination("issue", pageInfo) + table(
     [
       { key: "instrument", label: fieldLabel("instrument") },
       { key: "symbol", label: fieldLabel("symbol") },
@@ -321,8 +412,9 @@ function renderIssueTable(rows) {
       { key: "price_limit", label: fieldLabel("price_limit"), status: true },
       { key: "missing_dimensions", label: fieldLabel("missing_dimensions"), format: (value) => (value || []).map(datasetLabel).join(", "), maxLength: 220 },
     ],
-    rows,
+    pageInfo.rows,
     "当前日期没有核心缺失标的。",
+    { sortKind: "issue", sort: state.sort.issue || {} },
   );
 }
 
@@ -365,10 +457,14 @@ async function refreshPreview() {
 function renderPreview(payload) {
   state.previewPayload = payload;
   setActiveDate(payload.date);
+  const filteredRows = filterInstrumentRows(payload.rows || [], $("wide-search")?.value);
+  const sorted = sortedRows(filteredRows, state.sort.wide);
+  const pageInfo = paginateRows(sorted, state.widePage);
+  state.widePage = pageInfo.page;
   const modeText = payload.mode === "factor" ? "处理后因子宽表" : "原始输入宽表";
   $("preview-summary").innerHTML = [
     summaryCard("基准日期", payload.date || "-", modeText),
-    summaryCard("展示标的", number(payload.row_count || 0), `隐藏 ${number(payload.hidden_count || 0)}`),
+    summaryCard("匹配标的", number(filteredRows.length), `总返回 ${number(payload.row_count || 0)}，隐藏 ${number(payload.hidden_count || 0)}`),
     summaryCard("标的来源", payload.reference_source || "-", "每行一个 instrument"),
     summaryCard("刷新", new Date().toLocaleTimeString("zh-CN", { hour12: false }), "15 秒自动更新当前页"),
   ].join("");
@@ -378,7 +474,12 @@ function renderPreview(payload) {
     html: documentCountRenderer(key),
     maxLength: 140,
   }));
-  $("wide-preview-table").innerHTML = table(columns, payload.rows || [], "当前日期没有宽表数据。");
+  $("wide-preview-table").innerHTML = pagination("wide", pageInfo) + table(
+    columns,
+    pageInfo.rows,
+    "当前日期没有宽表数据。",
+    { sortKind: "wide", sort: state.sort.wide || {} },
+  );
 }
 
 function documentCountRenderer(key) {
@@ -408,14 +509,55 @@ function openDocuments(kind, instrument) {
 
 function renderDocumentItem(document) {
   const title = escapeHtml(document.title || "-");
-  const url = document.url ? String(document.url) : "";
-  const link = url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${title}</a>` : title;
+  const externalUrl = document.url ? String(document.url) : "";
+  const localUrl = document.local_url ? String(document.local_url) : "";
+  const sourceIds = Array.isArray(document.source_ids) && document.source_ids.length
+    ? document.source_ids.join(", ")
+    : document.source_id || "-";
+  const titleControl = localUrl
+    ? `<button class="document-title-button" data-preview-url="${escapeHtml(localUrl)}" type="button" aria-expanded="false">${title}</button>`
+    : `<span>${title}</span>`;
+  const contentLabel = document.content_label || "本地未保存正文或原文";
+  const contentStatus = document.content_status || "missing_local_content";
+  const localAction = localUrl
+    ? `<button class="link-button document-preview-button" data-preview-url="${escapeHtml(localUrl)}" type="button" aria-expanded="false">预览本地数据</button>`
+    : "";
+  const externalAction = externalUrl
+    ? `<a href="${escapeHtml(externalUrl)}" target="_blank" rel="noreferrer">外部来源</a>`
+    : "";
+  const bodyText = document.body_text
+    ? `<pre class="document-body-text">${escapeHtml(document.body_text)}</pre>`
+    : "";
+  const preview = localUrl
+    ? `<iframe class="document-local-preview hidden" data-document-preview title="本地数据预览"></iframe>`
+    : "";
   return `
     <article class="document-item">
-      <h3>${link}</h3>
-      <p>${escapeHtml(document.publish_date || "-")} · ${escapeHtml(document.source_id || "-")}</p>
+      <h3>${titleControl}</h3>
+      <p class="document-meta">${escapeHtml(document.publish_date || "-")} · ${escapeHtml(sourceIds)}</p>
+      <p class="document-content-status document-content-${escapeHtml(contentStatus)}">${escapeHtml(contentLabel)}</p>
+      ${bodyText}
+      <div class="document-actions">${localAction}${externalAction}</div>
+      ${preview}
     </article>
   `;
+}
+
+function toggleDocumentPreview(button) {
+  const article = button.closest(".document-item");
+  const frame = article?.querySelector("[data-document-preview]");
+  const url = button.dataset.previewUrl;
+  if (!frame || !url) return;
+  const isHidden = frame.classList.contains("hidden");
+  article.querySelectorAll("[data-preview-url]").forEach((item) => {
+    item.setAttribute("aria-expanded", isHidden ? "true" : "false");
+  });
+  if (isHidden) {
+    if (!frame.src) frame.src = url;
+    frame.classList.remove("hidden");
+  } else {
+    frame.classList.add("hidden");
+  }
 }
 
 function closeModal() {
@@ -444,14 +586,25 @@ function bindControls() {
   });
   $("active-date").addEventListener("change", () => {
     state.previewPayload = null;
+    state.issuePage = 1;
+    state.widePage = 1;
     refreshStatus();
     refreshPreview();
+  });
+  $("issue-search").addEventListener("input", () => {
+    state.issuePage = 1;
+    renderIssueTable(state.statusPayload?.issue_rows || []);
+  });
+  $("wide-search").addEventListener("input", () => {
+    state.widePage = 1;
+    if (state.previewPayload) renderPreview(state.previewPayload);
   });
   document.querySelectorAll(".segment-button").forEach((button) => {
     button.addEventListener("click", () => {
       state.previewMode = button.dataset.previewMode;
       document.querySelectorAll(".segment-button").forEach((item) => item.classList.toggle("active", item === button));
       state.previewPayload = null;
+      state.widePage = 1;
       refreshPreview();
     });
   });
@@ -461,8 +614,54 @@ function bindControls() {
       openDocuments(docButton.dataset.kind, docButton.dataset.instrument);
       return;
     }
+    const previewButton = event.target.closest("[data-preview-url]");
+    if (previewButton) {
+      toggleDocumentPreview(previewButton);
+      return;
+    }
+    const pageButton = event.target.closest(".page-btn");
+    if (pageButton) {
+      const delta = Number(pageButton.dataset.pageDelta || 0);
+      if (pageButton.dataset.pageKind === "issue") {
+        state.issuePage += delta;
+        renderIssueTable(state.statusPayload?.issue_rows || []);
+      }
+      if (pageButton.dataset.pageKind === "wide") {
+        state.widePage += delta;
+        if (state.previewPayload) renderPreview(state.previewPayload);
+      }
+      return;
+    }
+    const sortButton = event.target.closest(".sort-button");
+    if (sortButton) {
+      toggleSort(sortButton.dataset.sortKind, sortButton.dataset.sortKey);
+      return;
+    }
     if (event.target.closest("[data-close-modal]")) closeModal();
   });
+}
+
+function toggleSort(kind, key) {
+  const current = state.sort[kind] || {};
+  const direction = current.key === key && current.direction === "asc" ? "desc" : "asc";
+  state.sort[kind] = { key, direction };
+  if (kind === "issue") {
+    state.issuePage = 1;
+    renderIssueTable(state.statusPayload?.issue_rows || []);
+    return;
+  }
+  if (kind === "wide") {
+    state.widePage = 1;
+    if (state.previewPayload) renderPreview(state.previewPayload);
+    return;
+  }
+  if (kind === "batch") {
+    renderBatchTable(state.statusPayload?.batch_rows || []);
+    return;
+  }
+  if (kind === "coverage") {
+    renderDatasetCoverage(state.statusPayload?.dataset_rows || []);
+  }
 }
 
 function init() {

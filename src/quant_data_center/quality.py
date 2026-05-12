@@ -24,6 +24,12 @@ SUPPORTED_QUALITY_DATASETS = {
     "daily_news_factor",
     "daily_announcement_factor",
 }
+DOCUMENT_PUBLISH_TIME_REQUIRED_SOURCES = {
+    "cninfo_announcement",
+    "sse_announcement",
+    "sina_finance_news",
+    "eastmoney_roll_news",
+}
 
 
 class QualityChecker:
@@ -303,14 +309,31 @@ def _check_document_table(frame: pd.DataFrame) -> list[dict[str, Any]]:
     issues = []
     dataset = "announcement" if "announcement_id" in frame.columns else "news"
     for row in frame.to_dict("records"):
+        entity_key = str(row.get("instrument") or "<unknown>")
         if not row.get("instrument") or not row.get("title"):
             issues.append(
                 _issue(
                     dataset=dataset,
                     source_id=row.get("source_id"),
                     issue_type="missing_document_identity",
-                    entity_key=str(row.get("instrument") or "<unknown>"),
+                    entity_key=entity_key,
                     message=f"{dataset} requires instrument and title",
+                    observed=row,
+                )
+            )
+        source_id = str(row.get("source_id") or "")
+        if (
+            "publish_time" in frame.columns
+            and source_id in DOCUMENT_PUBLISH_TIME_REQUIRED_SOURCES
+            and _is_null(row.get("publish_time"))
+        ):
+            issues.append(
+                _issue(
+                    dataset=dataset,
+                    source_id=row.get("source_id"),
+                    issue_type="missing_publish_time",
+                    entity_key=entity_key,
+                    message=f"{dataset} requires explicit publish_time",
                     observed=row,
                 )
             )

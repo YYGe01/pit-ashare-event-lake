@@ -1812,7 +1812,7 @@ def test_qdc_crawl_run_real_sina_news_with_fake_response(
     task = database.list_crawl_tasks(source_id="sina_finance_news")[0]
     assert task["status"] == "success"
     assert calls[0]["params"] == {"pageid": "153", "lid": "1686", "num": "3", "page": "1"}
-    assert database.silver_table_counts()["news"] == 1
+    assert database.silver_table_counts()["news"] == 2
     source_objects = database.list_source_objects(
         dataset="news",
         source_id="sina_finance_news",
@@ -1828,7 +1828,7 @@ def test_qdc_crawl_run_real_sina_news_with_fake_response(
     with database.connect() as conn:
         rows = conn.execute(
             """
-            select instrument, title, url, source_id
+            select instrument, publish_date, publish_time, title, url, source_id
             from qdc_silver.news
             order by instrument
             """
@@ -1836,10 +1836,20 @@ def test_qdc_crawl_run_real_sina_news_with_fake_response(
     assert rows == [
         (
             "SH600000",
+            datetime(2026, 5, 11).date(),
+            datetime(2026, 5, 11, 18, 20),
             "浦发银行签订重大合同",
             "https://finance.sina.com.cn/news/1.shtml",
             "sina_finance_news",
-        )
+        ),
+        (
+            "SZ000001",
+            datetime(2026, 5, 10).date(),
+            datetime(2026, 5, 10, 18, 21),
+            "平安银行公告解读",
+            "https://finance.sina.com.cn/news/3.shtml",
+            "sina_finance_news",
+        ),
     ]
 
 
@@ -1921,7 +1931,7 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
     task = database.list_crawl_tasks(source_id="eastmoney_roll_news")[0]
     assert task["status"] == "success"
     assert calls[0]["url"] == "https://roll.eastmoney.com/default_1.html"
-    assert database.silver_table_counts()["news"] == 1
+    assert database.silver_table_counts()["news"] == 2
     source_objects = database.list_source_objects(
         dataset="news",
         source_id="eastmoney_roll_news",
@@ -1935,16 +1945,27 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
     with database.connect() as conn:
         row = conn.execute(
             """
-            select instrument, publish_date, title, source_id
+            select instrument, publish_date, publish_time, title, source_id
             from qdc_silver.news
+            order by publish_date desc, title
             """
-        ).fetchone()
-    assert row == (
-        "SH600000",
-        datetime(2026, 5, 11).date(),
-        "浦发银行签订重大合同",
-        "eastmoney_roll_news",
-    )
+        ).fetchall()
+    assert row == [
+        (
+            "SH600000",
+            datetime(2026, 5, 11).date(),
+            datetime(2026, 5, 11, 18, 20),
+            "浦发银行签订重大合同",
+            "eastmoney_roll_news",
+        ),
+        (
+            "SH600000",
+            datetime(2026, 5, 10).date(),
+            datetime(2026, 5, 10, 18, 21),
+            "浦发银行历史新闻",
+            "eastmoney_roll_news",
+        ),
+    ]
 
 
 def test_qdc_crawl_run_unsupported_real_source_fails_explicitly(tmp_path: Path) -> None:

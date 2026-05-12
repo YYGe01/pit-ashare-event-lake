@@ -92,6 +92,9 @@
                 <h2>问题标的</h2>
                 <p class="panel-subtitle">本来应该有核心日频数据但当天没有采到的标的。核心维度：daily_bar、adj_factor、price_limit。</p>
               </div>
+              <div class="filters">
+                <input id="issue-search" class="input search-input" placeholder="搜索标的 / 代码 / 名称 / 行业" autocomplete="off" />
+              </div>
             </div>
             <div id="issue-table"></div>
           </section>
@@ -104,9 +107,12 @@
                 <h2>每日数据宽表</h2>
                 <p class="panel-subtitle">每行一个标的，所有字段横向平铺。新闻和公告只显示数量，点击数量查看来源明细。</p>
               </div>
-              <div class="segmented-control" aria-label="数据预览模式">
-                <button class="segment-button active" data-preview-mode="raw" type="button">原始输入宽表</button>
-                <button class="segment-button" data-preview-mode="factor" type="button">处理后因子宽表</button>
+              <div class="filters">
+                <input id="wide-search" class="input search-input" placeholder="搜索标的 / 代码 / 名称 / 行业" autocomplete="off" />
+                <div class="segmented-control" aria-label="数据预览模式">
+                  <button class="segment-button active" data-preview-mode="raw" type="button">原始输入宽表</button>
+                  <button class="segment-button" data-preview-mode="factor" type="button">处理后因子宽表</button>
+                </div>
               </div>
             </div>
             <div id="preview-summary" class="summary-strip"></div>

@@ -255,10 +255,16 @@ create table if not exists qdc_silver.announcement (
 create table if not exists qdc_silver.news (
   news_id varchar primary key,
   publish_date date not null,
+  publish_time timestamp,
   instrument varchar not null,
   title varchar not null,
   url varchar,
   source_id varchar not null,
+  source_record_id varchar,
+  observed_at timestamp,
+  collect_time timestamp,
+  raw_object_id varchar,
+  parser_version varchar,
   updated_at timestamp not null
 );
 
@@ -339,6 +345,14 @@ SILVER_SCHEMA_MIGRATIONS = {
         "pdf_object_id": "varchar",
         "pdf_download_status": "varchar",
         "pdf_error_message": "varchar",
+        "raw_object_id": "varchar",
+        "parser_version": "varchar",
+    },
+    "news": {
+        "publish_time": "timestamp",
+        "source_record_id": "varchar",
+        "observed_at": "timestamp",
+        "collect_time": "timestamp",
         "raw_object_id": "varchar",
         "parser_version": "varchar",
     },

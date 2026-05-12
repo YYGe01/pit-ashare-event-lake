@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from hashlib import sha256
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -550,9 +551,11 @@ class AkshareSilverCollector:
                 bronze_records=provider_records,
             )
             for row in provider_records:
-                publish_date = _optional_date_to_iso(
-                    _first_present(row, ("发布时间", "日期", "publish_date", "date", "time"))
+                raw_publish_time = _first_present(
+                    row, ("发布时间", "日期", "publish_date", "date", "time")
                 )
+                publish_time = _optional_datetime_to_iso(raw_publish_time)
+                publish_date = publish_time[:10] if publish_time else None
                 if publish_date is None or publish_date < start_iso or publish_date > end_iso:
                     continue
                 title = _first_present(row, ("新闻标题", "标题", "title"))
@@ -563,10 +566,12 @@ class AkshareSilverCollector:
                     {
                         "news_id": _stable_id("news", source_id, instrument, publish_date, title, url),
                         "publish_date": publish_date,
+                        "publish_time": publish_time,
                         "instrument": instrument,
                         "title": str(title),
                         "url": _json_safe(url),
                         "source_id": source_id,
+                        "source_record_id": _json_safe(url) or str(title),
                     }
                 )
         if not records:
@@ -636,7 +641,8 @@ class AkshareSilverCollector:
                 bronze_records=provider_records,
             )
             for row in provider_records:
-                publish_date = _global_news_publish_date(row)
+                publish_time = _global_news_publish_time(row)
+                publish_date = publish_time[:10] if publish_time else None
                 if publish_date is None or publish_date < start_iso or publish_date > end_iso:
                     continue
                 title = _global_news_title(row)
@@ -660,10 +666,12 @@ class AkshareSilverCollector:
                                 url,
                             ),
                             "publish_date": publish_date,
+                            "publish_time": publish_time,
                             "instrument": instrument,
                             "title": title,
                             "url": _json_safe(url),
                             "source_id": source_id,
+                            "source_record_id": _json_safe(url) or title,
                         }
                     )
         return list({str(record["news_id"]): record for record in records}.values())
@@ -826,6 +834,28 @@ def _optional_date_to_iso(value: Any) -> str | None:
         return None
 
 
+def _optional_datetime_to_iso(value: Any) -> str | None:
+    value = _json_safe(value)
+    if value in (None, "", "NaT"):
+        return None
+    text = str(value).strip().replace("T", " ")
+    try:
+        if len(text) >= 19 and text[4] == "-" and text[7] == "-":
+            return datetime.fromisoformat(text[:19]).replace(microsecond=0).isoformat(sep=" ")
+        if len(text) == 10 and text[4] == "-" and text[7] == "-":
+            return f"{_date_to_iso(text)} 00:00:00"
+        if re.fullmatch(r"\d{8}", text):
+            return f"{_date_to_iso(text)} 00:00:00"
+        if re.fullmatch(r"\d{10,13}", text):
+            timestamp = float(text)
+            if timestamp > 10_000_000_000:
+                timestamp = timestamp / 1000
+            return datetime.fromtimestamp(timestamp).replace(microsecond=0).isoformat(sep=" ")
+        return f"{_date_to_iso(text)} 00:00:00"
+    except (TypeError, ValueError):
+        return None
+
+
 def _limit_rate(instrument: str) -> tuple[float, str]:
     symbol = instrument_to_symbol(instrument)
     if symbol.startswith(("4", "8", "9")):
@@ -898,13 +928,20 @@ def _safe_stock_names_by_symbol(*, akshare: Any) -> dict[str, str]:
     return names
 
 
-def _global_news_publish_date(row: dict[str, Any]) -> str | None:
+def _global_news_publish_time(row: dict[str, Any]) -> str | None:
     date_value = _first_present(row, ("发布日期", "日期", "date", "publish_date"))
     time_value = _first_present(row, ("发布时间", "时间", "datetime", "time"))
+    if date_value is not None and time_value is not None:
+        date_text = _optional_date_to_iso(date_value)
+        time_text = str(_json_safe(time_value)).strip()
+        if date_text and re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", time_text):
+            if len(time_text.split(":")) == 2:
+                time_text = f"{time_text}:00"
+            return f"{date_text} {time_text}"
     if date_value is not None:
-        return _optional_date_to_iso(date_value)
+        return _optional_datetime_to_iso(date_value)
     if time_value is not None:
-        return _optional_date_to_iso(time_value)
+        return _optional_datetime_to_iso(time_value)
     return None
 
 

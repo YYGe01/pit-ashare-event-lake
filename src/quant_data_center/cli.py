@@ -536,6 +536,7 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
         max_pages=args.max_pages,
         download_pdfs=not bool(args.skip_pdf_download),
         pdf_limit=args.pdf_limit,
+        instrument_filter=parse_symbols(args.symbols),
         watch=False,
     )
     run_id = database.record_crawl_run(
@@ -555,6 +556,7 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
             "max_pages": args.max_pages,
             "download_pdfs": not bool(args.skip_pdf_download),
             "pdf_limit": args.pdf_limit,
+            "instrument_filter": parse_symbols(args.symbols),
         },
     )
     _print_json(
@@ -609,6 +611,7 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         max_pages=args.max_pages,
         download_pdfs=not bool(args.skip_pdf_download),
         pdf_limit=args.pdf_limit,
+        instrument_filter=parse_symbols(args.symbols),
         watch=False,
     )
     status = "partial" if has_failures or len(selected_tasks) < len(tasks) else "ok"
@@ -629,6 +632,7 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
             "max_pages": args.max_pages,
             "download_pdfs": not bool(args.skip_pdf_download),
             "pdf_limit": args.pdf_limit,
+            "instrument_filter": parse_symbols(args.symbols),
         },
     )
     _print_json(
@@ -703,6 +707,7 @@ def _run_crawl_tasks(
     max_pages: int | None,
     download_pdfs: bool,
     pdf_limit: int | None,
+    instrument_filter: list[str] | None = None,
     watch: bool = False,
 ) -> tuple[list[dict[str, Any]], bool]:
     results = []
@@ -729,6 +734,7 @@ def _run_crawl_tasks(
                     max_pages=max_pages,
                     download_pdfs=download_pdfs,
                     pdf_limit=pdf_limit,
+                    instrument_filter=instrument_filter,
                 )
             database.finish_crawl_task(task_id=task_id, status="success")
             results.append(
@@ -781,6 +787,7 @@ def _run_real_crawl_task(
     max_pages: int | None,
     download_pdfs: bool,
     pdf_limit: int | None,
+    instrument_filter: list[str] | None = None,
 ) -> dict[str, Any]:
     source_id = str(task["source_id"])
     if source_id == "cninfo_announcement":
@@ -793,6 +800,7 @@ def _run_real_crawl_task(
             min_delay_seconds=spec.min_delay_seconds,
             download_pdfs=download_pdfs,
             pdf_limit=pdf_limit,
+            instrument_filter=instrument_filter,
         )
     if source_id == "sse_announcement":
         spec = crawler_source_spec(source_id)
@@ -804,6 +812,7 @@ def _run_real_crawl_task(
             min_delay_seconds=spec.min_delay_seconds,
             download_pdfs=download_pdfs,
             pdf_limit=pdf_limit,
+            instrument_filter=instrument_filter,
         )
     if source_id == "sina_finance_news":
         spec = crawler_source_spec(source_id)
@@ -1087,6 +1096,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             max_pages=crawl_max_pages,
             download_pdfs=not skip_crawl_pdf_download,
             pdf_limit=crawl_pdf_limit,
+            instrument_filter=symbols,
             watch=bool(args.watch),
         )
         steps.append({"step": "crawl_documents", **crawl_result})
@@ -1217,6 +1227,7 @@ def _run_daily_pipeline_crawl_documents(
     max_pages: int | None,
     download_pdfs: bool,
     pdf_limit: int | None,
+    instrument_filter: list[str] | None,
     watch: bool,
 ) -> dict[str, Any]:
     _watch_print(
@@ -1247,6 +1258,7 @@ def _run_daily_pipeline_crawl_documents(
         max_pages=max_pages,
         download_pdfs=download_pdfs,
         pdf_limit=pdf_limit,
+        instrument_filter=instrument_filter,
         watch=watch,
     )
     remaining_task_count = len(tasks) - len(selected_tasks)
@@ -1269,6 +1281,7 @@ def _run_daily_pipeline_crawl_documents(
             "max_pages": max_pages,
             "download_pdfs": download_pdfs,
             "pdf_limit": pdf_limit,
+            "instrument_filter": instrument_filter or [],
         },
     )
     return {
@@ -1668,6 +1681,10 @@ def build_parser() -> argparse.ArgumentParser:
     crawl_run_parser = subparsers.add_parser("crawl-run", help="Run pending crawler tasks")
     crawl_run_parser.add_argument("--source-id")
     crawl_run_parser.add_argument("--dataset")
+    crawl_run_parser.add_argument(
+        "--symbols",
+        help="Comma-separated instruments; announcement crawlers only persist matching instruments",
+    )
     crawl_run_parser.add_argument("--limit-tasks", type=int)
     crawl_run_parser.add_argument("--page-size", type=int, default=30)
     crawl_run_parser.add_argument("--max-pages", type=int)
@@ -1694,6 +1711,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="YYYY-MM-DD or YYYYMMDD; defaults to today's date in project timezone",
     )
     crawl_daily_parser.add_argument("--source-id")
+    crawl_daily_parser.add_argument(
+        "--symbols",
+        help="Comma-separated instruments; announcement crawlers only persist matching instruments",
+    )
     crawl_daily_parser.add_argument("--limit-tasks", type=int)
     crawl_daily_parser.add_argument("--page-size", type=int, default=30)
     crawl_daily_parser.add_argument("--max-pages", type=int)

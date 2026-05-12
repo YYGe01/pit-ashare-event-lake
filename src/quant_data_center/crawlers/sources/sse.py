@@ -38,6 +38,7 @@ class SseAnnouncementCrawler:
         min_delay_seconds: float = 3.0,
         download_pdfs: bool = True,
         pdf_limit: int | None = None,
+        instrument_filter: list[str] | None = None,
     ) -> dict[str, Any]:
         requests = __import__("requests")
         pages = []
@@ -121,6 +122,7 @@ class SseAnnouncementCrawler:
             raw_object_id=raw_object_id,
             observed_at=observed_at,
             parser_version=PARSER_VERSION,
+            instrument_filter=_normalized_instrument_filter(instrument_filter),
         )
         pdf_stats = _attach_pdf_objects(
             requests_module=requests,
@@ -204,6 +206,7 @@ def _normalize_announcements(
     raw_object_id: str,
     observed_at: str,
     parser_version: str,
+    instrument_filter: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     records = []
     for row in rows:
@@ -220,6 +223,8 @@ def _normalize_announcements(
         try:
             instrument = normalize_instrument(raw_code)
         except ValueError:
+            continue
+        if instrument_filter is not None and instrument not in instrument_filter:
             continue
         raw_url = _clean_text(row.get("URL") or row.get("url"))
         url = urljoin(SSE_ROOT, raw_url) if raw_url else None
@@ -247,6 +252,18 @@ def _normalize_announcements(
             }
         )
     return list({str(record["announcement_id"]): record for record in records}.values())
+
+
+def _normalized_instrument_filter(values: list[str] | None) -> set[str] | None:
+    if not values:
+        return None
+    instruments = set()
+    for value in values:
+        try:
+            instruments.add(normalize_instrument(str(value)))
+        except ValueError:
+            continue
+    return instruments
 
 
 def _attach_pdf_objects(
