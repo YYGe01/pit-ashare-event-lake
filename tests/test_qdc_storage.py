@@ -382,6 +382,76 @@ def test_qdc_console_overview_reads_collection_state(tmp_path: Path) -> None:
     assert overview["backfill_progress"][0]["state"] == "pending"
 
 
+def test_qdc_daily_status_reports_source_dimension_failures(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    silver = SilverStore(settings)
+    silver.upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+            {
+                "instrument": "SZ000001",
+                "symbol": "000001",
+                "exchange": "SZ",
+                "name": "平安银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+        ]
+    )
+    silver.upsert_daily_bar(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SH600000",
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.9,
+                "close": 10.1,
+                "pre_close": 10.0,
+                "volume": 100,
+                "amount": 1010,
+                "vwap": 10.1,
+                "source_id": "akshare",
+            }
+        ]
+    )
+    failed_task_id, _inserted = database.insert_backfill_task(
+        dataset="daily_bar",
+        source_id="akshare",
+        universe="all_a",
+        start_date="2026-05-11",
+        end_date="2026-05-11",
+        symbols=["SZ000001"],
+    )
+    database.finish_backfill_task(
+        task_id=failed_task_id,
+        status="failed",
+        last_error="Read timed out",
+    )
+
+    payload = QdcConsoleData(settings).daily_collection_status(date="2026-05-11")
+    rows = {
+        (row["dataset"], row["dimension"], row["source_id"]): row
+        for row in payload["source_dimension_rows"]
+    }
+    open_row = rows[("daily_bar", "open", "akshare")]
+
+    assert open_row["expected_instrument_count"] == 2
+    assert open_row["success_instrument_count"] == 1
+    assert open_row["failed_instrument_count"] == 1
+    assert open_row["timeout_count"] == 1
+
+
 def test_qdc_console_returns_busy_payload_when_duckdb_is_locked(tmp_path: Path) -> None:
     settings = QdcSettings.from_yaml(_write_config(tmp_path))
     data = QdcConsoleData(settings)
