@@ -30,6 +30,7 @@ qdc plan-backfill --dataset trade_calendar --source-id akshare --start 2026-05-0
 qdc run-backfill --dataset trade_calendar --limit-tasks 1
 qdc daily --date 2026-05-11 --universe csi300 --control-only
 qdc daily-pipeline --date 2026-05-11 --symbols "SH600000,SZ000001" --batch-size 1 --control-only
+qdc daily-pipeline --date 2026-05-11 --symbols "SH600000,SZ000001" --batch-size 1 --control-only --crawl-documents --crawl-page-size 5 --crawl-max-pages 1 --crawl-pdf-limit 1
 qdc daily-pipeline --batch-size 50
 qdc crawl-plan --source-id cninfo_announcement --date 2026-05-11 --control-only
 qdc crawl-plan --source-id sina_finance_news --date 2026-05-11 --control-only
