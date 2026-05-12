@@ -11,7 +11,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from quant_data_center.cli import _crawl_exhausted_datasets, _print_json, main
+from quant_data_center.cli import (
+    _backfill_exhausted_units,
+    _crawl_exhausted_datasets,
+    _print_json,
+    main,
+)
 from quant_data_center.console import QdcConsoleData, _locked_api_payload
 from quant_data_center.jobs.backfill import parse_date, plan_backfill_tasks
 from quant_data_center.settings import QdcSettings
@@ -2413,6 +2418,52 @@ def test_qdc_crawl_exhausted_dataset_tolerates_one_failed_source() -> None:
             {"dataset": "announcement", "source_id": "sse_announcement", "status": "failed"},
         ],
     ) == ["announcement"]
+
+
+def test_qdc_backfill_exhausted_units_tolerates_backup_source_success() -> None:
+    selected_tasks = [
+        {
+            "task_id": "task-ak",
+            "dataset": "daily_bar",
+            "source_id": "akshare",
+            "start_date": "2026-05-11",
+            "end_date": "2026-05-11",
+            "symbol_batch_json": ["SH600000"],
+        },
+        {
+            "task_id": "task-em",
+            "dataset": "daily_bar",
+            "source_id": "eastmoney",
+            "start_date": "2026-05-11",
+            "end_date": "2026-05-11",
+            "symbol_batch_json": ["SH600000"],
+        },
+    ]
+    assert (
+        _backfill_exhausted_units(
+            selected_tasks=selected_tasks,
+            results=[
+                {"task_id": "task-ak", "status": "failed"},
+                {"task_id": "task-em", "status": "success"},
+            ],
+        )
+        == []
+    )
+    assert _backfill_exhausted_units(
+        selected_tasks=selected_tasks,
+        results=[
+            {"task_id": "task-ak", "status": "failed"},
+            {"task_id": "task-em", "status": "failed"},
+        ],
+    ) == [
+        {
+            "dataset": "daily_bar",
+            "start_date": "2026-05-11",
+            "end_date": "2026-05-11",
+            "symbols": ["SH600000"],
+            "source_ids": ["akshare", "eastmoney"],
+        }
+    ]
 
 
 def test_qdc_crawl_run_unsupported_real_source_fails_explicitly(tmp_path: Path) -> None:

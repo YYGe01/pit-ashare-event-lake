@@ -1200,7 +1200,6 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
 
     steps: list[dict[str, Any]] = []
     status = "ok"
-    has_failures = False
     planned = _plan_daily_tasks(
         database=database,
         source_ids=source_ids,
@@ -1235,7 +1234,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         )
         return 0
 
-    daily_results, has_failures = _run_backfill_tasks(
+    daily_results, _has_failures = _run_backfill_tasks(
         settings=settings,
         database=database,
         tasks=selected_tasks,
@@ -1243,25 +1242,32 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         parallelism=daily_parallelism,
         watch=bool(args.watch),
     )
+    daily_exhausted_units = _backfill_exhausted_units(
+        selected_tasks=selected_tasks,
+        results=daily_results,
+    )
+    daily_step_status = "partial" if has_incomplete_tasks or daily_exhausted_units else "ok"
     if args.watch:
         _watch_print(
             True,
-            f"{_watch_task_prefix(phase='pipeline', index=1, total=1)} END step=daily status={'ok' if not (has_failures or has_incomplete_tasks) else 'partial'} ran={len(daily_results)}/{len(selected_tasks)}",
+            f"{_watch_task_prefix(phase='pipeline', index=1, total=1)} END step=daily status={daily_step_status} ran={len(daily_results)}/{len(selected_tasks)}",
         )
     steps.append(
         {
             "step": "daily",
-            "status": "partial" if has_failures or has_incomplete_tasks else "ok",
+            "status": daily_step_status,
             "planned_count": len(planned),
             "ran_count": len(daily_results),
             "remaining_task_count": len(tasks) - len(selected_tasks),
+            "failed_count": sum(1 for item in daily_results if item["status"] == "failed"),
+            "exhausted_units": daily_exhausted_units,
             "results": daily_results,
         }
     )
-    if has_failures or has_incomplete_tasks:
+    if daily_step_status != "ok":
         status = "partial"
 
-    should_continue = not (has_failures or has_incomplete_tasks) or continue_on_failure
+    should_continue = daily_step_status == "ok" or continue_on_failure
     crawl_result: dict[str, Any] | None = None
     if should_continue and crawl_documents:
         if args.watch:
@@ -1514,6 +1520,49 @@ def _crawl_exhausted_datasets(
         str(result["dataset"]) for result in results if result.get("status") == "success"
     }
     return sorted(planned_datasets - successful_datasets)
+
+
+def _backfill_exhausted_units(
+    *,
+    selected_tasks: list[dict[str, object]],
+    results: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    result_by_task_id = {str(result["task_id"]): result for result in results}
+    unit_sources: dict[tuple[str, str, str, tuple[str, ...]], set[str]] = {}
+    successful_units: set[tuple[str, str, str, tuple[str, ...]]] = set()
+    for task in selected_tasks:
+        task_id = str(task["task_id"])
+        unit = _backfill_unit_key(task)
+        source_id = str(task["source_id"])
+        unit_sources.setdefault(unit, set()).add(source_id)
+        result = result_by_task_id.get(task_id)
+        if result and result.get("status") == "success":
+            successful_units.add(unit)
+    exhausted = []
+    for unit, sources in sorted(unit_sources.items()):
+        if unit in successful_units:
+            continue
+        dataset, start_date, end_date, symbols = unit
+        exhausted.append(
+            {
+                "dataset": dataset,
+                "start_date": start_date,
+                "end_date": end_date,
+                "symbols": list(symbols),
+                "source_ids": sorted(sources),
+            }
+        )
+    return exhausted
+
+
+def _backfill_unit_key(task: dict[str, object]) -> tuple[str, str, str, tuple[str, ...]]:
+    symbols = tuple(str(symbol) for symbol in (task.get("symbol_batch_json") or []))
+    return (
+        str(task["dataset"]),
+        str(task["start_date"]),
+        str(task["end_date"]),
+        symbols,
+    )
 
 
 def _run_backfill_tasks(
