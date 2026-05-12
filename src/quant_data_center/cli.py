@@ -823,6 +823,7 @@ def cmd_daily(args: argparse.Namespace) -> int:
         all_market=bool(args.all_market),
         source_id=args.source_id,
         refresh_stock_basic=bool(args.refresh_stock_basic),
+        plan_only=False,
     )
     _validate_backfill_plan_symbols(dataset="daily_bar", symbols=symbols)
     universe = _daily_task_universe(args.universe, all_market=bool(args.all_market))
@@ -936,6 +937,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         all_market=all_market,
         source_id=source_id,
         refresh_stock_basic=all_market and not skip_stock_basic_refresh,
+        plan_only=bool(args.plan_only),
     )
     _validate_backfill_plan_symbols(dataset="daily_bar", symbols=symbols)
 
@@ -1654,18 +1656,24 @@ def _resolve_daily_symbols(
     all_market: bool,
     source_id: str,
     refresh_stock_basic: bool,
+    plan_only: bool,
 ) -> list[str]:
     symbols = parse_symbols(symbols_arg)
     if symbols:
         return symbols
     if all_market or _is_full_market_universe(universe):
-        if refresh_stock_basic:
+        if refresh_stock_basic and not plan_only:
             AkshareSilverCollector(settings).collect_stock_basic(source_id=source_id)
         symbols = database.stock_basic_instruments(active_only=True)
-        if not symbols:
+        if not symbols and (refresh_stock_basic and not plan_only):
             AkshareSilverCollector(settings).collect_stock_basic(source_id=source_id)
             symbols = database.stock_basic_instruments(active_only=True)
         if not symbols:
+            if plan_only:
+                raise ValueError(
+                    "plan-only requires existing stock_basic for full-market universe; "
+                    "provide --symbols or run without --plan-only to initialize stock_basic first"
+                )
             raise ValueError("all-market daily collection requires non-empty stock_basic")
         return symbols
     return _resolve_plan_symbols(

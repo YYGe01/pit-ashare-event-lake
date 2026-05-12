@@ -11,7 +11,9 @@
 ## 项目背景
 
 - 本仓库当前主线是 `quant_data_center`，用于建设个人量化统一数据中心。
-- 目标服务 Qlib 研究：A 股数据采集、历史回补、每日增量、标准化清洗、稳定日频因子加工和 Qlib 导出。
+- 目标服务 Qlib 研究：A 股每日数据采集、标准化清洗、稳定日频因子加工和 Qlib 导出。
+- 当前项目重心是每日数据采集链路：`daily-pipeline`、`crawl-daily`、质量检查、Parquet 同步、Qlib 导出和控制台观察。
+- 历史回补能力先冻结：不要主动规划、实现、扩展或执行 `plan-backfill` / `run-backfill` 相关工作，除非用户明确要求解冻或处理既有队列。
 - 本仓库不做模型训练、组合回测、实盘下单或终端适配。
 - 当前主线只保留 QDC 代码、配置、测试和文档。
 - 当前项目统一使用已存在的 `ai-trader` conda 环境；不要创建或切换到 `quant-data-center` conda 环境。`quant-data-center` 仅保留为 Python 项目发行名。
@@ -44,6 +46,8 @@ python -m pip install -e ".[market,dev]"
 
 ## 常用命令
 
+当前默认优先使用每日采集命令。回补命令只作为历史能力保留，非用户明确要求时不要主动执行。
+
 ```powershell
 conda activate ai-trader
 python -m pip install -e ".[market,dev]"
@@ -52,14 +56,17 @@ qdc init
 qdc db-info
 qdc smoke
 qdc refresh-universe --universe csi300 --snapshot-date 2026-05-11
-qdc plan-backfill --dataset daily_bar --source-id akshare --universe csi300 --start 2026-05-01 --end 2026-05-03 --batch-size 1 --chunk-days 2
-qdc list-backfill --dataset daily_bar
-qdc run-backfill --dataset daily_bar --limit-tasks 4 --control-only
 qdc daily --date 2026-05-11 --universe csi300 --control-only
+qdc daily-pipeline --date 2026-05-11 --symbols "SH600000,SZ000001" --batch-size 1 --control-only
+qdc daily-pipeline --date 2026-05-11 --symbols "SH600000,SZ000001" --batch-size 1 --crawl-documents --crawl-page-size 10 --crawl-max-pages 1 --crawl-pdf-limit 1 --export-start 2026-05-11 --market-name qdc_daily_smoke
+qdc --config config/quant_data_center_daily_only.yaml daily-pipeline
+qdc crawl-daily --date 2026-05-11 --control-only
+qdc crawl-daily --date 2026-05-11 --source-id cninfo_announcement --page-size 2 --max-pages 1 --pdf-limit 1
 qdc build-factors --factor-set all --start 2026-05-01 --end 2026-05-03
 qdc sync-parquet --layer all
 qdc quality --dataset daily_bar
 qdc export-qlib --start 2026-05-01 --end 2026-05-03 --provider-uri data/quant_data_center/qlib/cn_data
+qdc console --host 127.0.0.1 --port 8765
 pytest
 ruff check .
 ```
@@ -73,6 +80,7 @@ conda run -n ai-trader ...
 ## 状态和历史
 
 - 当前实施计划放在 `docs/迁移实施计划.md`。
+- 当前唯一每日采集状态入口放在 `docs/每日自动采集实施计划.md`。
 - 智能体工作摘要写入 `docs/工作日志/YYYY年MM月DD日.md`。
 - QDC 配置放在 `config/quant_data_center.yaml`。
 - 本地运行数据放在 `data/quant_data_center/`，必须保持 gitignored。
@@ -120,9 +128,11 @@ conda run -n ai-trader ruff check .
 
 如果用户只说“继续”，且没有给出新优先级，按 `docs/迁移实施计划.md` 的未完成项继续：
 
-1. 用真实大样本跑通 `refresh-universe`、`daily`、`build-factors`、`sync-parquet`、`export-qlib`。
-2. 联调 Qlib Alpha158 baseline。
-3. 增加更细的数据质量规则和失败重试策略。
+1. 优先推进每日数据采集：`daily-pipeline`、`crawl-daily`、`build-factors`、`sync-parquet`、`quality`、`export-qlib`。
+2. 跑通 all_a 单日真实采集和连续交易日稳定性记录。
+3. 增强每日覆盖率、质量规则、失败恢复和控制台观察能力。
+
+除非用户明确要求，暂不继续历史回补、历史训练底座补齐或回补队列消费。
 
 <!-- agent-dev-rules:start -->
 ## 通用 Agent 提交规则

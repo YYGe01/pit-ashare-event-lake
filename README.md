@@ -2,14 +2,18 @@
 
 本仓库当前主线是个人量化统一数据中心 `quant_data_center`。
 
-目标是服务 Qlib 研究：采集 A 股数据、支持历史回补和每日增量、加工稳定日频因子，并导出 Qlib 可读数据。本仓库不做模型训练、组合回测、实盘下单或交易终端适配。
+目标是服务 Qlib 研究：采集 A 股每日数据、加工稳定日频因子，并导出 Qlib 可读数据。本仓库不做模型训练、组合回测、实盘下单或交易终端适配。
 
 当前实施计划见 `docs/迁移实施计划.md`。第一次阅读项目时，建议先看 `docs/数据流阅读指南.md`，它按数据流解释原始留档层、上游快照层、统一研究层、因子、研究宽表层和 Qlib 数据目录导出的输入输出。控制台页面设计和后续标的画像规划见 `docs/控制台产品设计方案.md`。
 每日收盘后自动采集、新闻公告爬虫和阶段状态统一见 `docs/每日自动采集实施计划.md`。
 
+当前项目重心已经切到每日数据采集。历史回补能力保留为已有技术能力，但先冻结：默认不继续规划、执行或扩展 `plan-backfill` / `run-backfill`，除非明确为了解决既有队列或用户要求解冻。
+
 ## 当前入口
 
 项目统一使用已存在的 `ai-trader` conda 环境；不要新建 `quant-data-center` conda 环境。需要同步依赖时，可在 `ai-trader` 中执行 editable install。
+
+当前默认入口是每日采集链路：`daily-pipeline`、`crawl-daily`、`build-factors`、`sync-parquet`、`quality`、`export-qlib` 和 `console`。下面保留的回补命令仅作为历史能力参考，非当前优先事项。
 
 ```powershell
 conda activate ai-trader
@@ -54,7 +58,7 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 
 `run-backfill --control-only` 只验证任务状态流和水位表，不采集真实数据。
 
-当前真实 AkShare 回补已支持：
+历史回补能力已实现但当前冻结。既有 AkShare 回补分支支持：
 
 - 证券主数据 `stock_basic`
 - 交易日历 `trade_calendar`
@@ -67,13 +71,13 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 
 日线行情 `daily_bar`、复权因子 `adj_factor`、涨跌停价格 `price_limit`、新闻 `news` 可用 `--universe` 展开上游代码 `symbol`，也可以显式传入 `--symbols` 覆盖。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
 
-`qdc daily-pipeline` 是收盘后日频自动化入口，默认使用 `all_a` 全 A 当前 active 标的：先刷新 `stock_basic`，再执行单日采集、因子重建、Parquet 同步、质量检查和 Qlib provider 导出。需要把同日新闻公告爬虫纳入本次因子和 Qlib 导出时，增加 `--crawl-documents`；该开关会在因子构建前执行 `crawl-daily` 的默认新闻公告源。首次全市场运行前先用 `--symbols`、`--control-only` 和爬虫限量参数做 smoke。
+`qdc daily-pipeline` 是收盘后日频自动化入口，默认使用 `all_a` 全 A 当前 active 标的：先刷新 `stock_basic`，再执行单日采集、同日新闻公告爬虫、因子重建、Parquet 同步、质量检查和 Qlib provider 导出。配置里的 `crawl_documents: true` 会在因子构建前执行 `crawl-daily` 的默认新闻公告源；需要临时只跑结构化链路时传 `--no-crawl-documents`。首次全市场运行前先用 `--symbols`、`--control-only` 和爬虫限量参数做 smoke。
 
-如果暂时不使用历史回补数据，改用 `config/quant_data_center_daily_only.yaml`。该配置把 DuckDB、raw、Parquet、Qlib provider 和日志全部写到 `data/quant_data_center_daily_only/`，与当前 `data/quant_data_center/` 历史回补库隔离。`daily_pipeline` 段保存 `batch_size`、`export_start`、`market_name`、爬虫和跳过步骤等默认参数；命令行传同名参数时会覆盖配置，例如 `--batch-size 20` 或 `--crawl-documents`。
+如果暂时不使用历史回补数据，改用 `config/quant_data_center_daily_only.yaml`。该配置把 DuckDB、raw、Parquet、Qlib provider 和日志全部写到 `data/quant_data_center_daily_only/`，与当前 `data/quant_data_center/` 历史回补库隔离。`daily_pipeline` 段保存 `batch_size`、`export_start`、`market_name`、非结构化文档爬虫和跳过步骤等默认参数；默认会采集公告和新闻文档，命令行传同名参数时会覆盖配置，例如 `--batch-size 20` 或 `--no-crawl-documents`。
 
 `qdc crawl-plan` / `qdc crawl-run` / `qdc crawl-daily` 是非结构化数据每日爬虫入口。当前已支持 `cninfo_announcement` 公告列表每日新增：写 raw JSON、bronze Parquet、公开 PDF 原文 `raw_file` 留档，并把 PDF hash、object_id、下载状态回写到 `qdc_silver.announcement`。也已接入 `sina_finance_news` 作为公开新闻 metadata-only 补位源：保存 raw JSON、bronze Parquet，把标题中能匹配到 `stock_basic` 代码或名称的新闻写入 `qdc_silver.news`，再进入 `daily_news_factor` 和 Qlib 日频导出。可用 `--page-size` / `--max-pages` / `--pdf-limit` 做小范围真实 smoke；如只验证公告列表元数据，可加 `--skip-pdf-download`。正文抽取和交易所公告补源在后续阶段接入。
 
-当前回补链路会写入原始 JSON、上游快照 Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 默认用规则引擎生成新闻/公告日频 count、标题级情绪和事件因子，覆盖增长、风险、融资、合同、回购、股东增减持、监管、诉讼、业绩、质押和担保等事件；`qdc sync-parquet` 可同步统一研究层/研究宽表层 Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day 数据目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的数据目录做数据读取层冒烟验证。
+当前每日链路会写入原始 JSON、上游快照 Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。历史回补相关的 `qdc plan-backfill` / `qdc run-backfill` / `qdc run-backfill --retry-failed` 先冻结，不作为默认推进方向。`qdc build-factors` 默认用规则引擎生成新闻/公告日频 count、标题级情绪和事件因子，覆盖增长、风险、融资、合同、回购、股东增减持、监管、诉讼、业绩、质押和担保等事件；`qdc sync-parquet` 可同步统一研究层/研究宽表层 Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day 数据目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的数据目录做数据读取层冒烟验证。
 
 LLM 抽取接口已预留为单条冒烟验证 `smoke` 命令，不参与 `build-factors` 全量构建。模型切换和数据提供方 `provider` 默认值统一放在 `config/quant_data_center.yaml` 的 `llm.text_event` 段：
 
@@ -96,7 +100,7 @@ qdc classify-text-event --provider llm --document-type announcement --title "公
 
 长时间回补时，`qdc recover-running` 可把陈旧的运行中 `running` 任务标记为失败 `failed` 以便后续重试；`qdc split-backfill` 可把一个大的上游代码 `symbol` 批次任务拆成更小的待执行 `pending` 子任务。
 
-`qdc console` 会启动一个本地只读 Web 控制台，默认访问 `http://127.0.0.1:8765/`。当前轻量版直接读取 DuckDB；总览页只展示采集健康、回补进度、任务状态、水位和最近运行，数据预览页通过“覆盖情况 / 原始数据预览 / 处理后因子预览”三个 tab 展示数据维度覆盖、按标的原始源字段覆盖、原始采集数据和处理后因子。覆盖情况和原始预览都会按行情价格、涨跌和流动性、复权和涨跌停、停复牌状态、事件明细列出源字段；处理后因子预览支持从下拉连续添加多个标的，并用 Qlib 标记说明哪些列会导出到 provider features；原始预览按日期一行展示，新闻和公告只显示数量并可点击展开当天明细；数据量较大的表格默认每页展示 5 行并提供翻页。页面不会触发采集或写库。
+`qdc console` 会启动一个本地只读 Web 控制台，默认访问 `http://127.0.0.1:8765/`。当前控制台聚焦每日采集：今日总览展示最近每日运行、每日链路阶段进度、数据水位和质量信号；数据预览支持按数据集查看最新记录，也支持按标的查看处理后日频因子或原始输入。页面先不展示历史回补队列，不触发采集或写库。
 
 `qdc` 默认读取仓库内 `config/quant_data_center.yaml`；需要从其他目录运行或切换配置时，可设置 `QDC_CONFIG` 或传入 `--config`。
 

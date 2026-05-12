@@ -27,7 +27,7 @@ daily_pipeline:
   batch_size: 50
   export_start: 2026-05-12
   market_name: all_a_daily
-  crawl_documents: false
+  crawl_documents: true
   crawl_page_size: 30
   skip_stock_basic_refresh: false
   skip_crawl_pdf_download: false

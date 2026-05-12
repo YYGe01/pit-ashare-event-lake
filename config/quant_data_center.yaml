@@ -21,6 +21,19 @@ policy:
   raw_append_only: true
   unknown_copyright_policy: metadata_only
 
+daily_pipeline:
+  universe: all_a
+  source_id: akshare
+  batch_size: 50
+  crawl_documents: true
+  crawl_page_size: 30
+  skip_stock_basic_refresh: false
+  skip_crawl_pdf_download: false
+  skip_factors: false
+  skip_sync: false
+  skip_quality: false
+  skip_export: false
+
 llm:
   text_event:
     provider: rule
