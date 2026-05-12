@@ -454,6 +454,22 @@ class QdcDatabase:
             ).fetchall()
         return [str(row[0]) for row in rows]
 
+    def stock_basic_instruments(self, *, active_only: bool = True) -> list[str]:
+        filters = []
+        if active_only:
+            filters.append("coalesce(is_active, true) = true")
+        where_clause = f"where {' and '.join(filters)}" if filters else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                select instrument
+                from qdc_silver.stock_basic
+                {where_clause}
+                order by instrument
+                """
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
     def insert_source_object(
         self,
         *,

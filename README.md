@@ -5,6 +5,7 @@
 目标是服务 Qlib 研究：采集 A 股数据、支持历史回补和每日增量、加工稳定日频因子，并导出 Qlib 可读数据。本仓库不做模型训练、组合回测、实盘下单或交易终端适配。
 
 当前实施计划见 `docs/迁移实施计划.md`。第一次阅读项目时，建议先看 `docs/数据流阅读指南.md`，它按数据流解释原始留档层、上游快照层、统一研究层、因子、研究宽表层和 Qlib 数据目录导出的输入输出。控制台页面设计和后续标的画像规划见 `docs/控制台产品设计方案.md`。
+每日收盘后自动采集方案见 `docs/每日自动采集实施计划.md`。
 
 ## 当前入口
 
@@ -27,6 +28,8 @@ qdc split-backfill --task-id <task_id> --batch-size 10
 qdc plan-backfill --dataset trade_calendar --source-id akshare --start 2026-05-01 --end 2026-05-03
 qdc run-backfill --dataset trade_calendar --limit-tasks 1
 qdc daily --date 2026-05-11 --universe csi300 --control-only
+qdc daily-pipeline --date 2026-05-11 --symbols "SH600000,SZ000001" --batch-size 1 --control-only
+qdc daily-pipeline --batch-size 50
 qdc build-factors --factor-set all --start 2026-05-01 --end 2026-05-03
 qdc classify-text-event --document-type announcement --title "公司收到交易所监管问询函"
 qdc sync-parquet --layer all
@@ -52,6 +55,8 @@ qrun config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
 - 新闻 `news`
 
 日线行情 `daily_bar`、复权因子 `adj_factor`、涨跌停价格 `price_limit`、新闻 `news` 可用 `--universe` 展开上游代码 `symbol`，也可以显式传入 `--symbols` 覆盖。`qdc refresh-universe` 可把 AkShare 指数成分快照写入 `qdc_silver.universe_constituent`，回补规划会优先使用最新快照；如果没有快照，再回退到配置里的静态样例。
+
+`qdc daily-pipeline` 是收盘后日频自动化入口，默认使用 `all_a` 全 A 当前 active 标的：先刷新 `stock_basic`，再执行单日采集、因子重建、Parquet 同步、质量检查和 Qlib provider 导出。建议在 `ai-trader` 环境中用 Windows 计划任务每日 18:30 后运行；首次全市场运行前先用 `--symbols` 和 `--control-only` 做 smoke。
 
 当前回补链路会写入原始 JSON、上游快照 Parquet、`qdc_silver` DuckDB 表，并在 `qdc_meta.source_object` 登记文件索引。`qdc run-backfill --retry-failed` 可显式重试失败任务。`qdc build-factors` 默认用规则引擎生成新闻/公告日频 count、标题级情绪和事件因子，覆盖增长、风险、融资、合同、回购、股东增减持、监管、诉讼、业绩、质押和担保等事件；`qdc sync-parquet` 可同步统一研究层/研究宽表层 Parquet，`qdc quality` 可做基础质量检查，`qdc export-qlib` 可导出 Qlib day 数据目录，`qdc verify-qlib` 可用本地 Qlib 直接读取导出的数据目录做数据读取层冒烟验证。
 
@@ -110,6 +115,7 @@ conda run -n ai-trader python -m pip install -e /root/code/qlib -i https://pypi.
 ```powershell
 qdc validate-config
 qdc daily --date 2026-05-11 --universe csi300 --control-only
+qdc daily-pipeline --date 2026-05-11 --symbols "SH600000,SZ000001" --batch-size 1 --control-only
 qdc sync-parquet --layer all
 qdc quality --dataset daily_bar
 qdc verify-qlib --start 2024-01-02 --end 2024-01-02 --instruments SH600000,SZ000001 --provider-uri data/quant_data_center/qlib/cn_data

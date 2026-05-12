@@ -1228,6 +1228,95 @@ def test_qdc_daily_control_only_plans_and_runs_daily_tasks(tmp_path: Path) -> No
     assert job_runs == 12
 
 
+def test_qdc_daily_all_market_uses_stock_basic_symbols(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "akshare",
+        SimpleNamespace(
+            stock_info_a_code_name=lambda: pd.DataFrame(
+                [{"code": "600000", "name": "浦发银行"}, {"code": "000001", "name": "平安银行"}]
+            )
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "daily",
+                "--date",
+                "2026-05-11",
+                "--all-market",
+                "--refresh-stock-basic",
+                "--batch-size",
+                "1",
+                "--control-only",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    assert database.stock_basic_instruments() == ["SH600000", "SZ000001"]
+    tasks = database.list_backfill_tasks()
+    assert len(tasks) == 11
+    assert {task["status"] for task in tasks} == {"success"}
+    daily_bar_tasks = database.list_backfill_tasks(dataset="daily_bar")
+    assert [task["symbol_batch_json"] for task in daily_bar_tasks] == [["SH600000"], ["SZ000001"]]
+
+
+def test_qdc_daily_pipeline_control_only_records_pipeline_job(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "akshare",
+        SimpleNamespace(
+            stock_info_a_code_name=lambda: pd.DataFrame(
+                [{"code": "600000", "name": "浦发银行"}, {"code": "000001", "name": "平安银行"}]
+            )
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "daily-pipeline",
+                "--date",
+                "2026-05-11",
+                "--batch-size",
+                "1",
+                "--control-only",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    assert database.stock_basic_instruments() == ["SH600000", "SZ000001"]
+    assert len(database.list_backfill_tasks()) == 11
+    with database.connect() as conn:
+        pipeline_job = conn.execute(
+            """
+            select status, dataset, universe, parameters_json
+            from qdc_meta.job_run
+            where job_type = 'daily_pipeline'
+            """
+        ).fetchone()
+    assert pipeline_job is not None
+    assert pipeline_job[0:3] == ("success", "daily_pipeline", "all_a")
+    assert json.loads(pipeline_job[3])["symbol_count"] == 2
+
+
 def test_qdc_plan_backfill_rejects_unsupported_source(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     assert (

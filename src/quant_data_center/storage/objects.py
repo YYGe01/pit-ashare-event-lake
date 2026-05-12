@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -72,8 +73,11 @@ class QdcObjectStore:
             stem=stem,
             suffix=".parquet",
         )
-        pd.DataFrame(records).to_parquet(path, index=False)
-        content = path.read_bytes()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        buffer = BytesIO()
+        pd.DataFrame(records).to_parquet(buffer, index=False)
+        content = buffer.getvalue()
+        path.write_bytes(content)
         return self._index_object(
             dataset=dataset,
             source_id=source_id,
@@ -101,7 +105,7 @@ class QdcObjectStore:
         )
         directory.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
-        filename = f"{timestamp}_{_safe_segment(stem)}_{uuid4().hex[:12]}{suffix}"
+        filename = f"{timestamp}_{_short_segment(stem)}_{uuid4().hex[:12]}{suffix}"
         return directory / filename
 
     def _index_object(
@@ -128,6 +132,14 @@ class QdcObjectStore:
 def _safe_segment(value: str) -> str:
     text = str(value).strip() or "unknown"
     return re.sub(r"[^A-Za-z0-9_.=-]+", "_", text)
+
+
+def _short_segment(value: str, *, max_length: int = 32) -> str:
+    text = _safe_segment(value)
+    if len(text) <= max_length:
+        return text
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+    return f"{text[: max_length - 9]}_{digest}"
 
 
 def _json_default(value: Any) -> Any:

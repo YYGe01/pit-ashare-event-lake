@@ -7,9 +7,10 @@ import json
 import math
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from quant_data_center.collectors.akshare import AkshareSilverCollector
 from quant_data_center.console import run_console
@@ -35,6 +36,7 @@ SUPPORTED_AKSHARE_DATASETS = {
     "news",
 }
 SYMBOL_BATCH_REQUIRED_DATASETS = {"daily_bar", "adj_factor", "price_limit", "news"}
+FULL_MARKET_UNIVERSES = {"all", "all_a", "ashare", "cn_ashare"}
 DAILY_DATASETS = [
     "trade_calendar",
     "daily_bar",
@@ -434,31 +436,27 @@ def cmd_split_backfill(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_daily(args: argparse.Namespace) -> int:
-    settings = load_settings(args.config)
-    database = QdcDatabase(settings)
-    database.init_schema()
-    run_date = parse_date(args.date).isoformat()
-    symbols = _resolve_plan_symbols(
-        settings=settings,
-        database=database,
-        dataset="daily_bar",
-        universe=args.universe,
-        symbols_arg=args.symbols,
-    )
-    _validate_backfill_plan_symbols(dataset="daily_bar", symbols=symbols)
+def _plan_daily_tasks(
+    *,
+    database: QdcDatabase,
+    source_id: str,
+    universe: str,
+    run_date: str,
+    symbols: list[str],
+    batch_size: int,
+) -> list[dict[str, Any]]:
     planned = []
     for dataset in DAILY_DATASETS:
-        _validate_backfill_plan_support(dataset=dataset, source_id=args.source_id)
+        _validate_backfill_plan_support(dataset=dataset, source_id=source_id)
         task_symbols = symbols if dataset in SYMBOL_BATCH_REQUIRED_DATASETS else []
         specs = plan_backfill_tasks(
             dataset=dataset,
-            source_id=args.source_id,
-            universe=args.universe if dataset in SYMBOL_BATCH_REQUIRED_DATASETS else "",
+            source_id=source_id,
+            universe=universe if dataset in SYMBOL_BATCH_REQUIRED_DATASETS else "",
             start_date=parse_date(run_date),
             end_date=parse_date(run_date),
             symbols=task_symbols,
-            batch_size=args.batch_size,
+            batch_size=batch_size,
             chunk_days=1,
         )
         for spec in specs:
@@ -478,6 +476,33 @@ def cmd_daily(args: argparse.Namespace) -> int:
                     "symbols": spec.symbols,
                 }
             )
+    return planned
+
+
+def cmd_daily(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    run_date = parse_date(args.date).isoformat()
+    symbols = _resolve_daily_symbols(
+        settings=settings,
+        database=database,
+        universe=args.universe,
+        symbols_arg=args.symbols,
+        all_market=bool(args.all_market),
+        source_id=args.source_id,
+        refresh_stock_basic=bool(args.refresh_stock_basic),
+    )
+    _validate_backfill_plan_symbols(dataset="daily_bar", symbols=symbols)
+    universe = _daily_task_universe(args.universe, all_market=bool(args.all_market))
+    planned = _plan_daily_tasks(
+        database=database,
+        source_id=args.source_id,
+        universe=universe,
+        run_date=run_date,
+        symbols=symbols,
+        batch_size=args.batch_size,
+    )
     if args.plan_only:
         _print_json({"status": "ok", "date": run_date, "planned": planned, "results": []})
         return 0
@@ -519,6 +544,137 @@ def cmd_daily(args: argparse.Namespace) -> int:
         }
     )
     return 1 if has_failures else 0
+
+
+def cmd_daily_pipeline(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    run_date = parse_date(args.date).isoformat() if args.date else _today(settings)
+    all_market = bool(args.all_market) or _is_full_market_universe(args.universe)
+    universe = _daily_task_universe(args.universe, all_market=all_market)
+    symbols = _resolve_daily_symbols(
+        settings=settings,
+        database=database,
+        universe=args.universe,
+        symbols_arg=args.symbols,
+        all_market=all_market,
+        source_id=args.source_id,
+        refresh_stock_basic=all_market and not bool(args.skip_stock_basic_refresh),
+    )
+    _validate_backfill_plan_symbols(dataset="daily_bar", symbols=symbols)
+
+    steps: list[dict[str, Any]] = []
+    status = "ok"
+    has_failures = False
+    planned = _plan_daily_tasks(
+        database=database,
+        source_id=args.source_id,
+        universe=universe,
+        run_date=run_date,
+        symbols=symbols,
+        batch_size=args.batch_size,
+    )
+    tasks = [
+        task
+        for task in database.fetch_backfill_tasks_by_ids([str(item["task_id"]) for item in planned])
+        if task["status"] in {"pending", "failed"}
+    ]
+    selected_tasks = tasks[: args.limit_tasks] if args.limit_tasks else tasks
+    has_incomplete_tasks = len(selected_tasks) < len(tasks)
+    if args.plan_only:
+        _print_json(
+            {
+                "status": "ok",
+                "date": run_date,
+                "universe": universe,
+                "symbol_count": len(symbols),
+                "planned_count": len(planned),
+                "planned": planned,
+                "results": [],
+            }
+        )
+        return 0
+
+    daily_results, has_failures = _run_backfill_tasks(
+        settings=settings,
+        database=database,
+        tasks=selected_tasks,
+        control_only=bool(args.control_only),
+    )
+    steps.append(
+        {
+            "step": "daily",
+            "status": "partial" if has_failures or has_incomplete_tasks else "ok",
+            "planned_count": len(planned),
+            "ran_count": len(daily_results),
+            "remaining_task_count": len(tasks) - len(selected_tasks),
+            "results": daily_results,
+        }
+    )
+    if has_failures or has_incomplete_tasks:
+        status = "partial"
+
+    should_continue = not (has_failures or has_incomplete_tasks) or bool(args.continue_on_failure)
+    if should_continue and not args.control_only and not args.skip_factors:
+        factor_result = FactorBuilder(settings).build(
+            factor_set="all",
+            start_date=run_date,
+            end_date=run_date,
+        )
+        steps.append({"step": "build_factors", **factor_result})
+
+    if should_continue and not args.control_only and not args.skip_sync:
+        sync_result = QdcParquetSync(settings).sync(layer="all")
+        steps.append({"step": "sync_parquet", "status": "ok", **sync_result})
+
+    quality_result: dict[str, Any] | None = None
+    if should_continue and not args.control_only and not args.skip_quality:
+        quality_result = QualityChecker(settings).run(start_date=run_date, end_date=run_date)
+        steps.append({"step": "quality", **quality_result})
+        if quality_result["status"] != "ok":
+            status = "partial"
+            should_continue = bool(args.continue_on_failure)
+
+    if should_continue and not args.control_only and not args.skip_export:
+        export_result = QlibExporter(settings).export(
+            provider_uri=args.provider_uri,
+            start_date=args.export_start,
+            end_date=run_date,
+            market_name=args.market_name or universe,
+        )
+        steps.append({"step": "export_qlib", **_summarize_export_result(export_result)})
+
+    job_id = database.record_job_run(
+        job_type="daily_pipeline",
+        status="success" if status == "ok" else "failed",
+        dataset="daily_pipeline",
+        source_id=args.source_id,
+        universe=universe,
+        start_date=run_date,
+        end_date=run_date,
+        parameters={
+            "all_market": all_market,
+            "symbol_count": len(symbols),
+            "planned_count": len(planned),
+            "ran_count": len(daily_results),
+            "control_only": bool(args.control_only),
+            "quality_status": quality_result["status"] if quality_result else None,
+        },
+    )
+    _print_json(
+        {
+            "status": status,
+            "job_id": job_id,
+            "date": run_date,
+            "universe": universe,
+            "symbol_count": len(symbols),
+            "planned_count": len(planned),
+            "ran_count": len(daily_results),
+            "steps": steps,
+        }
+    )
+    return 1 if status != "ok" else 0
 
 
 def _run_backfill_tasks(
@@ -758,11 +914,66 @@ def build_parser() -> argparse.ArgumentParser:
     daily_parser.add_argument("--universe", default="csi300")
     daily_parser.add_argument("--source-id", default="akshare")
     daily_parser.add_argument("--symbols", help="Comma-separated symbols overriding universe")
+    daily_parser.add_argument(
+        "--all-market",
+        action="store_true",
+        help="Use all active instruments from qdc_silver.stock_basic",
+    )
+    daily_parser.add_argument(
+        "--refresh-stock-basic",
+        action="store_true",
+        help="Refresh stock_basic before resolving --all-market symbols",
+    )
     daily_parser.add_argument("--batch-size", type=int, default=50)
     daily_parser.add_argument("--limit-tasks", type=int)
     daily_parser.add_argument("--plan-only", action="store_true")
     daily_parser.add_argument("--control-only", action="store_true")
     daily_parser.set_defaults(func=cmd_daily)
+
+    daily_pipeline_parser = subparsers.add_parser(
+        "daily-pipeline",
+        help="Run the post-close daily QDC collection, factor, quality, and Qlib export pipeline",
+    )
+    daily_pipeline_parser.add_argument(
+        "--date",
+        help="YYYY-MM-DD or YYYYMMDD; defaults to today's date in project timezone",
+    )
+    daily_pipeline_parser.add_argument(
+        "--universe",
+        default="all_a",
+        help="Universe id; all_a/all/ashare/cn_ashare mean full A-share market",
+    )
+    daily_pipeline_parser.add_argument("--source-id", default="akshare")
+    daily_pipeline_parser.add_argument("--symbols", help="Comma-separated symbols for smoke runs")
+    daily_pipeline_parser.add_argument(
+        "--all-market",
+        action="store_true",
+        help="Force full-market stock_basic symbol resolution",
+    )
+    daily_pipeline_parser.add_argument(
+        "--skip-stock-basic-refresh",
+        action="store_true",
+        help="Do not refresh stock_basic before full-market symbol resolution",
+    )
+    daily_pipeline_parser.add_argument("--batch-size", type=int, default=50)
+    daily_pipeline_parser.add_argument("--limit-tasks", type=int)
+    daily_pipeline_parser.add_argument("--provider-uri")
+    daily_pipeline_parser.add_argument(
+        "--export-start",
+        help="Optional Qlib export start date; defaults to all available daily_bar rows",
+    )
+    daily_pipeline_parser.add_argument(
+        "--market-name",
+        help="Qlib instruments market file name; defaults to all_a for full market",
+    )
+    daily_pipeline_parser.add_argument("--plan-only", action="store_true")
+    daily_pipeline_parser.add_argument("--control-only", action="store_true")
+    daily_pipeline_parser.add_argument("--continue-on-failure", action="store_true")
+    daily_pipeline_parser.add_argument("--skip-factors", action="store_true")
+    daily_pipeline_parser.add_argument("--skip-sync", action="store_true")
+    daily_pipeline_parser.add_argument("--skip-quality", action="store_true")
+    daily_pipeline_parser.add_argument("--skip-export", action="store_true")
+    daily_pipeline_parser.set_defaults(func=cmd_daily_pipeline)
 
     refresh_universe_parser = subparsers.add_parser(
         "refresh-universe",
@@ -859,6 +1070,55 @@ def _resolve_plan_symbols(
             return snapshot_symbols
         return settings.universe_symbols(universe)
     return []
+
+
+def _resolve_daily_symbols(
+    *,
+    settings: QdcSettings,
+    database: QdcDatabase,
+    universe: str,
+    symbols_arg: str | None,
+    all_market: bool,
+    source_id: str,
+    refresh_stock_basic: bool,
+) -> list[str]:
+    symbols = parse_symbols(symbols_arg)
+    if symbols:
+        return symbols
+    if all_market or _is_full_market_universe(universe):
+        if refresh_stock_basic:
+            AkshareSilverCollector(settings).collect_stock_basic(source_id=source_id)
+        symbols = database.stock_basic_instruments(active_only=True)
+        if not symbols:
+            AkshareSilverCollector(settings).collect_stock_basic(source_id=source_id)
+            symbols = database.stock_basic_instruments(active_only=True)
+        if not symbols:
+            raise ValueError("all-market daily collection requires non-empty stock_basic")
+        return symbols
+    return _resolve_plan_symbols(
+        settings=settings,
+        database=database,
+        dataset="daily_bar",
+        universe=universe,
+        symbols_arg=None,
+    )
+
+
+def _is_full_market_universe(universe: str) -> bool:
+    return universe.strip().lower() in FULL_MARKET_UNIVERSES
+
+
+def _daily_task_universe(universe: str, *, all_market: bool) -> str:
+    if all_market or _is_full_market_universe(universe):
+        return "all_a"
+    return universe
+
+
+def _today(settings: QdcSettings) -> str:
+    try:
+        return datetime.now(ZoneInfo(settings.timezone)).date().isoformat()
+    except Exception:
+        return date.today().isoformat()
 
 
 def _validate_backfill_plan_symbols(
