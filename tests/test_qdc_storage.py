@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import sys
 import struct
@@ -1224,7 +1225,7 @@ def test_qdc_crawl_plan_is_idempotent(tmp_path: Path) -> None:
     assert task["dataset"] == "announcement"
     assert task["crawl_date"] == "2026-05-11"
     assert task["partition_key"] == "date=2026-05-11"
-    assert task["request_json"]["parser_version"] == "cninfo_announcement_v0"
+    assert task["request_json"]["parser_version"] == "cninfo_announcement_v1"
     assert task["status"] == "pending"
 
 
@@ -1316,15 +1317,29 @@ def test_qdc_crawl_run_real_cninfo_with_fake_response(
                 ],
             }
 
+    class FakePdfResponse:
+        status_code = 200
+        headers = {"Content-Type": "application/pdf"}
+        content = b"%PDF-1.4 unit-test"
+
+        def raise_for_status(self) -> None:
+            return None
+
     calls = []
+    pdf_calls = []
 
     def fake_post(url, headers, data, timeout):
         calls.append({"url": url, "headers": headers, "data": data, "timeout": timeout})
         return FakeResponse()
 
+    def fake_get(url, headers, timeout):
+        pdf_calls.append({"url": url, "headers": headers, "timeout": timeout})
+        return FakePdfResponse()
+
     import requests
 
     monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr(requests, "get", fake_get)
 
     assert (
         main(
@@ -1336,6 +1351,8 @@ def test_qdc_crawl_run_real_cninfo_with_fake_response(
                 "cninfo_announcement",
                 "--page-size",
                 "2",
+                "--pdf-limit",
+                "1",
             ]
         )
         == 0
@@ -1345,13 +1362,29 @@ def test_qdc_crawl_run_real_cninfo_with_fake_response(
     task = database.list_crawl_tasks()[0]
     assert task["status"] == "success"
     assert calls[0]["data"]["seDate"] == "2026-05-11~2026-05-11"
+    assert pdf_calls == [
+        {
+            "url": "https://static.cninfo.com.cn/finalpage/2024-01-02/1218792734.PDF",
+            "headers": {
+                "User-Agent": "Mozilla/5.0 QDC-Crawler/0.1 (+local research)",
+                "Referer": (
+                    "https://www.cninfo.com.cn/new/commonUrl/pageOfSearch?"
+                    "lastPage=index&url=disclosure/list/search"
+                ),
+                "Origin": "https://www.cninfo.com.cn",
+                "Accept": "application/pdf,*/*",
+            },
+            "timeout": 45,
+        }
+    ]
     assert database.silver_table_counts()["announcement"] == 2
     source_objects = database.list_source_objects(dataset="announcement", source_id="cninfo_announcement")
-    assert {item["layer"] for item in source_objects} == {"bronze", "raw"}
+    assert {item["layer"] for item in source_objects} == {"bronze", "raw", "raw_file"}
+    pdf_hash = hashlib.sha256(FakePdfResponse.content).hexdigest()
     with database.connect() as conn:
         rows = conn.execute(
             """
-            select instrument, title, url
+            select instrument, title, url, pdf_download_status, pdf_sha256, pdf_size_bytes
             from qdc_silver.announcement
             order by instrument
             """
@@ -1361,11 +1394,17 @@ def test_qdc_crawl_run_real_cninfo_with_fake_response(
             "SH600000",
             "年度报告",
             "https://static.cninfo.com.cn/finalpage/2024-01-02/1218792734.PDF",
+            "success",
+            pdf_hash,
+            len(FakePdfResponse.content),
         ),
         (
             "SZ000001",
             "关于董事会决议的公告",
             "https://static.cninfo.com.cn/finalpage/2024-01-02/1218792735.PDF",
+            "skipped_by_limit",
+            None,
+            None,
         ),
     ]
 
@@ -2544,6 +2583,66 @@ def test_silver_store_upserts_core_research_tables(tmp_path: Path) -> None:
             """
         ).fetchone()[0]
     assert close_value == 10.3
+
+
+def test_silver_announcements_preserve_first_seen_pdf_metadata(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    silver = SilverStore(settings)
+
+    silver.upsert_announcements(
+        [
+            {
+                "announcement_id": "cninfo_a1_SH600000",
+                "source_record_id": "a1",
+                "publish_date": "2026-05-11",
+                "publish_time": "2026-05-11 18:30:00",
+                "instrument": "SH600000",
+                "title": "公司公告",
+                "url": "https://static.cninfo.com.cn/a1.pdf",
+                "source_id": "cninfo_announcement",
+                "observed_at": "2026-05-11 18:40:00",
+                "collect_time": "2026-05-11 18:40:00",
+                "pdf_sha256": "first_hash",
+                "pdf_size_bytes": 123,
+                "pdf_object_id": "obj1",
+                "pdf_download_status": "success",
+            }
+        ]
+    )
+    silver.upsert_announcements(
+        [
+            {
+                "announcement_id": "cninfo_a1_SH600000",
+                "source_record_id": "a1",
+                "publish_date": "2026-05-11",
+                "publish_time": "2026-05-11 18:30:00",
+                "instrument": "SH600000",
+                "title": "公司公告",
+                "url": "https://static.cninfo.com.cn/a1.pdf",
+                "source_id": "cninfo_announcement",
+                "observed_at": "2026-05-11 21:30:00",
+                "collect_time": "2026-05-11 21:30:00",
+                "pdf_download_status": "skipped",
+            }
+        ]
+    )
+
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            select observed_at, collect_time, pdf_sha256, pdf_size_bytes,
+                   pdf_object_id, pdf_download_status
+            from qdc_silver.announcement
+            where announcement_id = 'cninfo_a1_SH600000'
+            """
+        ).fetchone()
+
+    assert str(row[0]) == "2026-05-11 18:40:00"
+    assert str(row[1]) == "2026-05-11 21:30:00"
+    assert row[2:] == ("first_hash", 123, "obj1", "success")
 
 
 def test_qdc_refresh_universe_snapshot_feeds_plan_backfill(

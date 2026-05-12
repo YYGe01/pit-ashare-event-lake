@@ -9,6 +9,29 @@ from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.database import QdcDatabase
 
 
+DOCUMENT_OPTIONAL_FIELDS = {
+    "announcement": [
+        "publish_time",
+        "source_record_id",
+        "source_sec_code",
+        "source_sec_name",
+        "adjunct_url",
+        "observed_at",
+        "collect_time",
+        "pdf_url",
+        "pdf_sha256",
+        "pdf_size_bytes",
+        "pdf_object_id",
+        "pdf_download_status",
+        "pdf_error_message",
+        "raw_object_id",
+        "parser_version",
+    ],
+    "news": [],
+}
+PDF_METADATA_FIELDS = {"pdf_sha256", "pdf_size_bytes", "pdf_object_id"}
+
+
 class SilverStore:
     """Upsert normalized research records into DuckDB silver tables."""
 
@@ -350,30 +373,49 @@ class SilverStore:
         if not records:
             return 0
         deduped = {str(_required(record, id_field)): record for record in records}
+        optional_fields = DOCUMENT_OPTIONAL_FIELDS.get(table, [])
         now = _now()
-        rows = [
-            [
-                _required(record, id_field),
-                _required(record, "publish_date"),
-                _required(record, "instrument"),
-                _required(record, "title"),
-                record.get("url"),
-                _required(record, "source_id"),
-                record.get("updated_at") or now,
-            ]
-            for record in deduped.values()
-        ]
+        field_sql = ", ".join([id_field, "publish_date", "instrument", "title", "url", "source_id"])
+        if optional_fields:
+            field_sql = f"{field_sql}, {', '.join(optional_fields)}"
+        field_sql = f"{field_sql}, updated_at"
+        placeholders = ", ".join("?" for _ in range(7 + len(optional_fields)))
         with self.database.connect() as conn:
+            existing = _load_existing_optional_fields(
+                conn=conn,
+                table=table,
+                id_field=id_field,
+                record_ids=list(deduped),
+                optional_fields=optional_fields,
+            )
+            rows = [
+                [
+                    _required(record, id_field),
+                    _required(record, "publish_date"),
+                    _required(record, "instrument"),
+                    _required(record, "title"),
+                    record.get("url"),
+                    _required(record, "source_id"),
+                    *[
+                        _optional_document_value(
+                            record=record,
+                            existing=existing.get(str(_required(record, id_field)), {}),
+                            field=field,
+                        )
+                        for field in optional_fields
+                    ],
+                    record.get("updated_at") or now,
+                ]
+                for record in deduped.values()
+            ]
             conn.executemany(
                 f"delete from qdc_silver.{table} where {id_field} = ?",
                 [[row[0]] for row in rows],
             )
             conn.executemany(
                 f"""
-                insert into qdc_silver.{table} (
-                  {id_field}, publish_date, instrument, title, url, source_id, updated_at
-                )
-                values (?, ?, ?, ?, ?, ?, ?)
+                insert into qdc_silver.{table} ({field_sql})
+                values ({placeholders})
                 """,
                 rows,
             )
@@ -426,6 +468,58 @@ def _required(record: dict[str, Any], key: str) -> Any:
     if value is None or value == "":
         raise ValueError(f"missing required silver field: {key}")
     return value
+
+
+def _load_existing_optional_fields(
+    *,
+    conn: Any,
+    table: str,
+    id_field: str,
+    record_ids: list[str],
+    optional_fields: list[str],
+) -> dict[str, dict[str, Any]]:
+    if not record_ids or not optional_fields:
+        return {}
+    placeholders = ", ".join("?" for _ in record_ids)
+    fields_sql = ", ".join(optional_fields)
+    rows = conn.execute(
+        f"""
+        select {id_field}, {fields_sql}
+        from qdc_silver.{table}
+        where {id_field} in ({placeholders})
+        """,
+        record_ids,
+    ).fetchall()
+    result = {}
+    for row in rows:
+        record_id = str(row[0])
+        result[record_id] = {
+            field: value for field, value in zip(optional_fields, row[1:], strict=True)
+        }
+    return result
+
+
+def _optional_document_value(
+    *,
+    record: dict[str, Any],
+    existing: dict[str, Any],
+    field: str,
+) -> Any:
+    incoming = record.get(field)
+    current = existing.get(field)
+    if field == "observed_at" and current not in (None, ""):
+        return current
+    if field in PDF_METADATA_FIELDS and incoming in (None, "") and current not in (None, ""):
+        return current
+    if field == "pdf_download_status":
+        incoming_status = str(incoming or "")
+        if incoming_status != "success" and existing.get("pdf_sha256"):
+            return current or "success"
+    if field == "pdf_error_message" and existing.get("pdf_sha256") and record.get(
+        "pdf_download_status"
+    ) != "success":
+        return current
+    return incoming
 
 
 def _now() -> datetime:

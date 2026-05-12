@@ -41,8 +41,8 @@ DEFAULT_CRAWLER_SOURCES: dict[str, CrawlerSourceSpec] = {
         rate_limit_per_minute=20,
         min_delay_seconds=3.0,
         max_retry=3,
-        parser_version="cninfo_announcement_v0",
-        notes="Stage 1 registers control-plane tasks only; real fetcher lands in the next phase.",
+        parser_version="cninfo_announcement_v1",
+        notes="Daily CNINFO announcement list fetcher with public PDF retention and hash metadata.",
     ),
 }
 
@@ -66,4 +66,3 @@ def enabled_daily_source_specs(source_id: str | None = None) -> list[CrawlerSour
         for source_id in CRAWL_DAILY_SOURCE_IDS
         if DEFAULT_CRAWLER_SOURCES[source_id].enabled
     ]
-

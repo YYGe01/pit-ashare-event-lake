@@ -87,6 +87,44 @@ class QdcObjectStore:
             job_id=job_id,
         )
 
+    def put_bytes(
+        self,
+        *,
+        dataset: str,
+        source_id: str,
+        partition_value: str,
+        stem: str,
+        content: bytes,
+        suffix: str,
+        layer: str,
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
+        path = self._object_path(
+            root=self.settings.raw_root,
+            dataset=dataset,
+            source_id=source_id,
+            partition_value=partition_value,
+            stem=stem,
+            suffix=suffix,
+        )
+        path.write_bytes(content)
+        content_hash = hashlib.sha256(content).hexdigest()
+        object_id = self.database.insert_source_object(
+            dataset=dataset,
+            source_id=source_id,
+            layer=layer,
+            uri=str(path),
+            content_hash=content_hash,
+            size_bytes=len(content),
+            job_id=job_id,
+        )
+        return {
+            "object_id": object_id,
+            "uri": str(path),
+            "content_hash": content_hash,
+            "size_bytes": len(content),
+        }
+
     def _object_path(
         self,
         *,

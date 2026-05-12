@@ -230,10 +230,25 @@ create table if not exists qdc_silver.trade_status (
 create table if not exists qdc_silver.announcement (
   announcement_id varchar primary key,
   publish_date date not null,
+  publish_time timestamp,
   instrument varchar not null,
   title varchar not null,
   url varchar,
   source_id varchar not null,
+  source_record_id varchar,
+  source_sec_code varchar,
+  source_sec_name varchar,
+  adjunct_url varchar,
+  observed_at timestamp,
+  collect_time timestamp,
+  pdf_url varchar,
+  pdf_sha256 varchar,
+  pdf_size_bytes bigint,
+  pdf_object_id varchar,
+  pdf_download_status varchar,
+  pdf_error_message varchar,
+  raw_object_id varchar,
+  parser_version varchar,
   updated_at timestamp not null
 );
 
@@ -310,6 +325,23 @@ SILVER_TABLES = [
 ]
 
 SILVER_SCHEMA_MIGRATIONS = {
+    "announcement": {
+        "publish_time": "timestamp",
+        "source_record_id": "varchar",
+        "source_sec_code": "varchar",
+        "source_sec_name": "varchar",
+        "adjunct_url": "varchar",
+        "observed_at": "timestamp",
+        "collect_time": "timestamp",
+        "pdf_url": "varchar",
+        "pdf_sha256": "varchar",
+        "pdf_size_bytes": "bigint",
+        "pdf_object_id": "varchar",
+        "pdf_download_status": "varchar",
+        "pdf_error_message": "varchar",
+        "raw_object_id": "varchar",
+        "parser_version": "varchar",
+    },
     "daily_news_factor": {
         "news_sentiment_mean": "double default 0",
         "news_positive_count": "double default 0",

@@ -20,6 +20,7 @@ CNINFO_REFERER = (
     "lastPage=index&url=disclosure/list/search"
 )
 CNINFO_STATIC_ROOT = "https://static.cninfo.com.cn/"
+PARSER_VERSION = "cninfo_announcement_v1"
 
 
 class CninfoAnnouncementCrawler:
@@ -38,10 +39,13 @@ class CninfoAnnouncementCrawler:
         page_size: int = 30,
         max_pages: int | None = None,
         min_delay_seconds: float = 3.0,
+        download_pdfs: bool = True,
+        pdf_limit: int | None = None,
     ) -> dict[str, Any]:
         requests = __import__("requests")
         pages = []
         announcements = []
+        observed_at = _timestamp()
         total_pages = 1
         page_num = 1
         while page_num <= total_pages:
@@ -101,14 +105,30 @@ class CninfoAnnouncementCrawler:
             source_id=source_id,
             crawl_date=crawl_date,
             rows=announcements,
+            raw_object_id=raw_object_id,
+            observed_at=observed_at,
+            parser_version=PARSER_VERSION,
+        )
+        pdf_stats = _attach_pdf_objects(
+            requests_module=requests,
+            objects=self.objects,
+            source_id=source_id,
+            crawl_date=crawl_date,
+            records=records,
+            enabled=download_pdfs,
+            pdf_limit=pdf_limit,
+            min_delay_seconds=min_delay_seconds,
         )
         row_count = self.silver.upsert_announcements(records)
         return {
             "document_count": row_count,
-            "raw_object_count": 1 + int(bronze_object_id is not None),
+            "raw_object_count": 1 + int(bronze_object_id is not None) + pdf_stats["downloaded"],
             "raw_object_id": raw_object_id,
             "bronze_object_id": bronze_object_id,
             "provider_record_count": len(announcements),
+            "pdf_downloaded_count": pdf_stats["downloaded"],
+            "pdf_failed_count": pdf_stats["failed"],
+            "pdf_skipped_count": pdf_stats["skipped"],
         }
 
 
@@ -144,6 +164,9 @@ def _normalize_announcements(
     source_id: str,
     crawl_date: str,
     rows: list[dict[str, Any]],
+    raw_object_id: str,
+    observed_at: str,
+    parser_version: str,
 ) -> list[dict[str, Any]]:
     records = []
     for row in rows:
@@ -156,28 +179,154 @@ def _normalize_announcements(
             instrument = normalize_instrument(str(raw_code))
         except ValueError:
             continue
-        publish_date = _announcement_date(row.get("announcementTime")) or crawl_date
+        publish_time = _announcement_time(row.get("announcementTime"))
+        publish_date = publish_time[:10] if publish_time else crawl_date
         title = _clean_title(str(raw_title))
         adjunct_url = str(row.get("adjunctUrl") or "").strip()
         url = f"{CNINFO_STATIC_ROOT}{adjunct_url}" if adjunct_url else None
         records.append(
             {
                 "announcement_id": f"cninfo_{raw_id}_{instrument}",
+                "source_record_id": str(raw_id),
+                "source_sec_code": str(raw_code),
+                "source_sec_name": _clean_text(row.get("secName")),
                 "publish_date": publish_date,
+                "publish_time": publish_time,
                 "instrument": instrument,
                 "title": title,
                 "url": url,
+                "pdf_url": url,
+                "adjunct_url": adjunct_url or None,
+                "observed_at": observed_at,
+                "collect_time": observed_at,
+                "raw_object_id": raw_object_id,
+                "parser_version": parser_version,
                 "source_id": source_id,
             }
         )
     return list({str(record["announcement_id"]): record for record in records}.values())
 
 
-def _announcement_date(value: Any) -> str | None:
+def _attach_pdf_objects(
+    *,
+    requests_module: Any,
+    objects: QdcObjectStore,
+    source_id: str,
+    crawl_date: str,
+    records: list[dict[str, Any]],
+    enabled: bool,
+    pdf_limit: int | None,
+    min_delay_seconds: float,
+) -> dict[str, int]:
+    stats = {"downloaded": 0, "failed": 0, "skipped": 0}
+    cache: dict[str, dict[str, Any]] = {}
+    attempted = 0
+    for record in records:
+        pdf_url = str(record.get("pdf_url") or "").strip()
+        if not pdf_url:
+            _apply_pdf_result(record, {"pdf_download_status": "missing_url"})
+            stats["skipped"] += 1
+            continue
+        if pdf_url in cache:
+            _apply_pdf_result(record, cache[pdf_url])
+            continue
+        if not enabled:
+            result = {"pdf_download_status": "skipped"}
+            cache[pdf_url] = result
+            _apply_pdf_result(record, result)
+            stats["skipped"] += 1
+            continue
+        if pdf_limit is not None and attempted >= pdf_limit:
+            result = {"pdf_download_status": "skipped_by_limit"}
+            cache[pdf_url] = result
+            _apply_pdf_result(record, result)
+            stats["skipped"] += 1
+            continue
+        if attempted > 0 and min_delay_seconds > 0:
+            time.sleep(min_delay_seconds)
+        attempted += 1
+        result = _download_pdf(
+            requests_module=requests_module,
+            objects=objects,
+            source_id=source_id,
+            crawl_date=crawl_date,
+            record=record,
+            pdf_url=pdf_url,
+        )
+        cache[pdf_url] = result
+        _apply_pdf_result(record, result)
+        if result["pdf_download_status"] == "success":
+            stats["downloaded"] += 1
+        else:
+            stats["failed"] += 1
+    return stats
+
+
+def _download_pdf(
+    *,
+    requests_module: Any,
+    objects: QdcObjectStore,
+    source_id: str,
+    crawl_date: str,
+    record: dict[str, Any],
+    pdf_url: str,
+) -> dict[str, Any]:
+    try:
+        response = requests_module.get(
+            pdf_url,
+            headers={**_headers(), "Accept": "application/pdf,*/*"},
+            timeout=45,
+        )
+        response.raise_for_status()
+        content = bytes(response.content)
+        if not content:
+            raise ValueError("empty PDF response")
+        content_type = str(response.headers.get("Content-Type") or "").lower()
+        if "html" in content_type and not content.startswith(b"%PDF"):
+            raise ValueError(f"unexpected PDF content type: {content_type}")
+        result = objects.put_bytes(
+            dataset="announcement",
+            source_id=source_id,
+            partition_value=crawl_date,
+            stem=f"cninfo_pdf_{record['announcement_id']}",
+            content=content,
+            suffix=".pdf",
+            layer="raw_file",
+        )
+        return {
+            "pdf_download_status": "success",
+            "pdf_sha256": result["content_hash"],
+            "pdf_size_bytes": result["size_bytes"],
+            "pdf_object_id": result["object_id"],
+            "pdf_error_message": None,
+        }
+    except Exception as exc:
+        return {
+            "pdf_download_status": "failed",
+            "pdf_sha256": None,
+            "pdf_size_bytes": None,
+            "pdf_object_id": None,
+            "pdf_error_message": str(exc)[:500],
+        }
+
+
+def _apply_pdf_result(record: dict[str, Any], result: dict[str, Any]) -> None:
+    for key in (
+        "pdf_download_status",
+        "pdf_sha256",
+        "pdf_size_bytes",
+        "pdf_object_id",
+        "pdf_error_message",
+    ):
+        if key in result:
+            record[key] = result[key]
+
+
+def _announcement_time(value: Any) -> str | None:
     if value in (None, ""):
         return None
     try:
-        return datetime.fromtimestamp(int(value) / 1000).date().isoformat()
+        return datetime.fromtimestamp(int(value) / 1000).replace(microsecond=0).isoformat(" ")
     except (TypeError, ValueError, OSError):
         return None
 
@@ -188,3 +337,12 @@ def _clean_title(value: str) -> str:
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
+
+def _clean_text(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return _clean_title(str(value))
+
+
+def _timestamp() -> str:
+    return datetime.now().replace(microsecond=0).isoformat(" ")

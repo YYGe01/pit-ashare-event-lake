@@ -513,6 +513,8 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
         control_only=bool(args.control_only),
         page_size=args.page_size,
         max_pages=args.max_pages,
+        download_pdfs=not bool(args.skip_pdf_download),
+        pdf_limit=args.pdf_limit,
     )
     run_id = database.record_crawl_run(
         status="failed" if has_failures else "success",
@@ -529,6 +531,8 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
             "task_status": task_status,
             "page_size": args.page_size,
             "max_pages": args.max_pages,
+            "download_pdfs": not bool(args.skip_pdf_download),
+            "pdf_limit": args.pdf_limit,
         },
     )
     _print_json(
@@ -581,6 +585,8 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         control_only=bool(args.control_only),
         page_size=args.page_size,
         max_pages=args.max_pages,
+        download_pdfs=not bool(args.skip_pdf_download),
+        pdf_limit=args.pdf_limit,
     )
     status = "partial" if has_failures or len(selected_tasks) < len(tasks) else "ok"
     run_id = database.record_crawl_run(
@@ -598,6 +604,8 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
             "remaining_task_count": len(tasks) - len(selected_tasks),
             "page_size": args.page_size,
             "max_pages": args.max_pages,
+            "download_pdfs": not bool(args.skip_pdf_download),
+            "pdf_limit": args.pdf_limit,
         },
     )
     _print_json(
@@ -670,6 +678,8 @@ def _run_crawl_tasks(
     control_only: bool,
     page_size: int,
     max_pages: int | None,
+    download_pdfs: bool,
+    pdf_limit: int | None,
 ) -> tuple[list[dict[str, Any]], bool]:
     results = []
     has_failures = False
@@ -685,6 +695,8 @@ def _run_crawl_tasks(
                     task=task,
                     page_size=page_size,
                     max_pages=max_pages,
+                    download_pdfs=download_pdfs,
+                    pdf_limit=pdf_limit,
                 )
             database.finish_crawl_task(task_id=task_id, status="success")
             results.append(
@@ -696,6 +708,9 @@ def _run_crawl_tasks(
                     "document_count": int(result.get("document_count", 0)),
                     "raw_object_count": int(result.get("raw_object_count", 0)),
                     "provider_record_count": int(result.get("provider_record_count", 0)),
+                    "pdf_downloaded_count": int(result.get("pdf_downloaded_count", 0)),
+                    "pdf_failed_count": int(result.get("pdf_failed_count", 0)),
+                    "pdf_skipped_count": int(result.get("pdf_skipped_count", 0)),
                 }
             )
         except Exception as exc:
@@ -724,6 +739,8 @@ def _run_real_crawl_task(
     task: dict[str, Any],
     page_size: int,
     max_pages: int | None,
+    download_pdfs: bool,
+    pdf_limit: int | None,
 ) -> dict[str, Any]:
     source_id = str(task["source_id"])
     if source_id == "cninfo_announcement":
@@ -734,6 +751,8 @@ def _run_real_crawl_task(
             page_size=page_size,
             max_pages=max_pages,
             min_delay_seconds=spec.min_delay_seconds,
+            download_pdfs=download_pdfs,
+            pdf_limit=pdf_limit,
         )
     raise ValueError(f"unsupported real crawler source_id: {source_id}")
 
@@ -1303,6 +1322,12 @@ def build_parser() -> argparse.ArgumentParser:
     crawl_run_parser.add_argument("--limit-tasks", type=int)
     crawl_run_parser.add_argument("--page-size", type=int, default=30)
     crawl_run_parser.add_argument("--max-pages", type=int)
+    crawl_run_parser.add_argument("--pdf-limit", type=int)
+    crawl_run_parser.add_argument(
+        "--skip-pdf-download",
+        action="store_true",
+        help="Only collect announcement metadata; do not download public PDF files",
+    )
     crawl_run_parser.add_argument("--retry-failed", action="store_true")
     crawl_run_parser.add_argument(
         "--control-only",
@@ -1323,6 +1348,12 @@ def build_parser() -> argparse.ArgumentParser:
     crawl_daily_parser.add_argument("--limit-tasks", type=int)
     crawl_daily_parser.add_argument("--page-size", type=int, default=30)
     crawl_daily_parser.add_argument("--max-pages", type=int)
+    crawl_daily_parser.add_argument("--pdf-limit", type=int)
+    crawl_daily_parser.add_argument(
+        "--skip-pdf-download",
+        action="store_true",
+        help="Only collect announcement metadata; do not download public PDF files",
+    )
     crawl_daily_parser.add_argument("--plan-only", action="store_true")
     crawl_daily_parser.add_argument("--control-only", action="store_true")
     crawl_daily_parser.set_defaults(func=cmd_crawl_daily)
