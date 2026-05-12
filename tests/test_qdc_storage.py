@@ -1198,6 +1198,179 @@ def test_qdc_run_backfill_can_retry_failed_tasks_control_only(tmp_path: Path) ->
     assert database.fetch_dataset_watermarks()[0]["dataset"] == "daily_bar"
 
 
+def test_qdc_crawl_plan_is_idempotent(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    args = [
+        "--config",
+        str(config_path),
+        "crawl-plan",
+        "--source-id",
+        "cninfo_announcement",
+        "--date",
+        "2026-05-11",
+        "--control-only",
+    ]
+
+    assert main(args) == 0
+    assert main(args) == 0
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    counts = database.table_counts()
+    assert counts["crawler_source"] == 1
+    assert counts["crawl_task"] == 1
+    assert counts["crawl_run"] == 2
+    task = database.list_crawl_tasks()[0]
+    assert task["source_id"] == "cninfo_announcement"
+    assert task["dataset"] == "announcement"
+    assert task["crawl_date"] == "2026-05-11"
+    assert task["partition_key"] == "date=2026-05-11"
+    assert task["request_json"]["parser_version"] == "cninfo_announcement_v0"
+    assert task["status"] == "pending"
+
+
+def test_qdc_crawl_run_control_only_updates_tasks(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-plan",
+                "--source-id",
+                "cninfo_announcement",
+                "--date",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-run",
+                "--source-id",
+                "cninfo_announcement",
+                "--control-only",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    task = database.list_crawl_tasks()[0]
+    assert task["status"] == "success"
+    assert task["attempt_count"] == 1
+    assert task["last_error"] is None
+    assert database.table_counts()["crawl_run"] == 2
+
+
+def test_qdc_crawl_run_without_fetcher_fails_explicitly(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-plan",
+                "--source-id",
+                "cninfo_announcement",
+                "--date",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-run",
+                "--source-id",
+                "cninfo_announcement",
+            ]
+        )
+        == 1
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    task = database.list_crawl_tasks()[0]
+    assert task["status"] == "failed"
+    assert "real crawler execution is not implemented yet" in str(task["last_error"])
+
+
+def test_qdc_crawl_daily_control_only_plans_and_runs_default_sources(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-daily",
+                "--date",
+                "2026-05-11",
+                "--control-only",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    tasks = database.list_crawl_tasks()
+    assert len(tasks) == 1
+    assert tasks[0]["source_id"] == "cninfo_announcement"
+    assert tasks[0]["status"] == "success"
+    assert database.table_counts()["crawl_run"] == 1
+
+
+def test_qdc_crawl_recover_running_marks_stale_tasks_failed(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-plan",
+                "--source-id",
+                "cninfo_announcement",
+                "--date",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    task = database.list_crawl_tasks()[0]
+    database.mark_crawl_task_running(str(task["task_id"]))
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-recover-running",
+                "--source-id",
+                "cninfo_announcement",
+                "--older-than-minutes",
+                "0",
+                "--reason",
+                "unit test crawl recovery",
+            ]
+        )
+        == 0
+    )
+
+    recovered = database.list_crawl_tasks()[0]
+    assert recovered["status"] == "failed"
+    assert recovered["last_error"] == "unit test crawl recovery"
+
+
 def test_qdc_daily_control_only_plans_and_runs_daily_tasks(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
 

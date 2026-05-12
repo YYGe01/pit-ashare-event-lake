@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from quant_data_center.collectors.akshare import AkshareSilverCollector
 from quant_data_center.console import run_console
+from quant_data_center.crawlers.registry import crawler_source_spec, enabled_daily_source_specs
 from quant_data_center.exports.qlib import QlibExporter, QlibProviderVerifier
 from quant_data_center.factor_engine import build_text_event_classifier
 from quant_data_center.factors import FactorBuilder
@@ -434,6 +435,263 @@ def cmd_split_backfill(args: argparse.Namespace) -> int:
     result = database.split_backfill_task(task_id=args.task_id, batch_size=args.batch_size)
     _print_json({"status": "ok", **result})
     return 0
+
+
+def cmd_crawl_plan(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    crawl_date = parse_date(args.date).isoformat()
+    spec = crawler_source_spec(args.source_id)
+    planned = _plan_crawl_tasks(database=database, source_spec=spec.to_record(), crawl_date=crawl_date)
+    run_id = database.record_crawl_run(
+        status="success",
+        source_id=spec.source_id,
+        dataset=spec.dataset,
+        crawl_date=crawl_date,
+        planned_count=len(planned),
+        parameters={"control_only": bool(args.control_only), "command": "crawl-plan"},
+    )
+    _print_json(
+        {
+            "status": "ok",
+            "run_id": run_id,
+            "source_id": spec.source_id,
+            "dataset": spec.dataset,
+            "date": crawl_date,
+            "planned_count": len(planned),
+            "inserted_count": sum(1 for item in planned if item["inserted"]),
+            "duplicate_count": sum(1 for item in planned if not item["inserted"]),
+            "tasks": planned,
+        }
+    )
+    return 0
+
+
+def cmd_crawl_list(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    tasks = database.list_crawl_tasks(
+        status=args.status,
+        source_id=args.source_id,
+        dataset=args.dataset,
+        limit=args.limit,
+    )
+    _print_json({"status": "ok", "task_count": len(tasks), "tasks": tasks})
+    return 0
+
+
+def cmd_crawl_run(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    if args.source_id:
+        database.upsert_crawler_source(crawler_source_spec(args.source_id).to_record())
+    task_status = "failed" if args.retry_failed else "pending"
+    tasks = database.list_crawl_tasks(
+        status=task_status,
+        source_id=args.source_id,
+        dataset=args.dataset,
+        limit=args.limit_tasks,
+    )
+    if not tasks:
+        _print_json(
+            {
+                "status": "ok",
+                "message": f"no {task_status} crawl tasks",
+                "task_status": task_status,
+                "results": [],
+            }
+        )
+        return 0
+    results, has_failures = _run_crawl_tasks(
+        database=database,
+        tasks=tasks,
+        control_only=bool(args.control_only),
+    )
+    run_id = database.record_crawl_run(
+        status="failed" if has_failures else "success",
+        source_id=args.source_id,
+        dataset=args.dataset,
+        planned_count=len(tasks),
+        success_count=sum(1 for item in results if item["status"] == "success"),
+        failed_count=sum(1 for item in results if item["status"] == "failed"),
+        parameters={
+            "control_only": bool(args.control_only),
+            "retry_failed": bool(args.retry_failed),
+            "task_status": task_status,
+        },
+    )
+    _print_json(
+        {
+            "status": "partial" if has_failures else "ok",
+            "run_id": run_id,
+            "task_status": task_status,
+            "ran_count": len(results),
+            "results": results,
+        }
+    )
+    return 1 if has_failures else 0
+
+
+def cmd_crawl_daily(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    crawl_date = parse_date(args.date).isoformat() if args.date else _today(settings)
+    planned = []
+    for spec in enabled_daily_source_specs(args.source_id):
+        planned.extend(
+            _plan_crawl_tasks(
+                database=database,
+                source_spec=spec.to_record(),
+                crawl_date=crawl_date,
+            )
+        )
+    if args.plan_only:
+        _print_json(
+            {
+                "status": "ok",
+                "date": crawl_date,
+                "planned_count": len(planned),
+                "planned": planned,
+                "results": [],
+            }
+        )
+        return 0
+    tasks = [
+        task
+        for task in database.list_crawl_tasks(status="pending", source_id=args.source_id)
+        if task["crawl_date"] == crawl_date
+    ]
+    selected_tasks = tasks[: args.limit_tasks] if args.limit_tasks else tasks
+    results, has_failures = _run_crawl_tasks(
+        database=database,
+        tasks=selected_tasks,
+        control_only=bool(args.control_only),
+    )
+    status = "partial" if has_failures or len(selected_tasks) < len(tasks) else "ok"
+    run_id = database.record_crawl_run(
+        status="success" if status == "ok" else "failed",
+        source_id=args.source_id,
+        crawl_date=crawl_date,
+        planned_count=len(planned),
+        success_count=sum(1 for item in results if item["status"] == "success"),
+        failed_count=sum(1 for item in results if item["status"] == "failed"),
+        parameters={
+            "control_only": bool(args.control_only),
+            "ran_count": len(results),
+            "remaining_task_count": len(tasks) - len(selected_tasks),
+        },
+    )
+    _print_json(
+        {
+            "status": status,
+            "run_id": run_id,
+            "date": crawl_date,
+            "planned_count": len(planned),
+            "ran_count": len(results),
+            "remaining_task_count": len(tasks) - len(selected_tasks),
+            "results": results,
+        }
+    )
+    return 1 if status != "ok" else 0
+
+
+def cmd_crawl_recover_running(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    tasks = database.recover_running_crawl_tasks(
+        source_id=args.source_id,
+        older_than_minutes=args.older_than_minutes,
+        limit=args.limit_tasks,
+        reason=args.reason,
+    )
+    _print_json({"status": "ok", "recovered_count": len(tasks), "tasks": tasks})
+    return 0
+
+
+def _plan_crawl_tasks(
+    *,
+    database: QdcDatabase,
+    source_spec: dict[str, Any],
+    crawl_date: str,
+) -> list[dict[str, Any]]:
+    database.upsert_crawler_source(source_spec)
+    partition_key = f"date={crawl_date}"
+    request = {
+        "source_id": source_spec["source_id"],
+        "dataset": source_spec["dataset"],
+        "crawl_date": crawl_date,
+        "partition_key": partition_key,
+        "parser_version": source_spec["parser_version"],
+    }
+    task_id, inserted = database.insert_crawl_task(
+        source_id=str(source_spec["source_id"]),
+        dataset=str(source_spec["dataset"]),
+        crawl_date=crawl_date,
+        partition_key=partition_key,
+        request=request,
+    )
+    return [
+        {
+            "task_id": task_id,
+            "inserted": inserted,
+            "source_id": source_spec["source_id"],
+            "dataset": source_spec["dataset"],
+            "crawl_date": crawl_date,
+            "partition_key": partition_key,
+        }
+    ]
+
+
+def _run_crawl_tasks(
+    *,
+    database: QdcDatabase,
+    tasks: list[dict[str, Any]],
+    control_only: bool,
+) -> tuple[list[dict[str, Any]], bool]:
+    results = []
+    has_failures = False
+    for task in tasks:
+        task_id = str(task["task_id"])
+        database.mark_crawl_task_running(task_id)
+        try:
+            if not control_only:
+                raise NotImplementedError(
+                    "real crawler execution is not implemented yet; use --control-only"
+                )
+            database.finish_crawl_task(task_id=task_id, status="success")
+            results.append(
+                {
+                    "task_id": task_id,
+                    "source_id": task["source_id"],
+                    "dataset": task["dataset"],
+                    "status": "success",
+                    "document_count": 0,
+                    "raw_object_count": 0,
+                }
+            )
+        except Exception as exc:
+            has_failures = True
+            error_message = str(exc)[:1000]
+            database.finish_crawl_task(
+                task_id=task_id,
+                status="failed",
+                last_error=error_message,
+            )
+            results.append(
+                {
+                    "task_id": task_id,
+                    "source_id": task["source_id"],
+                    "dataset": task["dataset"],
+                    "status": "failed",
+                    "error_message": error_message,
+                }
+            )
+    return results, has_failures
 
 
 def _plan_daily_tasks(
@@ -974,6 +1232,62 @@ def build_parser() -> argparse.ArgumentParser:
     daily_pipeline_parser.add_argument("--skip-quality", action="store_true")
     daily_pipeline_parser.add_argument("--skip-export", action="store_true")
     daily_pipeline_parser.set_defaults(func=cmd_daily_pipeline)
+
+    crawl_plan_parser = subparsers.add_parser(
+        "crawl-plan",
+        help="Create resumable crawler tasks for one source and date",
+    )
+    crawl_plan_parser.add_argument("--source-id", required=True)
+    crawl_plan_parser.add_argument("--date", required=True, help="YYYY-MM-DD or YYYYMMDD")
+    crawl_plan_parser.add_argument(
+        "--control-only",
+        action="store_true",
+        help="Keep crawl planning in control-plane mode; real fetchers are not invoked",
+    )
+    crawl_plan_parser.set_defaults(func=cmd_crawl_plan)
+
+    crawl_list_parser = subparsers.add_parser("crawl-list", help="List crawler tasks")
+    crawl_list_parser.add_argument("--source-id")
+    crawl_list_parser.add_argument("--dataset")
+    crawl_list_parser.add_argument("--status")
+    crawl_list_parser.add_argument("--limit", type=int)
+    crawl_list_parser.set_defaults(func=cmd_crawl_list)
+
+    crawl_run_parser = subparsers.add_parser("crawl-run", help="Run pending crawler tasks")
+    crawl_run_parser.add_argument("--source-id")
+    crawl_run_parser.add_argument("--dataset")
+    crawl_run_parser.add_argument("--limit-tasks", type=int)
+    crawl_run_parser.add_argument("--retry-failed", action="store_true")
+    crawl_run_parser.add_argument(
+        "--control-only",
+        action="store_true",
+        help="Validate crawler task state flow without collecting real documents",
+    )
+    crawl_run_parser.set_defaults(func=cmd_crawl_run)
+
+    crawl_daily_parser = subparsers.add_parser(
+        "crawl-daily",
+        help="Plan and run daily crawler tasks for enabled document sources",
+    )
+    crawl_daily_parser.add_argument(
+        "--date",
+        help="YYYY-MM-DD or YYYYMMDD; defaults to today's date in project timezone",
+    )
+    crawl_daily_parser.add_argument("--source-id")
+    crawl_daily_parser.add_argument("--limit-tasks", type=int)
+    crawl_daily_parser.add_argument("--plan-only", action="store_true")
+    crawl_daily_parser.add_argument("--control-only", action="store_true")
+    crawl_daily_parser.set_defaults(func=cmd_crawl_daily)
+
+    crawl_recover_parser = subparsers.add_parser(
+        "crawl-recover-running",
+        help="Mark stale running crawler tasks as failed so they can be retried",
+    )
+    crawl_recover_parser.add_argument("--source-id")
+    crawl_recover_parser.add_argument("--older-than-minutes", type=int, default=30)
+    crawl_recover_parser.add_argument("--limit-tasks", type=int)
+    crawl_recover_parser.add_argument("--reason")
+    crawl_recover_parser.set_defaults(func=cmd_crawl_recover_running)
 
     refresh_universe_parser = subparsers.add_parser(
         "refresh-universe",

@@ -75,6 +75,56 @@ create table if not exists qdc_meta.quality_issue (
   observed_value varchar,
   created_at timestamp not null
 );
+
+create table if not exists qdc_meta.crawler_source (
+  source_id varchar primary key,
+  source_type varchar not null,
+  dataset varchar not null,
+  base_url varchar not null,
+  enabled boolean not null,
+  robots_url varchar,
+  robots_status varchar not null,
+  terms_review_status varchar not null,
+  copyright_policy varchar not null,
+  rate_limit_per_minute integer not null,
+  min_delay_seconds double not null,
+  max_retry integer not null,
+  parser_version varchar not null,
+  notes varchar,
+  updated_at timestamp not null
+);
+
+create table if not exists qdc_meta.crawl_task (
+  task_id varchar primary key,
+  source_id varchar not null,
+  dataset varchar not null,
+  crawl_date date not null,
+  partition_key varchar not null,
+  request_json varchar not null default '{}',
+  status varchar not null,
+  attempt_count integer not null default 0,
+  last_error varchar,
+  created_at timestamp not null,
+  updated_at timestamp not null
+);
+
+create table if not exists qdc_meta.crawl_run (
+  run_id varchar primary key,
+  source_id varchar,
+  dataset varchar,
+  crawl_date date,
+  status varchar not null,
+  planned_count integer not null default 0,
+  success_count integer not null default 0,
+  failed_count integer not null default 0,
+  document_count integer not null default 0,
+  raw_object_count integer not null default 0,
+  start_at timestamp not null,
+  end_at timestamp,
+  parameters_json varchar not null default '{}',
+  error_message varchar,
+  created_at timestamp not null
+);
 """
 
 CONTROL_TABLES = [
@@ -83,6 +133,9 @@ CONTROL_TABLES = [
     "dataset_watermark",
     "source_object",
     "quality_issue",
+    "crawler_source",
+    "crawl_task",
+    "crawl_run",
 ]
 
 SILVER_SCHEMA_SQL = """

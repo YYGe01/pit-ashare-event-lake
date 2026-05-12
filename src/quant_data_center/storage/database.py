@@ -470,6 +470,287 @@ class QdcDatabase:
             ).fetchall()
         return [str(row[0]) for row in rows]
 
+    def upsert_crawler_source(self, source: dict[str, Any]) -> None:
+        now = _now()
+        with self.connect() as conn:
+            existing = conn.execute(
+                """
+                select source_id
+                from qdc_meta.crawler_source
+                where source_id = ?
+                """,
+                [source["source_id"]],
+            ).fetchone()
+            values = [
+                source["source_id"],
+                source["source_type"],
+                source["dataset"],
+                source["base_url"],
+                bool(source["enabled"]),
+                source.get("robots_url"),
+                source["robots_status"],
+                source["terms_review_status"],
+                source["copyright_policy"],
+                int(source["rate_limit_per_minute"]),
+                float(source["min_delay_seconds"]),
+                int(source["max_retry"]),
+                source["parser_version"],
+                source.get("notes"),
+                now,
+            ]
+            if existing:
+                conn.execute(
+                    """
+                    update qdc_meta.crawler_source
+                    set source_type = ?,
+                        dataset = ?,
+                        base_url = ?,
+                        enabled = ?,
+                        robots_url = ?,
+                        robots_status = ?,
+                        terms_review_status = ?,
+                        copyright_policy = ?,
+                        rate_limit_per_minute = ?,
+                        min_delay_seconds = ?,
+                        max_retry = ?,
+                        parser_version = ?,
+                        notes = ?,
+                        updated_at = ?
+                    where source_id = ?
+                    """,
+                    values[1:] + [source["source_id"]],
+                )
+            else:
+                conn.execute(
+                    """
+                    insert into qdc_meta.crawler_source (
+                      source_id, source_type, dataset, base_url, enabled,
+                      robots_url, robots_status, terms_review_status,
+                      copyright_policy, rate_limit_per_minute,
+                      min_delay_seconds, max_retry, parser_version, notes, updated_at
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    values,
+                )
+
+    def insert_crawl_task(
+        self,
+        *,
+        source_id: str,
+        dataset: str,
+        crawl_date: str,
+        partition_key: str,
+        request: dict[str, Any],
+    ) -> tuple[str, bool]:
+        request_json = _json_dumps(request)
+        with self.connect() as conn:
+            existing = conn.execute(
+                """
+                select task_id
+                from qdc_meta.crawl_task
+                where source_id = ?
+                  and dataset = ?
+                  and crawl_date = ?
+                  and partition_key = ?
+                  and request_json = ?
+                limit 1
+                """,
+                [source_id, dataset, crawl_date, partition_key, request_json],
+            ).fetchone()
+            if existing:
+                return str(existing[0]), False
+
+            task_id = str(uuid4())
+            now = _now()
+            conn.execute(
+                """
+                insert into qdc_meta.crawl_task (
+                  task_id, source_id, dataset, crawl_date, partition_key,
+                  request_json, status, attempt_count, created_at, updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    task_id,
+                    source_id,
+                    dataset,
+                    crawl_date,
+                    partition_key,
+                    request_json,
+                    "pending",
+                    0,
+                    now,
+                    now,
+                ],
+            )
+        return task_id, True
+
+    def list_crawl_tasks(
+        self,
+        *,
+        status: str | None = None,
+        source_id: str | None = None,
+        dataset: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        filters = []
+        params: list[Any] = []
+        if status:
+            filters.append("status = ?")
+            params.append(status)
+        if source_id:
+            filters.append("source_id = ?")
+            params.append(source_id)
+        if dataset:
+            filters.append("dataset = ?")
+            params.append(dataset)
+        where_clause = f"where {' and '.join(filters)}" if filters else ""
+        limit_clause = "limit ?" if limit and limit > 0 else ""
+        if limit_clause:
+            params.append(int(limit))
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                select *
+                from qdc_meta.crawl_task
+                {where_clause}
+                order by created_at, crawl_date, source_id, partition_key, task_id
+                {limit_clause}
+                """,
+                params,
+            ).fetchall()
+            columns = [item[0] for item in conn.description]
+        return [_row_to_dict(columns, row) for row in rows]
+
+    def mark_crawl_task_running(self, task_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                update qdc_meta.crawl_task
+                set status = 'running',
+                    attempt_count = attempt_count + 1,
+                    updated_at = ?
+                where task_id = ?
+                """,
+                [_now(), task_id],
+            )
+
+    def finish_crawl_task(
+        self,
+        *,
+        task_id: str,
+        status: str,
+        last_error: str | None = None,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                update qdc_meta.crawl_task
+                set status = ?,
+                    last_error = ?,
+                    updated_at = ?
+                where task_id = ?
+                """,
+                [status, last_error, _now(), task_id],
+            )
+
+    def recover_running_crawl_tasks(
+        self,
+        *,
+        source_id: str | None = None,
+        older_than_minutes: int = 30,
+        limit: int | None = None,
+        reason: str | None = None,
+    ) -> list[dict[str, Any]]:
+        threshold = _now() - timedelta(minutes=max(0, older_than_minutes))
+        filters = ["status = 'running'", "updated_at <= ?"]
+        params: list[Any] = [threshold]
+        if source_id:
+            filters.append("source_id = ?")
+            params.append(source_id)
+        limit_clause = "limit ?" if limit and limit > 0 else ""
+        if limit_clause:
+            params.append(int(limit))
+        failure_reason = reason or f"recovered stale crawl task older than {older_than_minutes} minutes"
+        now = _now()
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                select *
+                from qdc_meta.crawl_task
+                where {' and '.join(filters)}
+                order by updated_at, created_at, task_id
+                {limit_clause}
+                """,
+                params,
+            ).fetchall()
+            columns = [item[0] for item in conn.description]
+            tasks = [_row_to_dict(columns, row) for row in rows]
+            for task in tasks:
+                conn.execute(
+                    """
+                    update qdc_meta.crawl_task
+                    set status = 'failed',
+                        last_error = ?,
+                        updated_at = ?
+                    where task_id = ?
+                    """,
+                    [failure_reason, now, task["task_id"]],
+                )
+                task["status"] = "failed"
+                task["last_error"] = failure_reason
+                task["updated_at"] = now.isoformat()
+        return tasks
+
+    def record_crawl_run(
+        self,
+        *,
+        status: str,
+        source_id: str | None = None,
+        dataset: str | None = None,
+        crawl_date: str | None = None,
+        planned_count: int = 0,
+        success_count: int = 0,
+        failed_count: int = 0,
+        document_count: int = 0,
+        raw_object_count: int = 0,
+        parameters: dict[str, Any] | None = None,
+        error_message: str | None = None,
+    ) -> str:
+        run_id = str(uuid4())
+        now = _now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                insert into qdc_meta.crawl_run (
+                  run_id, source_id, dataset, crawl_date, status,
+                  planned_count, success_count, failed_count,
+                  document_count, raw_object_count, start_at, end_at,
+                  parameters_json, error_message, created_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    run_id,
+                    source_id,
+                    dataset,
+                    crawl_date,
+                    status,
+                    int(planned_count),
+                    int(success_count),
+                    int(failed_count),
+                    int(document_count),
+                    int(raw_object_count),
+                    now,
+                    now,
+                    _json_dumps(parameters or {}),
+                    error_message,
+                    now,
+                ],
+            )
+        return run_id
+
     def insert_source_object(
         self,
         *,
