@@ -49,6 +49,9 @@ DOCUMENT_SOURCE_PRIORITY = {
 DOCUMENT_LOCAL_CONTENT_FIELDS = ("body_text", "content", "正文", "summary", "摘要")
 DOCUMENT_OBJECT_FIELDS = (
     "raw_object_id",
+    "body_download_status",
+    "body_error_message",
+    "body_size_bytes",
     "pdf_url",
     "pdf_object_id",
     "pdf_download_status",
@@ -3312,7 +3315,11 @@ def _annotated_document_row(
     item["body_text"] = body_text
     if body_text:
         item["content_status"] = "local_text"
-        item["content_label"] = "已保存正文文本"
+        item["content_label"] = (
+            "已保存新闻正文预览文本"
+            if item.get("news_id")
+            else "已保存正文文本"
+        )
         if metadata_object_id:
             item["local_object_id"] = metadata_object_id
             item["local_object_kind"] = "metadata_records"

@@ -941,6 +941,8 @@ def test_qdc_console_daily_documents_use_crawler_sources_and_local_preview(
                 "url": "https://finance.sina.com.cn/n1",
                 "source_id": "sina_finance_news",
                 "raw_object_id": news_raw_id,
+                "body_text": "浦发银行新闻正文预览。",
+                "body_download_status": "success",
             },
             {
                 "news_id": "ak_n1",
@@ -974,7 +976,9 @@ def test_qdc_console_daily_documents_use_crawler_sources_and_local_preview(
     assert news["metadata_object_id"] == news_records_id
     assert news["local_object_id"] == news_records_id
     assert news["local_object_kind"] == "metadata_records"
-    assert news["content_status"] == "local_metadata"
+    assert news["content_status"] == "local_text"
+    assert news["body_text"] == "浦发银行新闻正文预览。"
+    assert "新闻正文预览" in news["content_label"]
 
     local_pdf = QdcConsoleData(settings).source_object_file(object_id=pdf_id)
     assert local_pdf["body"] == b"%PDF-1.4\nunit test\n"
@@ -2150,14 +2154,10 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
 
     class FakeResponse:
         status_code = 200
-        text = """
-        <li><span>2026-05-11 18:20</span>[<a href="stock.html">股票</a>]
-        <a href="http://stock.eastmoney.com/a/202605111111.html"
-        title="浦发银行签订重大合同" target="_blank">浦发银行签订重大合同</a></li>
-        <li><span>2026-05-10 18:21</span>[<a href="stock.html">股票</a>]
-        <a href="http://stock.eastmoney.com/a/202605101111.html"
-        title="浦发银行历史新闻" target="_blank">浦发银行历史新闻</a></li>
-        """
+
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.encoding = "utf-8"
 
         def raise_for_status(self) -> None:
             return None
@@ -2166,7 +2166,27 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
 
     def fake_get(url, headers, timeout):
         calls.append({"url": url, "headers": headers, "timeout": timeout})
-        return FakeResponse()
+        if "/a/" in url:
+            return FakeResponse(
+                """
+                <html><body>
+                  <div class="txtinfos" id="ContentBody">
+                    <p>浦发银行签订重大合同正文第一段。</p>
+                    <p>第二段包含合同金额和业务影响。</p>
+                  </div>
+                </body></html>
+                """
+            )
+        return FakeResponse(
+            """
+            <li><span>2026-05-11 18:20</span>[<a href="stock.html">股票</a>]
+            <a href="http://stock.eastmoney.com/a/202605111111.html"
+            title="浦发银行签订重大合同" target="_blank">浦发银行签订重大合同</a></li>
+            <li><span>2026-05-10 18:21</span>[<a href="stock.html">股票</a>]
+            <a href="http://stock.eastmoney.com/a/202605101111.html"
+            title="浦发银行历史新闻" target="_blank">浦发银行历史新闻</a></li>
+            """
+        )
 
     import requests
 
@@ -2206,7 +2226,9 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
     with database.connect() as conn:
         row = conn.execute(
             """
-            select instrument, publish_date, publish_time, title, source_id
+            select
+              instrument, publish_date, publish_time, title, source_id,
+              body_text, body_download_status
             from qdc_silver.news
             order by publish_date desc, title
             """
@@ -2218,6 +2240,8 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
             datetime(2026, 5, 11, 18, 20),
             "浦发银行签订重大合同",
             "eastmoney_roll_news",
+            "浦发银行签订重大合同正文第一段。\n第二段包含合同金额和业务影响。",
+            "success",
         ),
         (
             "SH600000",
@@ -2225,6 +2249,8 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
             datetime(2026, 5, 10, 18, 21),
             "浦发银行历史新闻",
             "eastmoney_roll_news",
+            "浦发银行签订重大合同正文第一段。\n第二段包含合同金额和业务影响。",
+            "success",
         ),
     ]
 

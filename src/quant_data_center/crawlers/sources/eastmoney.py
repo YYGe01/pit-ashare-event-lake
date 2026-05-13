@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import re
 from datetime import datetime
+from html.parser import HTMLParser
 from typing import Any
 
 from quant_data_center.crawlers.runtime import (
@@ -23,6 +24,7 @@ from quant_data_center.utils.instruments import normalize_instrument
 EASTMONEY_ROLL_NEWS_URL_TEMPLATE = "https://roll.eastmoney.com/default_{page_num}.html"
 EASTMONEY_REFERER = "https://roll.eastmoney.com/"
 PARSER_VERSION = "eastmoney_roll_news_v1"
+MAX_BODY_PREVIEW_CHARS = 1200
 
 
 class EastmoneyRollNewsCrawler:
@@ -117,6 +119,13 @@ class EastmoneyRollNewsCrawler:
             observed_at=observed_at,
             raw_object_id=raw_object_id,
         )
+        body_stats = _attach_article_bodies(
+            requests_module=requests,
+            records=records,
+            request_timeout_seconds=request_timeout_seconds,
+            deadline=deadline,
+            source_id=source_id,
+        )
         document_bundle = self.objects.put_document_bundle(
             dataset="news",
             source_id=source_id,
@@ -129,6 +138,11 @@ class EastmoneyRollNewsCrawler:
                 "instrument_filter": instrument_filter or [],
                 "raw_object_id": raw_object_id,
                 "provider_record_count": len(provider_rows),
+                "body_policy": (
+                    "copyright-aware preview: extracted article body text is truncated "
+                    f"to {MAX_BODY_PREVIEW_CHARS} characters; full article HTML is not persisted"
+                ),
+                **body_stats,
             },
             records=records,
         )
@@ -145,6 +159,7 @@ class EastmoneyRollNewsCrawler:
             **document_bundle,
             "provider_record_count": len(provider_rows),
             "mapped_record_count": row_count,
+            **body_stats,
             "observed_at": observed_at,
         }
 
@@ -249,6 +264,162 @@ def _normalize_news(
                 "parser_version": PARSER_VERSION,
             }
     return list(records.values())
+
+
+def _attach_article_bodies(
+    *,
+    requests_module: Any,
+    records: list[dict[str, Any]],
+    request_timeout_seconds: float,
+    deadline: float | None,
+    source_id: str,
+) -> dict[str, int]:
+    stats = {"body_downloaded_count": 0, "body_failed_count": 0, "body_skipped_count": 0}
+    by_url: dict[str, dict[str, Any]] = {}
+    for record in records:
+        url = _clean_text(record.get("url"))
+        if not url:
+            record["body_download_status"] = "missing_url"
+            stats["body_skipped_count"] += 1
+            continue
+        if url not in by_url:
+            by_url[url] = _fetch_article_body(
+                requests_module=requests_module,
+                url=url,
+                request_timeout_seconds=request_timeout_seconds,
+                deadline=deadline,
+                source_id=source_id,
+            )
+        result = by_url[url]
+        for key, value in result.items():
+            record[key] = value
+        if result["body_download_status"] == "success":
+            stats["body_downloaded_count"] += 1
+        else:
+            stats["body_failed_count"] += 1
+    return stats
+
+
+def _fetch_article_body(
+    *,
+    requests_module: Any,
+    url: str,
+    request_timeout_seconds: float,
+    deadline: float | None,
+    source_id: str,
+) -> dict[str, Any]:
+    try:
+        raise_if_deadline_exceeded(deadline, source_id=source_id)
+        response = requests_module.get(
+            url,
+            headers=_article_headers(url),
+            timeout=request_timeout(
+                deadline=deadline,
+                default_seconds=request_timeout_seconds,
+                source_id=source_id,
+            ),
+        )
+        response.raise_for_status()
+        text = str(response.text or "")
+        body_text = _extract_article_body_text(text)
+        if not body_text:
+            raise ValueError("article body text not found")
+        return {
+            "body_text": body_text[:MAX_BODY_PREVIEW_CHARS],
+            "body_download_status": "success",
+            "body_error_message": None,
+            "body_size_bytes": len(text.encode(response.encoding or "utf-8", errors="ignore")),
+        }
+    except Exception as exc:
+        return {
+            "body_text": None,
+            "body_download_status": "failed",
+            "body_error_message": str(exc)[:500],
+            "body_size_bytes": None,
+        }
+
+
+def _article_headers(url: str) -> dict[str, str]:
+    return {
+        "User-Agent": "Mozilla/5.0 QDC-Crawler/0.1 (+local research)",
+        "Referer": EASTMONEY_REFERER if "eastmoney.com" in url else EASTMONEY_REFERER,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+
+def _extract_article_body_text(text: str) -> str:
+    parser = _ContentBodyParser()
+    parser.feed(text)
+    parser.close()
+    body_text = parser.text()
+    if body_text:
+        return body_text
+    match = re.search(r"<article[^>]*>(?P<body>.*?)</article>", text, flags=re.I | re.S)
+    if match:
+        return _html_to_text(match.group("body"))
+    return ""
+
+
+class _ContentBodyParser(HTMLParser):
+    _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._capturing = False
+        self._depth = 0
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_dict = {name.lower(): value or "" for name, value in attrs}
+        if not self._capturing and attrs_dict.get("id") == "ContentBody":
+            self._capturing = True
+            self._depth = 1
+            return
+        if not self._capturing:
+            return
+        if tag.lower() in {"p", "br", "div", "center"}:
+            self._parts.append("\n")
+        if tag.lower() not in self._VOID_TAGS:
+            self._depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self._capturing:
+            return
+        if tag.lower() in self._VOID_TAGS:
+            return
+        if tag.lower() in {"p", "div", "center"}:
+            self._parts.append("\n")
+        self._depth -= 1
+        if self._depth <= 0:
+            self._capturing = False
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._capturing and tag.lower() in {"br", "hr"}:
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._capturing:
+            self._parts.append(data)
+
+    def text(self) -> str:
+        return _normalize_body_text("".join(self._parts))
+
+
+def _html_to_text(value: str) -> str:
+    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", value)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</p\s*>", "\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return _normalize_body_text(html.unescape(text))
+
+
+def _normalize_body_text(value: str) -> str:
+    lines = []
+    for line in value.replace("\r", "\n").split("\n"):
+        cleaned = re.sub(r"[ \t\u3000]+", " ", html.unescape(line)).strip()
+        if cleaned:
+            lines.append(cleaned)
+    return "\n".join(lines)
 
 
 def _match_instruments(

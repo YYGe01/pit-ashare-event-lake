@@ -80,7 +80,11 @@ def build_news_factor_rows(
     for document in documents:
         key = (document["trade_date"], document["instrument"])
         row = grouped[key]
-        result = classifier.classify(title=document["title"], document_type="news")
+        result = classifier.classify(
+            title=document["title"],
+            body=document.get("body"),
+            document_type="news",
+        )
         score = result.sentiment_score
         row["news_count"] += 1.0
         row["_sentiment_sum"] += score
@@ -118,7 +122,11 @@ def build_announcement_factor_rows(
     for document in documents:
         key = (document["trade_date"], document["instrument"])
         row = grouped[key]
-        result = classifier.classify(title=document["title"], document_type="announcement")
+        result = classifier.classify(
+            title=document["title"],
+            body=document.get("body"),
+            document_type="announcement",
+        )
         score = result.sentiment_score
         row["announcement_count"] += 1.0
         row["_sentiment_sum"] += score
@@ -157,9 +165,21 @@ def _load_documents(
     placeholders = ", ".join("?" for _ in source_ids)
     with database.connect() as conn:
         aligner = TradeDayAligner.from_connection(conn)
+        columns = {
+            str(row[0])
+            for row in conn.execute(
+                """
+                select column_name
+                from information_schema.columns
+                where table_schema = 'qdc_silver' and table_name = ?
+                """,
+                [table],
+            ).fetchall()
+        }
+        body_expr = "body_text" if "body_text" in columns else "null as body_text"
         rows = conn.execute(
             f"""
-            select publish_date, instrument, title, source_id
+            select publish_date, instrument, title, source_id, {body_expr}
             from qdc_silver.{table}
             where publish_date >= ? and publish_date <= ?
               and source_id in ({placeholders})
@@ -169,7 +189,7 @@ def _load_documents(
         ).fetchall()
     documents = []
     seen_keys = set()
-    for publish_date, instrument, title, source_id_value in rows:
+    for publish_date, instrument, title, source_id_value, body_text in rows:
         trade_date = aligner.align(publish_date)
         if start_date <= trade_date <= end_date:
             key = (
@@ -185,6 +205,7 @@ def _load_documents(
                     "trade_date": trade_date,
                     "instrument": str(instrument),
                     "title": str(title),
+                    "body": str(body_text) if body_text else None,
                     "source_id": str(source_id_value),
                 }
             )

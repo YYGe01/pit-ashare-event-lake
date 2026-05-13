@@ -32,6 +32,10 @@ DOCUMENT_OPTIONAL_FIELDS = {
         "source_record_id",
         "observed_at",
         "collect_time",
+        "body_text",
+        "body_download_status",
+        "body_error_message",
+        "body_size_bytes",
         "raw_object_id",
         "parser_version",
     ],
@@ -517,6 +521,17 @@ def _optional_document_value(
     if field == "observed_at" and current not in (None, ""):
         return current
     if field in PDF_METADATA_FIELDS and incoming in (None, "") and current not in (None, ""):
+        return current
+    if field in {"body_text", "body_size_bytes"} and incoming in (None, "") and current not in (
+        None,
+        "",
+    ):
+        return current
+    if field == "body_download_status" and incoming in (None, "") and existing.get("body_text"):
+        return current or "success"
+    if field == "body_error_message" and existing.get("body_text") and record.get(
+        "body_download_status"
+    ) != "failed":
         return current
     if field == "pdf_download_status":
         incoming_status = str(incoming or "")
