@@ -3328,7 +3328,11 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
         ).fetchone()
     assert crawl_run is not None
     assert crawl_run[0:3] == ("success", 5, 5)
-    assert json.loads(crawl_run[3])["command"] == "daily-pipeline"
+    crawl_parameters = json.loads(crawl_run[3])
+    assert crawl_parameters["command"] == "daily-pipeline"
+    assert crawl_parameters["instrument_filter"] == []
+    assert crawl_parameters["instrument_filter_mode"] == "all_market_unfiltered"
+    assert crawl_parameters["instrument_filter_count"] == 0
     assert pipeline_job is not None
     parameters = json.loads(pipeline_job[0])
     assert parameters["crawl_documents"] is True

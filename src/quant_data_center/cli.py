@@ -1213,6 +1213,14 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         plan_only=bool(args.plan_only),
     )
     _validate_backfill_plan_symbols(dataset="daily_bar", symbols=symbols)
+    crawl_instrument_filter, crawl_instrument_filter_mode = (
+        _daily_pipeline_document_instrument_filter(
+            universe=pipeline_universe,
+            symbols_arg=args.symbols,
+            symbols=symbols,
+            all_market=all_market,
+        )
+    )
 
     steps: list[dict[str, Any]] = []
     status = "ok"
@@ -1302,7 +1310,8 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             max_pages=crawl_max_pages,
             download_pdfs=not skip_crawl_pdf_download,
             pdf_limit=crawl_pdf_limit,
-            instrument_filter=symbols,
+            instrument_filter=crawl_instrument_filter,
+            instrument_filter_mode=crawl_instrument_filter_mode,
             parallelism=crawl_parallelism,
             request_timeout_seconds=crawl_request_timeout_seconds,
             source_timeout_seconds=crawl_source_timeout_seconds,
@@ -1443,6 +1452,7 @@ def _run_daily_pipeline_crawl_documents(
     download_pdfs: bool,
     pdf_limit: int | None,
     instrument_filter: list[str] | None,
+    instrument_filter_mode: str,
     parallelism: int,
     request_timeout_seconds: float,
     source_timeout_seconds: float | None,
@@ -1508,6 +1518,9 @@ def _run_daily_pipeline_crawl_documents(
             "download_pdfs": download_pdfs,
             "pdf_limit": pdf_limit,
             "instrument_filter": instrument_filter or [],
+            "instrument_filter_mode": instrument_filter_mode,
+            "instrument_filter_count": len(instrument_filter or []),
+            "instrument_filter_preview": (instrument_filter or [])[:10],
             "parallel_sources": parallelism,
             "request_timeout_seconds": request_timeout_seconds,
             "source_timeout_seconds": source_timeout_seconds,
@@ -1524,6 +1537,20 @@ def _run_daily_pipeline_crawl_documents(
         "exhausted_datasets": exhausted_datasets,
         "results": results,
     }
+
+
+def _daily_pipeline_document_instrument_filter(
+    *,
+    universe: str,
+    symbols_arg: str | None,
+    symbols: list[str],
+    all_market: bool,
+) -> tuple[list[str] | None, str]:
+    if parse_symbols(symbols_arg):
+        return symbols, "explicit_symbols"
+    if all_market or _is_full_market_universe(universe):
+        return None, "all_market_unfiltered"
+    return symbols, "universe"
 
 
 def _crawl_exhausted_datasets(
