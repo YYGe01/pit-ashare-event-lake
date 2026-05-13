@@ -37,7 +37,20 @@ DOCUMENT_DETAIL_LIMIT = 1000
 DAILY_DOCUMENT_DETAIL_LIMIT = 10000
 DAILY_DOCUMENT_SOURCE_IDS = {
     "announcement": ("cninfo_announcement", "sse_announcement"),
-    "news": ("sina_finance_news", "eastmoney_roll_news", "nbd_company_news"),
+    "news": (
+        "sina_finance_news",
+        "eastmoney_roll_news",
+        "nbd_company_news",
+        "sina",
+        "wallstreetcn",
+        "10jqka",
+        "eastmoney",
+        "yuncaijing",
+        "fenghuang",
+        "jinrongjie",
+        "cls",
+        "yicai",
+    ),
 }
 DOCUMENT_SOURCE_PRIORITY = {
     "cninfo_announcement": 0,
@@ -45,6 +58,15 @@ DOCUMENT_SOURCE_PRIORITY = {
     "sina_finance_news": 0,
     "eastmoney_roll_news": 1,
     "nbd_company_news": 2,
+    "sina": 3,
+    "wallstreetcn": 4,
+    "10jqka": 5,
+    "eastmoney": 6,
+    "yuncaijing": 7,
+    "fenghuang": 8,
+    "jinrongjie": 9,
+    "cls": 10,
+    "yicai": 11,
 }
 DOCUMENT_LOCAL_CONTENT_FIELDS = ("body_text", "content", "正文", "summary", "摘要")
 DOCUMENT_OBJECT_FIELDS = (

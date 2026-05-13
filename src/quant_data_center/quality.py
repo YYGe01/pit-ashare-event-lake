@@ -29,6 +29,16 @@ DOCUMENT_PUBLISH_TIME_REQUIRED_SOURCES = {
     "sse_announcement",
     "sina_finance_news",
     "eastmoney_roll_news",
+    "nbd_company_news",
+    "sina",
+    "wallstreetcn",
+    "10jqka",
+    "eastmoney",
+    "yuncaijing",
+    "fenghuang",
+    "jinrongjie",
+    "cls",
+    "yicai",
 }
 
 

@@ -2390,6 +2390,214 @@ def test_qdc_crawl_run_real_nbd_news_with_fake_response(
     ]
 
 
+def test_qdc_crawl_run_vendor_wallstreetcn_news_with_fake_response(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    SilverStore(settings).upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-plan",
+                "--source-id",
+                "wallstreetcn",
+                "--date",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    class FakeResponse:
+        status_code = 200
+        url = "https://api-one-wscn.awtmt.com/apiv1/content/lives"
+
+        def json(self):
+            return {
+                "data": {
+                    "items": [
+                        {
+                            "id": "live-1",
+                            "title": "浦发银行签订战略合作",
+                            "content_text": "浦发银行签订战略合作，测试正文内容。",
+                            "display_time": "2026-05-11 09:15:00",
+                            "uri": "https://wallstreetcn.com/livenews/live-1",
+                        }
+                    ]
+                }
+            }
+
+        def raise_for_status(self) -> None:
+            return None
+
+    calls = []
+
+    def fake_get(url, headers, params, timeout):
+        calls.append({"url": url, "params": params, "timeout": timeout})
+        return FakeResponse()
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-run",
+                "--source-id",
+                "wallstreetcn",
+                "--page-size",
+                "5",
+                "--max-pages",
+                "1",
+                "--request-timeout-seconds",
+                "7",
+            ]
+        )
+        == 0
+    )
+
+    task = database.list_crawl_tasks(source_id="wallstreetcn")[0]
+    assert task["status"] == "success"
+    assert calls[0]["params"]["limit"] == "5"
+    assert calls[0]["timeout"] == 7
+    assert database.silver_table_counts()["news"] == 1
+    source_objects = database.list_source_objects(dataset="news", source_id="wallstreetcn")
+    assert {item["layer"] for item in source_objects} == {
+        "bronze",
+        "raw",
+        "raw_manifest",
+        "raw_records",
+    }
+    with database.connect() as conn:
+        rows = conn.execute(
+            """
+            select instrument, publish_date, publish_time, title, source_id,
+                   body_text, body_download_status
+            from qdc_silver.news
+            """
+        ).fetchall()
+    assert rows == [
+        (
+            "SH600000",
+            datetime(2026, 5, 11).date(),
+            datetime(2026, 5, 11, 9, 15),
+            "浦发银行签订战略合作",
+            "wallstreetcn",
+            "浦发银行签订战略合作，测试正文内容。",
+            "success",
+        )
+    ]
+
+
+def test_qdc_crawl_run_vendor_akshare_news_with_fake_module(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    SilverStore(settings).upsert_stock_basic(
+        [
+            {
+                "instrument": "SZ000001",
+                "symbol": "000001",
+                "exchange": "SZ",
+                "name": "平安银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-plan",
+                "--source-id",
+                "10jqka",
+                "--date",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "akshare",
+        SimpleNamespace(
+            stock_info_global_ths=lambda: pd.DataFrame(
+                [
+                    {
+                        "标题": "平安银行测试新闻",
+                        "内容": "平安银行测试新闻正文",
+                        "发布时间": "2026-05-11 10:01:02",
+                        "链接": "https://news.10jqka.com.cn/test.shtml",
+                    }
+                ]
+            )
+        ),
+    )
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-run",
+                "--source-id",
+                "10jqka",
+                "--page-size",
+                "5",
+                "--max-pages",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    task = database.list_crawl_tasks(source_id="10jqka")[0]
+    assert task["status"] == "success"
+    assert database.silver_table_counts()["news"] == 1
+    with database.connect() as conn:
+        rows = conn.execute(
+            """
+            select instrument, publish_date, publish_time, title, source_id,
+                   body_text, body_download_status
+            from qdc_silver.news
+            """
+        ).fetchall()
+    assert rows == [
+        (
+            "SZ000001",
+            datetime(2026, 5, 11).date(),
+            datetime(2026, 5, 11, 10, 1, 2),
+            "平安银行测试新闻",
+            "10jqka",
+            "平安银行测试新闻正文",
+            "success",
+        )
+    ]
+
+
 def test_qdc_parallel_crawl_keeps_successful_source_when_peer_times_out(
     tmp_path: Path, monkeypatch
 ) -> None:

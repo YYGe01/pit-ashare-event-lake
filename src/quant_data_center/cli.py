@@ -21,6 +21,10 @@ from quant_data_center.crawlers.sources.eastmoney import EastmoneyRollNewsCrawle
 from quant_data_center.crawlers.sources.nbd import NbdCompanyNewsCrawler
 from quant_data_center.crawlers.sources.sina import SinaFinanceNewsCrawler
 from quant_data_center.crawlers.sources.sse import SseAnnouncementCrawler
+from quant_data_center.crawlers.sources.vendor_news import (
+    VENDOR_NEWS_SOURCE_IDS,
+    VendorNewsCrawler,
+)
 from quant_data_center.exports.qlib import QlibExporter, QlibProviderVerifier
 from quant_data_center.factor_engine import build_text_event_classifier
 from quant_data_center.factors import FactorBuilder
@@ -945,6 +949,18 @@ def _run_real_crawl_task(
     if source_id == "nbd_company_news":
         spec = crawler_source_spec(source_id)
         return NbdCompanyNewsCrawler(settings).crawl_date(
+            source_id=source_id,
+            crawl_date=str(task["crawl_date"]),
+            page_size=page_size,
+            max_pages=max_pages,
+            min_delay_seconds=spec.min_delay_seconds,
+            instrument_filter=instrument_filter,
+            request_timeout_seconds=request_timeout_seconds,
+            source_timeout_seconds=source_timeout_seconds,
+        )
+    if source_id in VENDOR_NEWS_SOURCE_IDS:
+        spec = crawler_source_spec(source_id)
+        return VendorNewsCrawler(settings).crawl_date(
             source_id=source_id,
             crawl_date=str(task["crawl_date"]),
             page_size=page_size,
@@ -1964,7 +1980,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--crawl-source-id",
         help=(
             "Optional crawler source filter, for example cninfo_announcement, "
-            "sse_announcement, sina_finance_news, eastmoney_roll_news, or nbd_company_news"
+            "sse_announcement, eastmoney_roll_news, nbd_company_news, "
+            "sina, wallstreetcn, 10jqka, eastmoney, yuncaijing, fenghuang, "
+            "jinrongjie, cls, or yicai"
         ),
     )
     daily_pipeline_parser.add_argument("--crawl-limit-tasks", type=int)

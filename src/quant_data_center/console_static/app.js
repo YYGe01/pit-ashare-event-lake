@@ -93,6 +93,23 @@ const DATASET_LABELS = {
   daily_announcement_factor: "公告日频因子",
 };
 
+const SOURCE_LABELS = {
+  cninfo_announcement: "巨潮资讯公告",
+  sse_announcement: "上交所公告",
+  sina_finance_news: "新浪财经滚动新闻",
+  eastmoney_roll_news: "东方财富滚动新闻",
+  nbd_company_news: "每经公司新闻",
+  sina: "新浪财经",
+  wallstreetcn: "华尔街见闻",
+  "10jqka": "同花顺",
+  eastmoney: "东方财富",
+  yuncaijing: "云财经",
+  fenghuang: "凤凰新闻",
+  jinrongjie: "金融界",
+  cls: "财联社",
+  yicai: "第一财经",
+};
+
 const STATUS_LABELS = {
   complete: "已完成",
   success: "成功",
@@ -154,6 +171,17 @@ function fieldLabel(key) {
 function datasetLabel(value) {
   const key = String(value || "");
   return DATASET_LABELS[key] ? `${DATASET_LABELS[key]} (${key})` : key || "-";
+}
+
+function sourceLabel(value) {
+  const ids = String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!ids.length) return "-";
+  return ids
+    .map((id) => SOURCE_LABELS[id] ? `${SOURCE_LABELS[id]} (${id})` : id)
+    .join(", ");
 }
 
 function statusLabel(value) {
@@ -410,7 +438,7 @@ function renderSourceDimensions(rows) {
     [
       { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel, maxLength: 90 },
       { key: "dimension", label: fieldLabel("dimension"), maxLength: 120 },
-      { key: "source_id", label: fieldLabel("source_id"), maxLength: 160 },
+      { key: "source_id", label: fieldLabel("source_id"), format: sourceLabel, maxLength: 220 },
       { key: "expected_instrument_count", label: fieldLabel("expected_instrument_count"), value: (row) => row.expected_instrument_count === null ? "-" : number(row.expected_instrument_count) },
       { key: "success_instrument_count", label: fieldLabel("success_instrument_count"), value: (row) => row.success_instrument_count === null ? "-" : number(row.success_instrument_count) },
       { key: "failed_instrument_count", label: fieldLabel("failed_instrument_count"), value: (row) => row.failed_instrument_count === null ? "-" : number(row.failed_instrument_count) },
@@ -542,6 +570,7 @@ function renderDocumentItem(document) {
   const sourceIds = Array.isArray(document.source_ids) && document.source_ids.length
     ? document.source_ids.join(", ")
     : document.source_id || "-";
+  const sourceText = sourceLabel(sourceIds);
   const titleControl = localUrl
     ? `<button class="document-title-button" data-preview-url="${escapeHtml(localUrl)}" type="button" aria-expanded="false">${title}</button>`
     : `<span>${title}</span>`;
@@ -562,7 +591,7 @@ function renderDocumentItem(document) {
   return `
     <article class="document-item">
       <h3>${titleControl}</h3>
-      <p class="document-meta">${escapeHtml(document.publish_date || "-")} · ${escapeHtml(sourceIds)}</p>
+      <p class="document-meta">${escapeHtml(document.publish_date || "-")} · ${escapeHtml(sourceText)}</p>
       <p class="document-content-status document-content-${escapeHtml(contentStatus)}">${escapeHtml(contentLabel)}</p>
       ${bodyText}
       <div class="document-actions">${localAction}${externalAction}</div>
