@@ -30,7 +30,6 @@ daily_pipeline:
     - sina
   batch_size: 50
   daily_parallelism: 1
-  export_start: 2026-05-12
   market_name: all_a_daily
   crawl_documents: true
   crawl_page_size: 30

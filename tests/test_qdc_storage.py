@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from quant_data_center import cli as cli_module
 from quant_data_center.cli import (
     _backfill_exhausted_units,
     _crawl_exhausted_datasets,
@@ -3404,6 +3405,98 @@ daily_pipeline:
         ).fetchone()
     assert pipeline_job is not None
     assert json.loads(pipeline_job[0])["crawl_documents"] is False
+
+
+def test_qdc_daily_pipeline_defaults_export_start_to_run_date(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """
+daily_pipeline:
+  universe: csi300
+  source_id: akshare
+  batch_size: 1
+  crawl_documents: false
+""",
+    )
+    exported: list[dict[str, object]] = []
+
+    def fake_run_backfill_tasks(**kwargs):
+        tasks = kwargs["tasks"]
+        return (
+            [
+                {
+                    "task_id": str(task["task_id"]),
+                    "dataset": str(task["dataset"]),
+                    "status": "success",
+                    "row_count": 1,
+                }
+                for task in tasks
+            ],
+            False,
+        )
+
+    def fake_export(self, *, provider_uri=None, start_date=None, end_date=None, market_name=None):
+        exported.append(
+            {
+                "provider_uri": provider_uri,
+                "start_date": start_date,
+                "end_date": end_date,
+                "market_name": market_name,
+            }
+        )
+        return {
+            "status": "ok",
+            "provider_uri": "unit-test",
+            "market_name": market_name,
+            "calendar_count": 1,
+            "instrument_count": 1,
+            "file_count": 1,
+            "object_ids": [],
+        }
+
+    monkeypatch.setattr(cli_module, "_run_backfill_tasks", fake_run_backfill_tasks)
+    monkeypatch.setattr(
+        cli_module.FactorBuilder,
+        "build",
+        lambda self, *, factor_set, start_date, end_date: {"status": "ok"},
+    )
+    monkeypatch.setattr(
+        cli_module.QdcParquetSync,
+        "sync",
+        lambda self, *, layer: {"layer": layer, "synced_tables": []},
+    )
+    monkeypatch.setattr(
+        cli_module.QualityChecker,
+        "run",
+        lambda self, *, start_date, end_date: {"status": "ok", "issue_count": 0},
+    )
+    monkeypatch.setattr(cli_module.QlibExporter, "export", fake_export)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "daily-pipeline",
+                "--date",
+                "2026-05-11",
+                "--symbols",
+                "SH600000",
+            ]
+        )
+        == 0
+    )
+
+    assert exported == [
+        {
+            "provider_uri": None,
+            "start_date": "2026-05-11",
+            "end_date": "2026-05-11",
+            "market_name": "csi300",
+        }
+    ]
 
 
 def test_qdc_daily_pipeline_watch_outputs_pipeline_and_crawl_progress(

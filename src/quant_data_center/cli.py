@@ -1162,7 +1162,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         )
     )
     provider_uri = _daily_pipeline_option(args, settings, "provider_uri")
-    export_start = _daily_pipeline_option(args, settings, "export_start")
+    export_start = _daily_pipeline_option(args, settings, "export_start", run_date)
     market_name = _daily_pipeline_option(args, settings, "market_name")
     continue_on_failure = bool(
         _daily_pipeline_option(args, settings, "continue_on_failure", False)
@@ -1986,7 +1986,7 @@ def build_parser() -> argparse.ArgumentParser:
     daily_pipeline_parser.add_argument("--provider-uri")
     daily_pipeline_parser.add_argument(
         "--export-start",
-        help="Optional Qlib export start date; defaults to all available daily_bar rows",
+        help="Optional Qlib export start date; defaults to the daily-pipeline run date",
     )
     daily_pipeline_parser.add_argument(
         "--market-name",
