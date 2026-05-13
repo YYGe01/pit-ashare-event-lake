@@ -1236,11 +1236,6 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         symbols=symbols,
         batch_size=batch_size,
     )
-    if args.watch:
-        _watch_print(
-            True,
-            f"{_watch_task_prefix(phase='pipeline', index=1, total=1)} START date={run_date} universe={universe} planned_tasks={len(planned)} selected_tasks={0 if limit_tasks is None else min(len(planned), limit_tasks)}",
-        )
     tasks = [
         task
         for task in database.fetch_backfill_tasks_by_ids([str(item["task_id"]) for item in planned])
@@ -1248,6 +1243,11 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     ]
     selected_tasks = tasks[:limit_tasks] if limit_tasks else tasks
     has_incomplete_tasks = len(selected_tasks) < len(tasks)
+    if args.watch:
+        _watch_print(
+            True,
+            f"{_watch_task_prefix(phase='pipeline', index=1, total=1)} START date={run_date} universe={universe} planned_tasks={len(planned)} runnable_tasks={len(tasks)} selected_tasks={len(selected_tasks)}",
+        )
     if args.plan_only:
         _print_json(
             {

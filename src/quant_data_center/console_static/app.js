@@ -138,6 +138,7 @@ const STATUS_LABELS = {
   partial: "部分成功",
   blocked: "阻塞",
   failed: "失败",
+  stopped: "已停止",
   empty: "暂无",
   ok: "正常",
   missing: "缺失",
@@ -219,7 +220,7 @@ function statusClass(value) {
   if (["complete", "success", "ok"].includes(key)) return "success";
   if (["running"].includes(key)) return "running";
   if (["failed", "blocked", "missing", "stale"].includes(key)) return "danger";
-  if (["pending", "empty", "partial", "warning"].includes(key)) return "warning";
+  if (["pending", "empty", "partial", "warning", "stopped"].includes(key)) return "warning";
   return "default";
 }
 
@@ -462,19 +463,57 @@ function renderRunStatus(payload) {
     return;
   }
   const command = (run.command || []).join(" ");
-  const logs = [...(run.stderr_tail || []), ...(run.stdout_tail || [])].filter(Boolean).slice(-12);
+  const logs = runLogLines(run).slice(-60);
+  const runStatus = run.status || "pending";
+  const batches = state.statusPayload?.batches || {};
+  const stopTime = run.stop_requested_at ? ` · 停止请求 ${escapeHtml(run.stop_requested_at)}` : "";
   target.innerHTML = `
-    <div class="run-status-head">
+    <div class="run-status-head run-status-${statusClass(runStatus)}">
       <div>
-        <div class="run-status-title">最近执行 ${tag(run.status || "pending")}</div>
-        <div class="run-status-meta">开始 ${escapeHtml(run.start_at || "-")} · 结束 ${escapeHtml(run.end_at || "-")} · 返回码 ${escapeHtml(run.return_code ?? "-")}</div>
+        <div class="run-status-title"><span class="live-dot live-dot-${statusClass(runStatus)}"></span>最近执行 ${tag(runStatus)}</div>
+        <div class="run-status-meta">开始 ${escapeHtml(run.start_at || "-")} · 结束 ${escapeHtml(run.end_at || "-")} · 返回码 ${escapeHtml(run.return_code ?? "-")}${stopTime}</div>
       </div>
-      <button class="btn" id="refresh-run-btn" type="button">刷新执行状态</button>
+      <div class="run-actions">
+        ${running ? '<button class="btn btn-danger" id="stop-run-btn" type="button">停止采集</button>' : ""}
+        <button class="btn" id="refresh-run-btn" type="button">刷新执行状态</button>
+      </div>
     </div>
-    <div class="run-command">${escapeHtml(command)}</div>
-    ${logs.length ? `<pre class="run-log">${escapeHtml(logs.join("\n"))}</pre>` : '<div class="empty compact-empty">暂无日志输出。</div>'}
+    <div class="run-resume-strip">
+      <div>
+        <span class="run-resume-label">断点续跑批次</span>
+        <strong>${number(batches.success_count || 0)} / ${number(batches.total_batch_count || 0)}</strong>
+      </div>
+      <span>运行中 ${number(batches.running_count || 0)}</span>
+      <span>待执行 ${number(batches.pending_count || 0)}</span>
+      <span>失败 ${number(batches.failed_count || 0)}</span>
+      <span>疑似卡住 ${number(batches.stale_running_count || 0)}</span>
+    </div>
+    <div class="run-command-block">
+      <div class="run-block-label">执行命令</div>
+      <div class="run-command">${escapeHtml(command)}</div>
+    </div>
+    <div class="run-log-block">
+      <div class="run-log-head">
+        <span>实时日志</span>
+        <span>${number(logs.length)} 行</span>
+      </div>
+      ${logs.length ? `<pre class="run-log">${escapeHtml(logs.join("\n"))}</pre>` : '<div class="empty compact-empty">暂无日志输出。</div>'}
+    </div>
   `;
   $("refresh-run-btn")?.addEventListener("click", refreshRunStatus);
+  $("stop-run-btn")?.addEventListener("click", stopDailyPipeline);
+  const logBox = target.querySelector(".run-log");
+  if (logBox) logBox.scrollTop = logBox.scrollHeight;
+}
+
+function runLogLines(run) {
+  const combined = run.log_tail || [];
+  if (combined.length) {
+    return combined
+      .map((item) => typeof item === "string" ? item : item?.text)
+      .filter(Boolean);
+  }
+  return [...(run.stderr_tail || []), ...(run.stdout_tail || [])].filter(Boolean);
 }
 
 function renderStageBoard(rows) {
@@ -760,6 +799,21 @@ async function startDailyPipeline() {
   } finally {
     state.runStarting = false;
     renderRunStatus(state.runPayload);
+  }
+}
+
+async function stopDailyPipeline() {
+  showError(null);
+  try {
+    state.runPayload = await api("/api/daily-pipeline-stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    renderRunStatus(state.runPayload);
+    await refreshStatus();
+  } catch (error) {
+    showError(friendlyError(error));
   }
 }
 

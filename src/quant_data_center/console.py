@@ -3502,6 +3502,8 @@ class DailyPipelineProcessManager:
                 "start_at": now,
                 "end_at": None,
                 "return_code": None,
+                "stop_requested_at": None,
+                "logs": deque(maxlen=RUN_LOG_LIMIT),
                 "stdout": deque(maxlen=RUN_LOG_LIMIT),
                 "stderr": deque(maxlen=RUN_LOG_LIMIT),
                 "process": None,
@@ -3531,6 +3533,29 @@ class DailyPipelineProcessManager:
             self._refresh_locked()
             return self._snapshot_locked()
 
+    def stop(self) -> dict[str, Any]:
+        with self._lock:
+            self._refresh_locked()
+            if not self._run or self._run["status"] != "running":
+                snapshot = self._snapshot_locked()
+                snapshot["accepted"] = False
+                snapshot["message"] = "当前没有运行中的 daily-pipeline"
+                return snapshot
+            process: subprocess.Popen[str] | None = self._run.get("process")
+            self._run["stop_requested_at"] = datetime.now().replace(microsecond=0).isoformat()
+
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=8)
+
+        snapshot = self.snapshot()
+        snapshot["accepted"] = True
+        return snapshot
+
     def _start_reader(self, run_id: str, stream: Any, stream_name: str) -> None:
         if stream is None:
             return
@@ -3548,6 +3573,7 @@ class DailyPipelineProcessManager:
                     if not self._run or self._run.get("run_id") != run_id:
                         return
                     self._run[stream_name].append(text)
+                    self._run["logs"].append({"stream": stream_name, "text": text})
         finally:
             try:
                 stream.close()
@@ -3575,7 +3601,10 @@ class DailyPipelineProcessManager:
         if return_code is None:
             return
         self._run["return_code"] = int(return_code)
-        self._run["status"] = "success" if return_code == 0 else "failed"
+        if self._run.get("stop_requested_at") and return_code != 0:
+            self._run["status"] = "stopped"
+        else:
+            self._run["status"] = "success" if return_code == 0 else "failed"
         self._run["end_at"] = datetime.now().replace(microsecond=0).isoformat()
 
     def _snapshot_locked(self) -> dict[str, Any]:
@@ -3591,7 +3620,9 @@ class DailyPipelineProcessManager:
                 "return_code": run["return_code"],
                 "start_at": run["start_at"],
                 "end_at": run["end_at"],
+                "stop_requested_at": run.get("stop_requested_at"),
                 "command": [str(part) for part in run["command"]],
+                "log_tail": list(run.get("logs") or [])[-80:],
                 "stdout_tail": list(run["stdout"])[-40:],
                 "stderr_tail": list(run["stderr"])[-80:],
             },
@@ -3887,6 +3918,8 @@ def _make_handler(
             try:
                 if path == "/api/daily-pipeline-run":
                     self._send_json(pipeline_runner.start(self._read_json_body()))
+                elif path == "/api/daily-pipeline-stop":
+                    self._send_json(pipeline_runner.stop())
                 else:
                     self._send_json(
                         {"status": "fail", "error": f"unknown api endpoint: {path}"},
@@ -5753,12 +5786,14 @@ def _progress_state(
     pending: int,
     stale: int,
 ) -> str:
-    if failed or stale:
+    if stale:
         return "blocked"
     if running:
         return "running"
     if pending:
-        return "pending"
+        return "partial" if success or failed else "pending"
+    if failed:
+        return "blocked"
     if total and success == total:
         return "complete"
     return "empty"

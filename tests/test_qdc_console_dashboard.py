@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import sys
+from collections import deque
 from pathlib import Path
 
-from quant_data_center.console import QdcConsoleData, _daily_pipeline_command
+from quant_data_center.console import (
+    DailyPipelineProcessManager,
+    QdcConsoleData,
+    _daily_pipeline_command,
+    _progress_state,
+)
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.database import QdcDatabase
 from quant_data_center.storage.silver import SilverStore
@@ -180,3 +186,62 @@ def test_qdc_console_builds_restricted_daily_pipeline_command(tmp_path: Path) ->
     assert "--control-only" in command
     assert "--no-skip-stock-basic-refresh" in command
     assert "--no-crawl-documents" in command
+
+
+def test_qdc_console_can_stop_running_daily_pipeline_process(tmp_path: Path) -> None:
+    settings = QdcSettings.from_yaml(_write_config(tmp_path))
+    manager = DailyPipelineProcessManager(settings)
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.return_code: int | None = None
+            self.terminated = False
+            self.killed = False
+
+        def poll(self) -> int | None:
+            return self.return_code
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.return_code = -15
+
+        def kill(self) -> None:
+            self.killed = True
+            self.return_code = -9
+
+        def wait(self, timeout: int | None = None) -> int | None:
+            return self.return_code
+
+    process = FakeProcess()
+    manager._run = {
+        "run_id": "unit-test",
+        "status": "running",
+        "command": ["qdc", "daily-pipeline", "--watch"],
+        "start_at": "2026-05-13T21:28:05",
+        "end_at": None,
+        "return_code": None,
+        "stop_requested_at": None,
+        "logs": deque(maxlen=10),
+        "stdout": deque(maxlen=10),
+        "stderr": deque(maxlen=10),
+        "process": process,
+    }
+
+    payload = manager.stop()
+
+    assert payload["accepted"] is True
+    assert process.terminated is True
+    assert process.killed is False
+    assert payload["run"]["status"] == "stopped"
+    assert payload["run"]["return_code"] == -15
+    assert payload["run"]["stop_requested_at"]
+
+
+def test_qdc_progress_state_keeps_incomplete_running_work_out_of_blocked() -> None:
+    assert (
+        _progress_state(total=999, success=11, failed=2, running=0, pending=984, stale=0)
+        == "partial"
+    )
+    assert _progress_state(total=999, success=11, failed=2, running=1, pending=984, stale=0) == "running"
+    assert _progress_state(total=999, success=11, failed=2, running=0, pending=0, stale=0) == "blocked"
+    assert _progress_state(total=999, success=11, failed=0, running=1, pending=984, stale=1) == "blocked"

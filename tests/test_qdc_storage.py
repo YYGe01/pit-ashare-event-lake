@@ -3545,6 +3545,8 @@ daily_pipeline:
 
     captured = capsys.readouterr()
     assert "pipeline" in captured.err
+    assert "runnable_tasks=" in captured.err
+    assert "selected_tasks=" in captured.err
     assert "crawl-documents" in captured.err
     assert "source=" in captured.err
 

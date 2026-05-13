@@ -73,7 +73,7 @@
             <div class="panel-header">
               <div>
                 <h2>执行每日采集 (Run daily-pipeline)</h2>
-                <p class="panel-subtitle">从控制台启动一次每日流水线，并在下方批次明细里跟踪每个批次状态。</p>
+                <p class="panel-subtitle">启动一次每日流水线，运行状态和日志在这里持续刷新。</p>
               </div>
               <button id="run-daily-button" class="btn btn-primary" type="button">执行 daily-pipeline</button>
             </div>
@@ -86,16 +86,19 @@
                 <span>批次大小</span>
                 <input id="run-batch-size" class="input" type="number" min="1" max="10000" value="50" />
               </label>
-              <label class="check-field">
+              <label class="check-field switch-field">
                 <input id="run-refresh-stock-basic" type="checkbox" checked />
+                <span class="switch-ui" aria-hidden="true"></span>
                 <span>刷新股票池</span>
               </label>
-              <label class="check-field">
+              <label class="check-field switch-field">
                 <input id="run-crawl-documents" type="checkbox" checked />
+                <span class="switch-ui" aria-hidden="true"></span>
                 <span>采集公告新闻</span>
               </label>
-              <label class="check-field">
+              <label class="check-field switch-field">
                 <input id="run-control-only" type="checkbox" />
+                <span class="switch-ui" aria-hidden="true"></span>
                 <span>只跑控制面</span>
               </label>
             </div>
