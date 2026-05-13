@@ -457,6 +457,65 @@ def test_qdc_daily_status_reports_source_dimension_failures(tmp_path: Path) -> N
     assert open_row["timeout_count"] == 1
 
 
+def test_qdc_console_uses_observed_instruments_for_symbol_smoke(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    silver = SilverStore(settings)
+    smoke_symbols = ["SZ300001", "SZ301421"]
+    silver.upsert_daily_bar(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": instrument,
+                "close": 10.0,
+                "source_id": "unit_test",
+            }
+            for instrument in smoke_symbols
+        ]
+    )
+    silver.upsert_adj_factor(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": instrument,
+                "adj_factor": 1.0,
+                "source_id": "unit_test",
+            }
+            for instrument in smoke_symbols
+        ]
+    )
+    silver.upsert_price_limit(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": instrument,
+                "limit_up": 12.0,
+                "limit_down": 8.0,
+                "source_id": "unit_test",
+            }
+            for instrument in smoke_symbols
+        ]
+    )
+
+    console = QdcConsoleData(settings)
+    status = console.daily_collection_status(date="2026-05-11")
+    preview = console.daily_wide_preview(date="2026-05-11", mode="raw")
+    instruments = console.instruments(query="SZ300001")
+
+    assert status["reference"] == {
+        "source": "observed:2026-05-11",
+        "expected_instrument_count": 2,
+    }
+    assert status["collection"]["collection_percent"] == 100.0
+    assert status["collection"]["problem_instrument_count"] == 0
+    assert preview["reference_source"] == "observed:2026-05-11"
+    assert {row["instrument"] for row in preview["rows"]} == set(smoke_symbols)
+    assert instruments["instrument_count"] == 1
+    assert instruments["instruments"][0]["instrument"] == "SZ300001"
+
+
 def test_qdc_console_returns_busy_payload_when_duckdb_is_locked(tmp_path: Path) -> None:
     settings = QdcSettings.from_yaml(_write_config(tmp_path))
     data = QdcConsoleData(settings)
@@ -1668,7 +1727,7 @@ def test_qdc_crawl_run_real_cninfo_with_fake_response(
         "raw_records",
     }
     records_uri = next(item["uri"] for item in source_objects if item["layer"] == "raw_records")
-    assert "/raw/documents/2026-05-11/cninfo_announcement/" in records_uri
+    assert "/raw/documents/2026-05-11/cninfo_announcement/" in records_uri.replace("\\", "/")
     pdf_hash = hashlib.sha256(FakePdfResponse.content).hexdigest()
     with database.connect() as conn:
         rows = conn.execute(
@@ -2018,7 +2077,7 @@ def test_qdc_crawl_run_real_sina_news_with_fake_response(
         "raw_records",
     }
     records_uri = next(item["uri"] for item in source_objects if item["layer"] == "raw_records")
-    assert "/raw/documents/2026-05-11/sina_finance_news/" in records_uri
+    assert "/raw/documents/2026-05-11/sina_finance_news/" in records_uri.replace("\\", "/")
     with database.connect() as conn:
         rows = conn.execute(
             """

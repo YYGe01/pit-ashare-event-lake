@@ -168,6 +168,15 @@ INSTRUMENT_COVERAGE_DATASETS = (
     "daily_news_factor",
     "daily_announcement_factor",
 )
+OBSERVED_REFERENCE_DATASETS = (
+    "daily_bar",
+    "adj_factor",
+    "price_limit",
+    "announcement",
+    "news",
+    "daily_news_factor",
+    "daily_announcement_factor",
+)
 ALL_INSTRUMENT_COVERAGE_DIMENSIONS = (
     "stock_basic",
     "universe_constituent",
@@ -592,6 +601,19 @@ class QdcConsoleData:
                 )
                 if rows:
                     return rows, f"universe_constituent:{snapshot}"
+        observed = self._observed_instruments(
+            conn,
+            silver_tables=silver_tables,
+            date=date,
+            datasets=OBSERVED_REFERENCE_DATASETS,
+        )
+        if observed:
+            identity = self._instrument_identity_by_instrument(
+                conn,
+                silver_tables=silver_tables,
+                instruments=observed,
+            )
+            return [identity[instrument] for instrument in observed], f"observed:{date}"
         rows = [_default_instrument_identity(instrument) for instrument in _configured_instruments(self.settings)]
         return rows, "config"
 
@@ -2079,6 +2101,15 @@ class QdcConsoleData:
             ).fetchall()
             candidates.update(str(row[0]) for row in rows)
 
+        candidates.update(
+            self._observed_instruments(
+                conn,
+                silver_tables=silver_tables,
+                query=normalized_query,
+                limit=max(limit * 4, limit),
+            )
+        )
+
         if not candidates:
             reference_instruments, _source = self._reference_instruments(conn, silver_tables)
             candidates.update(reference_instruments)
@@ -2178,6 +2209,14 @@ class QdcConsoleData:
             if instruments:
                 return instruments, "universe_constituent"
 
+        observed = self._observed_instruments(
+            conn,
+            silver_tables=silver_tables,
+            datasets=OBSERVED_REFERENCE_DATASETS,
+        )
+        if observed:
+            return observed, "silver.instrument_union"
+
         configured = sorted(
             {
                 instrument
@@ -2188,23 +2227,63 @@ class QdcConsoleData:
         )
         if configured:
             return configured, "config.universes"
+        return [], "none"
 
+    def _observed_instruments(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        silver_tables: set[str],
+        date: str | None = None,
+        query: str | None = None,
+        limit: int | None = None,
+        datasets: tuple[str, ...] = INSTRUMENT_COVERAGE_DATASETS,
+    ) -> list[str]:
         instruments: set[str] = set()
-        for table in INSTRUMENT_COVERAGE_DATASETS:
+        normalized_query = (query or "").strip().upper()
+        like_query = f"%{normalized_query}%"
+        for table in datasets:
             if table not in silver_tables:
                 continue
             columns = self._columns(conn, SILVER_SCHEMA, table)
             if "instrument" not in columns:
                 continue
+            filters = []
+            params: list[Any] = []
+            if date:
+                date_column = _preferred_date_column(columns)
+                if date_column not in {"trade_date", "publish_date", "snapshot_date"}:
+                    continue
+                filters.append(f"{date_column} = ?")
+                params.append(date)
+            if normalized_query:
+                search_columns = ["instrument"]
+                if "symbol" in columns:
+                    search_columns.append("symbol")
+                if "name" in columns:
+                    search_columns.append("coalesce(name, '')")
+                filters.append(
+                    "("
+                    + " or ".join(f"upper({column}) like ?" for column in search_columns)
+                    + ")"
+                )
+                params.extend([like_query] * len(search_columns))
+            where_clause = f"where {' and '.join(filters)}" if filters else ""
+            limit_clause = "limit ?" if limit else ""
+            if limit:
+                params.append(limit)
             rows = conn.execute(
                 f"""
                 select distinct instrument
                 from {SILVER_SCHEMA}.{table}
+                {where_clause}
                 order by instrument
-                """
+                {limit_clause}
+                """,
+                params,
             ).fetchall()
             instruments.update(str(row[0]) for row in rows)
-        return sorted(instruments), "silver.instrument_union"
+        return sorted(instruments)
 
     def _reference_trade_dates(
         self,

@@ -972,7 +972,13 @@ def _duckdb_lock_timeout_seconds() -> float:
 
 def _is_duckdb_lock_error(exc: BaseException) -> bool:
     message = str(exc).lower()
-    return "could not set lock" in message or "conflicting lock" in message
+    return (
+        "could not set lock" in message
+        or "conflicting lock" in message
+        or "another process" in message
+        or "另一个程序正在使用此文件" in message
+        or "进程无法访问" in message
+    )
 
 
 def _now() -> datetime:
