@@ -125,7 +125,9 @@ src/quant_data_center/              QDC 源码
 src/quant_data_center/console_static/  本地只读控制台静态页面
 tests/test_qdc_storage.py           当前 QDC 聚焦测试
 docs/数据流阅读指南.md             数据流阅读指南
-docs/迁移实施计划.md               迁移实施计划和当前状态
+docs/迁移实施计划.md               长期迁移总纲和边界
+docs/每日自动采集实施计划.md        每日采集当前状态和下一步
+docs/控制台产品设计方案.md          控制台信息架构和页面口径
 docs/工作日志/                     智能体工作记录
 data/quant_data_center/             本地运行数据，已 gitignored
 data/quant_data_center_daily_only/   daily-only 本地运行数据，已 gitignored
