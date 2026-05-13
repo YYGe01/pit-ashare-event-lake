@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from hashlib import sha256
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -929,6 +930,186 @@ class EastmoneySilverCollector(AkshareSilverCollector):
         return self.silver.upsert_price_limit(records)
 
 
+class SinaRealtimeSilverCollector(AkshareSilverCollector):
+    """Collect today's A-share OHLCV datasets from Sina's batched quote endpoint."""
+
+    def collect_daily_bar(
+        self,
+        *,
+        source_id: str,
+        start_date: str,
+        end_date: str,
+        instruments: list[str],
+        adjust: str = "",
+    ) -> int:
+        del adjust
+        if not instruments:
+            raise ValueError("daily_bar backfill requires symbol batches")
+        start_iso = _date_to_iso(start_date)
+        end_iso = _date_to_iso(end_date)
+        provider_records = self._collect_quote_records(
+            dataset="daily_bar",
+            source_id=source_id,
+            start_date=start_iso,
+            end_date=end_iso,
+            instruments=instruments,
+        )
+        records = []
+        for row in provider_records:
+            trade_date = _clean_text(row.get("trade_date"))
+            if not trade_date or trade_date < start_iso or trade_date > end_iso:
+                continue
+            volume = _as_float(row.get("volume"))
+            amount = _as_float(row.get("amount"))
+            records.append(
+                {
+                    "trade_date": trade_date,
+                    "instrument": row["instrument"],
+                    "open": _as_float(row.get("open")),
+                    "high": _as_float(row.get("high")),
+                    "low": _as_float(row.get("low")),
+                    "close": _as_float(row.get("close")),
+                    "pre_close": _as_float(row.get("pre_close")),
+                    "volume": volume,
+                    "amount": amount,
+                    "vwap": _safe_vwap(amount=amount, volume=volume),
+                    "source_id": source_id,
+                }
+            )
+        return self.silver.upsert_daily_bar(records)
+
+    def collect_adj_factor(
+        self,
+        *,
+        source_id: str,
+        start_date: str,
+        end_date: str,
+        instruments: list[str],
+    ) -> int:
+        if not instruments:
+            raise ValueError("adj_factor backfill requires symbol batches")
+        start_iso = _date_to_iso(start_date)
+        end_iso = _date_to_iso(end_date)
+        provider_records = self._collect_quote_records(
+            dataset="adj_factor",
+            source_id=source_id,
+            start_date=start_iso,
+            end_date=end_iso,
+            instruments=instruments,
+        )
+        records = []
+        for row in provider_records:
+            trade_date = _clean_text(row.get("trade_date"))
+            if not trade_date or trade_date < start_iso or trade_date > end_iso:
+                continue
+            records.append(
+                {
+                    "trade_date": trade_date,
+                    "instrument": row["instrument"],
+                    "adj_factor": 1.0,
+                    "factor_type": "sina_unadjusted_quote_fallback_v0",
+                    "source_id": source_id,
+                }
+            )
+        return self.silver.upsert_adj_factor(records)
+
+    def collect_price_limit(
+        self,
+        *,
+        source_id: str,
+        start_date: str,
+        end_date: str,
+        instruments: list[str],
+        adjust: str = "",
+        lookback_days: int = 14,
+    ) -> int:
+        del adjust, lookback_days
+        if not instruments:
+            raise ValueError("price_limit backfill requires symbol batches")
+        start_iso = _date_to_iso(start_date)
+        end_iso = _date_to_iso(end_date)
+        provider_records = self._collect_quote_records(
+            dataset="price_limit",
+            source_id=source_id,
+            start_date=start_iso,
+            end_date=end_iso,
+            instruments=instruments,
+        )
+        records = []
+        for row in provider_records:
+            trade_date = _clean_text(row.get("trade_date"))
+            if not trade_date or trade_date < start_iso or trade_date > end_iso:
+                continue
+            prev_close = _as_float(row.get("pre_close"))
+            if prev_close in (None, 0):
+                continue
+            rate, limit_rule = _limit_rate(str(row["instrument"]))
+            records.append(
+                {
+                    "trade_date": trade_date,
+                    "instrument": row["instrument"],
+                    "limit_up": round(prev_close * (1 + rate), 2),
+                    "limit_down": round(prev_close * (1 - rate), 2),
+                    "prev_close": prev_close,
+                    "limit_rule": f"{limit_rule}_sina_quote",
+                    "source_id": source_id,
+                }
+            )
+        return self.silver.upsert_price_limit(records)
+
+    def _collect_quote_records(
+        self,
+        *,
+        dataset: str,
+        source_id: str,
+        start_date: str,
+        end_date: str,
+        instruments: list[str],
+    ) -> list[dict[str, Any]]:
+        requests = __import__("requests")
+        start_iso = _date_to_iso(start_date)
+        records = []
+        chunks = []
+        for index, chunk in enumerate(_chunks([normalize_instrument(item) for item in instruments], 200), start=1):
+            quote_symbols = [_sina_quote_symbol(instrument) for instrument in chunk]
+            response_text = _sina_quote_get(
+                requests_module=requests,
+                quote_symbols=quote_symbols,
+            )
+            chunk_records = _parse_sina_quote_response(response_text)
+            records.extend(chunk_records)
+            chunks.append(
+                {
+                    "chunk_index": index,
+                    "requested_count": len(chunk),
+                    "response_record_count": len(chunk_records),
+                    "quote_symbols": quote_symbols,
+                }
+            )
+        self._write_source_objects(
+            dataset=dataset,
+            source_id=source_id,
+            partition_value=start_iso,
+            stem=f"sina_hq_quote_{dataset}_{start_iso}_{end_date}",
+            raw_payload={
+                "function": "sina_hq_quote",
+                "params": {
+                    "start_date": start_iso,
+                    "end_date": end_date,
+                    "instrument_count": len(instruments),
+                },
+                "chunks": chunks,
+                "records": records,
+                "notes": (
+                    "Sina quote is a batched same-day fallback source. "
+                    "Rows are accepted only when the quote trade_date matches the requested date."
+                ),
+            },
+            bronze_records=records,
+        )
+        return records
+
+
 def _records(df: Any) -> list[dict[str, Any]]:
     return [{str(key): _json_safe(value) for key, value in row.items()} for row in df.to_dict("records")]
 
@@ -951,6 +1132,86 @@ def _eastmoney_hist_records(
     return _records(df)
 
 
+def _sina_quote_get(
+    *,
+    requests_module: Any,
+    quote_symbols: list[str],
+    timeout_seconds: float = 15.0,
+    max_attempts: int = 4,
+) -> str:
+    url = f"https://hq.sinajs.cn/list={','.join(quote_symbols)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 QDC-Crawler/0.1 (+local research)",
+        "Referer": "https://finance.sina.com.cn/",
+        "Accept": "*/*",
+        "Connection": "close",
+    }
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = requests_module.get(url, headers=headers, timeout=timeout_seconds)
+            response.raise_for_status()
+            response.encoding = response.encoding or "gb18030"
+            return str(response.text or "")
+        except Exception as exc:  # pragma: no cover - exercised through CLI tests
+            last_error = exc
+            if attempt < max_attempts:
+                time.sleep(min(2.0 * attempt, 6.0))
+    raise RuntimeError(f"Sina quote request failed after {max_attempts} attempts: {last_error}") from last_error
+
+
+def _parse_sina_quote_response(text: str) -> list[dict[str, Any]]:
+    records = []
+    pattern = re.compile(r'var\s+hq_str_(?P<quote>[a-z]{2}\d{6})="(?P<body>.*?)";')
+    for match in pattern.finditer(text):
+        body = match.group("body")
+        if not body:
+            continue
+        parts = body.split(",")
+        if len(parts) < 32 or not parts[0]:
+            continue
+        instrument = _sina_quote_instrument(match.group("quote"))
+        trade_date = _optional_date_to_iso(parts[30])
+        trade_time = str(parts[31]).strip() if len(parts) > 31 else ""
+        records.append(
+            {
+                "instrument": instrument,
+                "source_quote_symbol": match.group("quote"),
+                "name": _clean_text(parts[0]),
+                "open": _as_float(parts[1]),
+                "pre_close": _as_float(parts[2]),
+                "close": _as_float(parts[3]),
+                "high": _as_float(parts[4]),
+                "low": _as_float(parts[5]),
+                "bid": _as_float(parts[6]),
+                "ask": _as_float(parts[7]),
+                "volume": _as_float(parts[8]),
+                "amount": _as_float(parts[9]),
+                "trade_date": trade_date,
+                "trade_time": trade_time or None,
+                "quote_datetime": f"{trade_date} {trade_time}" if trade_date and trade_time else None,
+                "status_code": str(parts[32]).strip() if len(parts) > 32 else None,
+            }
+        )
+    return records
+
+
+def _sina_quote_symbol(instrument: str) -> str:
+    normalized = normalize_instrument(instrument)
+    return normalized.lower()
+
+
+def _sina_quote_instrument(value: str) -> str:
+    quote = value.strip().upper()
+    if len(quote) != 8 or quote[:2] not in {"SH", "SZ", "BJ"}:
+        return normalize_instrument(quote[-6:])
+    return quote
+
+
+def _chunks(values: list[str], size: int) -> list[list[str]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
+
+
 def _provider_trade_date(row: dict[str, Any]) -> str:
     return _date_to_iso(_first_present(row, ("date", "日期", "trade_date")))
 
@@ -960,6 +1221,13 @@ def _first_present(record: dict[str, Any], names: tuple[str, ...]) -> Any:
         if name in record and record[name] not in (None, ""):
             return record[name]
     return None
+
+
+def _clean_text(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    return text or None
 
 
 def _json_safe(value: Any) -> Any:

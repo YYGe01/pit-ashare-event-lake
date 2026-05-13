@@ -59,16 +59,13 @@ class NbdCompanyNewsCrawler:
             for page_num in range(1, page_count + 1):
                 raise_if_deadline_exceeded(deadline, source_id=source_id)
                 url = _column_page_url(column_url=column_url, page_num=page_num)
-                response = requests.get(
-                    url,
-                    headers=_headers(),
-                    timeout=request_timeout(
-                        deadline=deadline,
-                        default_seconds=request_timeout_seconds,
-                        source_id=source_id,
-                    ),
+                response = _get_nbd_page(
+                    requests_module=requests,
+                    url=url,
+                    deadline=deadline,
+                    request_timeout_seconds=request_timeout_seconds,
+                    source_id=source_id,
                 )
-                response.raise_for_status()
                 rows = [
                     row
                     for row in _extract_rows(text=response.text, limit=max(200, page_size * 5))
@@ -195,6 +192,45 @@ def _column_page_url(*, column_url: str, page_num: int) -> str:
     if page_num <= 1:
         return column_url
     return urljoin(column_url, f"page/{page_num}/")
+
+
+def _get_nbd_page(
+    *,
+    requests_module: Any,
+    url: str,
+    deadline: float | None,
+    request_timeout_seconds: float,
+    source_id: str,
+    max_attempts: int = 3,
+) -> Any:
+    candidates = [url]
+    if url.startswith("https://"):
+        candidates.append(f"http://{url.removeprefix('https://')}")
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        for candidate in candidates:
+            try:
+                raise_if_deadline_exceeded(deadline, source_id=source_id)
+                response = requests_module.get(
+                    candidate,
+                    headers=_headers(),
+                    timeout=request_timeout(
+                        deadline=deadline,
+                        default_seconds=request_timeout_seconds,
+                        source_id=source_id,
+                    ),
+                )
+                response.raise_for_status()
+                return response
+            except Exception as exc:  # pragma: no cover - covered by CLI-level tests
+                last_error = exc
+        if attempt < max_attempts:
+            sleep_with_deadline(
+                min(2.0 * attempt, 6.0),
+                deadline=deadline,
+                source_id=source_id,
+            )
+    raise RuntimeError(f"NBD page request failed after {max_attempts} attempts: {last_error}") from last_error
 
 
 def _row_publish_date(row: dict[str, Any]) -> str | None:

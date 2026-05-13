@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from quant_data_center.collectors.akshare import AkshareSilverCollector, EastmoneySilverCollector
+from quant_data_center.collectors.akshare import (
+    AkshareSilverCollector,
+    EastmoneySilverCollector,
+    SinaRealtimeSilverCollector,
+)
 from quant_data_center.console import run_console
 from quant_data_center.crawlers.registry import crawler_source_spec, enabled_daily_source_specs
 from quant_data_center.crawlers.sources.cninfo import CninfoAnnouncementCrawler
@@ -61,7 +65,7 @@ EASTMONEY_DAILY_DATASETS = [
     "price_limit",
     "trade_status",
 ]
-SINA_DAILY_DATASETS = ["trade_calendar"]
+SINA_DAILY_DATASETS = ["trade_calendar", "daily_bar", "adj_factor", "price_limit"]
 DEFAULT_CRAWL_SOURCE_PARALLELISM = 4
 DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS = 30.0
 DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS = 180.0
@@ -1758,8 +1762,11 @@ def _run_real_backfill_task(*, settings: QdcSettings, task: dict[str, object]) -
     if source_id == "eastmoney":
         collector = EastmoneySilverCollector(settings)
     elif source_id == "sina":
-        collector = AkshareSilverCollector(settings)
-        if dataset != "trade_calendar":
+        if dataset == "trade_calendar":
+            collector = AkshareSilverCollector(settings)
+        elif dataset in {"daily_bar", "adj_factor", "price_limit"}:
+            collector = SinaRealtimeSilverCollector(settings)
+        else:
             raise ValueError(f"unsupported qdc dataset for sina real backfill: {dataset}")
     elif source_id == "akshare" or source_id.startswith("akshare"):
         collector = AkshareSilverCollector(settings)

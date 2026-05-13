@@ -2390,6 +2390,95 @@ def test_qdc_crawl_run_real_nbd_news_with_fake_response(
     ]
 
 
+def test_qdc_crawl_run_nbd_retries_https_with_http_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    SilverStore(settings).upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-plan",
+                "--source-id",
+                "nbd_company_news",
+                "--date",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    class FakeResponse:
+        status_code = 200
+        text = """
+        <p class="u-channeltime">2026-05-11</p>
+        <li class="u-news-title">
+          <a href="/articles/2026-05-11/999.html" title="浦发银行拟收购测试资产">
+            浦发银行拟收购测试资产
+          </a>
+          <span>23:56:39</span>
+        </li>
+        """
+
+        def raise_for_status(self) -> None:
+            return None
+
+    calls = []
+
+    def fake_get(url, headers, timeout):
+        calls.append(url)
+        if url.startswith("https://"):
+            import requests
+
+            raise requests.exceptions.SSLError("EOF occurred in violation of protocol")
+        return FakeResponse()
+
+    import requests
+    import quant_data_center.crawlers.sources.nbd as nbd_module
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(nbd_module, "sleep_with_deadline", lambda *args, **kwargs: None)
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-run",
+                "--source-id",
+                "nbd_company_news",
+                "--page-size",
+                "5",
+                "--max-pages",
+                "1",
+                "--symbols",
+                "SH600000",
+            ]
+        )
+        == 0
+    )
+    assert calls[:2] == [
+        "https://www.nbd.com.cn/columns/1285/",
+        "http://www.nbd.com.cn/columns/1285/",
+    ]
+    assert database.silver_table_counts()["news"] == 1
+
+
 def test_qdc_crawl_run_vendor_wallstreetcn_news_with_fake_response(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -3014,7 +3103,7 @@ daily_pipeline:
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_backfill_tasks()
-    assert len(tasks) == 10
+    assert len(tasks) == 13
     assert {
         (task["source_id"], task["dataset"])
         for task in tasks
@@ -3029,6 +3118,9 @@ daily_pipeline:
         ("eastmoney", "price_limit"),
         ("eastmoney", "trade_status"),
         ("sina", "trade_calendar"),
+        ("sina", "daily_bar"),
+        ("sina", "adj_factor"),
+        ("sina", "price_limit"),
     }
     assert {task["status"] for task in tasks} == {"success"}
     with database.connect() as conn:
@@ -3120,6 +3212,107 @@ def test_qdc_run_backfill_real_eastmoney_daily_bar_with_fake_akshare(
         9.1,
         "eastmoney",
     )
+
+
+def test_qdc_run_backfill_real_sina_quote_fallback_with_fake_response(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+
+    class FakeResponse:
+        status_code = 200
+        encoding = "gb18030"
+        text = (
+            'var hq_str_sh600000="浦发银行,9.040,9.030,9.030,9.070,9.010,'
+            '9.030,9.040,84264336,760849230.000,306760,9.030,2375809,'
+            '9.020,2336162,9.010,2679100,9.000,813500,8.990,42900,'
+            '9.040,1043522,9.050,806800,9.060,978900,9.070,535800,'
+            '9.080,2026-05-13,15:00:01,00,";'
+            'var hq_str_sz000001="平安银行,11.250,11.250,11.140,11.280,'
+            '11.110,11.140,11.150,101797392,1136724107.400,351913,'
+            '11.140,712300,11.130,731400,11.120,1422700,11.110,1669000,'
+            '11.100,260800,11.150,477165,11.160,1117900,11.170,689228,'
+            '11.180,422573,11.190,2026-05-13,15:00:00,00";'
+        )
+
+        def raise_for_status(self) -> None:
+            return None
+
+    calls = []
+
+    def fake_get(url, headers, timeout):
+        calls.append({"url": url, "headers": headers, "timeout": timeout})
+        return FakeResponse()
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    for dataset in ("daily_bar", "adj_factor", "price_limit"):
+        assert (
+            main(
+                [
+                    "--config",
+                    str(config_path),
+                    "plan-backfill",
+                    "--dataset",
+                    dataset,
+                    "--source-id",
+                    "sina",
+                    "--start",
+                    "2026-05-13",
+                    "--end",
+                    "2026-05-13",
+                    "--symbols",
+                    "SH600000,SZ000001",
+                    "--batch-size",
+                    "2",
+                ]
+            )
+            == 0
+        )
+        assert main(["--config", str(config_path), "run-backfill", "--dataset", dataset]) == 0
+
+    assert len(calls) == 3
+    assert "sh600000,sz000001" in calls[0]["url"]
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    assert database.silver_table_counts()["daily_bar"] == 2
+    assert database.silver_table_counts()["adj_factor"] == 2
+    assert database.silver_table_counts()["price_limit"] == 2
+    with database.connect() as conn:
+        daily_row = conn.execute(
+            """
+            select instrument, trade_date, open, high, low, close, pre_close, volume, amount
+            from qdc_silver.daily_bar
+            where instrument = 'SH600000'
+            """
+        ).fetchone()
+        adj_row = conn.execute(
+            """
+            select instrument, adj_factor, factor_type
+            from qdc_silver.adj_factor
+            where instrument = 'SH600000'
+            """
+        ).fetchone()
+        limit_row = conn.execute(
+            """
+            select instrument, limit_up, limit_down, prev_close, source_id
+            from qdc_silver.price_limit
+            where instrument = 'SH600000'
+            """
+        ).fetchone()
+    assert daily_row == (
+        "SH600000",
+        datetime(2026, 5, 13).date(),
+        9.04,
+        9.07,
+        9.01,
+        9.03,
+        9.03,
+        84264336.0,
+        760849230.0,
+    )
+    assert adj_row == ("SH600000", 1.0, "sina_unadjusted_quote_fallback_v0")
+    assert limit_row == ("SH600000", 9.93, 8.13, 9.03, "sina")
 
 
 def test_qdc_daily_watch_outputs_backfill_progress(tmp_path: Path, capsys) -> None:
