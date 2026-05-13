@@ -13,7 +13,7 @@
           <div class="brand-mark">D</div>
           <div>
             <div class="brand-title">每日采集控制台</div>
-            <div class="brand-subtitle">daily collection only</div>
+            <div class="brand-subtitle">每日采集 daily collection</div>
           </div>
         </div>
 
@@ -32,10 +32,10 @@
       <main class="main">
         <header class="topbar">
           <div>
-            <div class="eyebrow">QDC DAILY COLLECTION</div>
+            <div class="eyebrow">QDC DAILY COLLECTION 每日采集</div>
             <h1 id="page-title">今日总览</h1>
             <p id="page-summary" class="page-summary">
-              按日期查看每日 5000 多只标的的采集进度、批次状态、缺失标的和数据宽表。
+              先看今天能不能用，再看采集进度、质量体检和供应商采集质量。
             </p>
           </div>
           <div class="topbar-actions">
@@ -53,11 +53,14 @@
         <section id="dashboard" class="page-section active">
           <section class="hero-panel">
             <div>
-              <div class="eyebrow">COLLECTION PROGRESS</div>
-              <h2 id="hero-date">-</h2>
+              <div class="eyebrow">TODAY VERDICT 今日结论</div>
+              <div id="hero-state" class="hero-state tag tag-warning">读取中</div>
+              <h2 id="hero-title">正在读取</h2>
               <p id="hero-summary">正在读取当前日期的采集状态。</p>
+              <div id="hero-action" class="hero-action">等待刷新结果。</div>
             </div>
             <div class="hero-meter">
+              <div class="hero-meter-label">核心完整率 (Core completeness)</div>
               <div id="hero-percent" class="hero-percent">0%</div>
               <div class="progress-bar hero-progress"><div id="hero-progress-fill" class="progress-fill"></div></div>
               <div id="hero-meter-foot" class="hero-meter-foot">等待数据</div>
@@ -69,17 +72,39 @@
           <section class="panel">
             <div class="panel-header">
               <div>
-                <h2>批次进度</h2>
-                <p class="panel-subtitle">按数据集汇总当天每日采集批次：总批次、成功、运行中、待执行、失败和涉及标的数。</p>
+                <h2>采集路线图 (Pipeline)</h2>
+                <p class="panel-subtitle">从标的清单到 Qlib 导出，每一步用中文结论和进度条展示。</p>
               </div>
             </div>
-            <div id="batch-table"></div>
+            <div id="stage-board" class="stage-board"></div>
           </section>
 
           <section class="panel">
             <div class="panel-header">
               <div>
-                <h2>覆盖总表</h2>
+                <h2>质量体检 (Quality check)</h2>
+                <p class="panel-subtitle">把数据质量拆成完整性、及时性、有效性和供应商可靠性，红色表示需要先处理。</p>
+              </div>
+            </div>
+            <div id="quality-grid" class="quality-grid"></div>
+            <div id="quality-issue-table"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>供应商采集质量 (Vendor quality)</h2>
+                <p class="panel-subtitle">先看每个供应商是否超时、报错、落 raw，再下钻到字段维度。</p>
+              </div>
+            </div>
+            <div id="source-summary-grid" class="source-summary-grid"></div>
+            <div id="source-dimension-table"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>数据集覆盖 (Dataset coverage)</h2>
                 <p class="panel-subtitle">按日期统计各数据集当天行数、覆盖标的数和核心数据缺口。</p>
               </div>
             </div>
@@ -89,18 +114,18 @@
           <section class="panel">
             <div class="panel-header">
               <div>
-                <h2>数据源失败统计</h2>
-                <p class="panel-subtitle">按数据集、字段维度和数据源汇总当天失败标的数、超时次数和最近错误。</p>
+                <h2>批次明细 (Batch detail)</h2>
+                <p class="panel-subtitle">用于定位任务是否还在排队、运行、失败或疑似卡住。</p>
               </div>
             </div>
-            <div id="source-dimension-table"></div>
+            <div id="batch-table"></div>
           </section>
 
           <section class="panel">
             <div class="panel-header">
               <div>
-                <h2>问题标的</h2>
-                <p class="panel-subtitle">本来应该有核心日频数据但当天没有采到的标的。核心维度：daily_bar、adj_factor、price_limit。</p>
+                <h2>问题标的 (Problem instruments)</h2>
+                <p class="panel-subtitle">本来应该有核心日频数据但当天没有采到的标的。核心维度：日线行情、复权因子、涨跌停。</p>
               </div>
               <div class="filters">
                 <input id="issue-search" class="input search-input" placeholder="搜索标的 / 代码 / 名称 / 行业" autocomplete="off" />
@@ -137,7 +162,7 @@
       <section class="modal-card">
         <header class="modal-header">
           <div>
-            <div class="eyebrow">DOCUMENTS</div>
+            <div class="eyebrow">DOCUMENTS 文档明细</div>
             <h2 id="document-modal-title">来源明细</h2>
             <p id="document-modal-summary">-</p>
           </div>

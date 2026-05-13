@@ -24,10 +24,24 @@ const FIELD_LABELS = {
   failed_instrument_count: "失败标的",
   timeout_count: "超时次数",
   error_count: "错误次数",
+  failed_task_count: "失败任务",
+  raw_object_count: "raw 落地数",
+  source_object_count: "对象数",
+  silver_row_count: "入库行数",
+  document_count: "文档数",
+  dataset_count: "数据集数",
+  datasets: "覆盖数据集",
+  success_percent: "成功率",
   last_error: "最近错误",
   coverage_percent: "覆盖率",
   latest_updated_at: "最近更新",
   missing_dimensions: "缺失维度",
+  severity: "严重级别",
+  issue_type: "问题类型",
+  status: "状态",
+  entity_key: "对象",
+  message: "说明",
+  created_at: "创建时间",
   daily_bar: "日线行情",
   adj_factor: "复权因子",
   price_limit: "涨跌停",
@@ -115,11 +129,13 @@ const STATUS_LABELS = {
   success: "成功",
   running: "运行中",
   pending: "待执行",
+  partial: "部分成功",
   blocked: "阻塞",
   failed: "失败",
   empty: "暂无",
   ok: "正常",
   missing: "缺失",
+  warning: "需关注",
 };
 
 const moneyFormatter = new Intl.NumberFormat("zh-CN");
@@ -194,7 +210,7 @@ function statusClass(value) {
   if (["complete", "success", "ok"].includes(key)) return "success";
   if (["running"].includes(key)) return "running";
   if (["failed", "blocked", "missing"].includes(key)) return "danger";
-  if (["pending", "empty"].includes(key)) return "warning";
+  if (["pending", "empty", "partial", "warning"].includes(key)) return "warning";
   return "default";
 }
 
@@ -364,32 +380,148 @@ function renderDashboard(payload) {
   const collection = payload.collection || {};
   const batches = payload.batches || {};
   const reference = payload.reference || {};
-  const collected = Number(collection.collected_instrument_count || 0);
+  const verdict = payload.verdict || {};
+  const quality = payload.quality_summary || {};
+  const sources = payload.source_summary_rows || [];
   const expected = Number(reference.expected_instrument_count || 0);
-  const remaining = Number(collection.remaining_instrument_count || 0);
-  const collectionPercent = Number(collection.collection_percent || 0);
+  const coreComplete = Number(collection.core_complete_instrument_count || 0);
+  const problemCount = Number(collection.problem_instrument_count || 0);
+  const readiness = Number(verdict.readiness_percent ?? collection.core_complete_percent ?? 0);
+  const vendorFailures = sourceFailureCount(sources);
+  const blockedBatches = Number(batches.failed_count || 0) + Number(batches.stale_running_count || 0);
 
-  $("hero-date").textContent = payload.date || "-";
-  $("hero-summary").textContent = `按 ${reference.source || "unknown"} 作为应采标的基准：已采 ${number(collected)} / ${number(expected)}，剩余 ${number(remaining)}。`;
-  $("hero-percent").textContent = percent(collectionPercent);
-  $("hero-progress-fill").style.width = `${Math.max(0, Math.min(100, collectionPercent))}%`;
+  $("hero-state").textContent = verdictLevelLabel(verdict.level);
+  $("hero-state").className = `hero-state tag tag-${verdictLevelClass(verdict.level)}`;
+  $("hero-title").textContent = verdict.title || "等待采集状态";
+  $("hero-summary").textContent = `${payload.date || "-"} · ${verdict.summary || "暂无结论。"} 基准：${reference.source || "unknown"}。`;
+  $("hero-action").textContent = verdict.next_action || "等待下一次刷新。";
+  $("hero-percent").textContent = percent(readiness);
+  $("hero-progress-fill").style.width = `${Math.max(0, Math.min(100, readiness))}%`;
   $("hero-meter-foot").textContent = `15 秒自动刷新 · ${payload.updated_at || "-"}`;
 
   $("kpi-grid").innerHTML = [
-    summaryCard("应采标的", number(expected), reference.source || "标的基准"),
-    summaryCard("已采标的", number(collected), "以 daily_bar 当日覆盖为主", "success"),
-    summaryCard("未采标的", number(remaining), "应采 - 已采", remaining ? "danger" : "success"),
-    summaryCard("核心完整", number(collection.core_complete_instrument_count || 0), `完整率 ${percent(collection.core_complete_percent)}`),
-    summaryCard("总批次", number(batches.total_batch_count || 0), `成功 ${number(batches.success_count)} / 运行中 ${number(batches.running_count)}`),
-    summaryCard("待执行批次", number(batches.pending_count || 0), "等待每日采集消费"),
-    summaryCard("失败批次", number(batches.failed_count || 0), `卡住 ${number(batches.stale_running_count)}`, batches.failed_count ? "danger" : ""),
-    summaryCard("问题标的", number(collection.problem_instrument_count || 0), "缺 daily_bar / adj_factor / price_limit", collection.problem_instrument_count ? "danger" : "success"),
+    summaryCard("应采标的 (Expected)", number(expected), reference.source || "标的基准"),
+    summaryCard("核心完整 (Core)", `${number(coreComplete)} / ${number(expected)}`, `完整率 ${percent(collection.core_complete_percent)}`, readiness >= 100 ? "success" : "danger"),
+    summaryCard("问题标的 (Problems)", number(problemCount), "缺日线 / 复权 / 涨跌停", problemCount ? "danger" : "success"),
+    summaryCard("质量问题 (Quality)", number(quality.open_issue_count || 0), `失败维度 ${number(quality.failed_dimension_count || 0)}`, quality.open_issue_count ? "danger" : "success"),
+    summaryCard("供应商异常 (Vendor)", number(vendorFailures), "超时 + 错误", vendorFailures ? "danger" : "success"),
+    summaryCard("阻塞批次 (Blocked)", number(blockedBatches), `失败 ${number(batches.failed_count)} / 卡住 ${number(batches.stale_running_count)}`, blockedBatches ? "danger" : "success"),
+    summaryCard("运行中 (Running)", number(batches.running_count || 0), `待执行 ${number(batches.pending_count || 0)}`),
+    summaryCard("总批次 (Batches)", number(batches.total_batch_count || 0), `成功 ${number(batches.success_count || 0)}`),
   ].join("");
 
+  renderStageBoard(payload.stage_rows || []);
+  renderQualitySummary(quality, payload.quality_issue_rows || []);
+  renderSourceSummary(sources);
   renderBatchTable(payload.batch_rows || []);
   renderDatasetCoverage(payload.dataset_rows || []);
   renderSourceDimensions(payload.source_dimension_rows || []);
   renderIssueTable(payload.issue_rows || []);
+}
+
+function verdictLevelLabel(level) {
+  const labels = {
+    success: "可用",
+    running: "采集中",
+    warning: "需确认",
+    danger: "需处理",
+  };
+  return labels[level] || "未知";
+}
+
+function verdictLevelClass(level) {
+  if (level === "success") return "success";
+  if (level === "running") return "running";
+  if (level === "danger") return "danger";
+  return "warning";
+}
+
+function sourceFailureCount(rows) {
+  return (rows || []).reduce((total, row) => total + Number(row.timeout_count || 0) + Number(row.error_count || 0), 0);
+}
+
+function renderStageBoard(rows) {
+  $("stage-board").innerHTML = rows.length
+    ? rows.map(renderStageItem).join("")
+    : '<div class="empty">当前日期暂无采集阶段记录。</div>';
+}
+
+function renderStageItem(row) {
+  const progress = row.progress_percent === null || row.progress_percent === undefined ? null : Number(row.progress_percent || 0);
+  const progressHtml = progress === null
+    ? '<div class="stage-progress-note">事件型数据不按覆盖率判断</div>'
+    : `<div class="progress-bar"><div class="progress-fill" style="width:${Math.max(0, Math.min(100, progress))}%"></div></div>`;
+  return `
+    <article class="stage-item stage-${statusClass(row.status)}">
+      <div class="stage-head">
+        <h3>${escapeHtml(row.label || "-")}</h3>
+        ${tag(row.status || "pending")}
+      </div>
+      <div class="stage-primary">${escapeHtml(row.primary || "-")}</div>
+      <div class="stage-secondary">${escapeHtml(row.secondary || "")}</div>
+      ${progressHtml}
+    </article>
+  `;
+}
+
+function renderQualitySummary(summary, issueRows) {
+  const rows = summary.rows || [];
+  $("quality-grid").innerHTML = rows.length
+    ? rows.map(renderQualityItem).join("")
+    : '<div class="empty">当前日期暂无质量体检结果。</div>';
+  $("quality-issue-table").innerHTML = table(
+    [
+      { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel, maxLength: 90 },
+      { key: "source_id", label: fieldLabel("source_id"), format: sourceLabel, maxLength: 180 },
+      { key: "severity", label: fieldLabel("severity"), maxLength: 80 },
+      { key: "issue_type", label: fieldLabel("issue_type"), maxLength: 140 },
+      { key: "entity_key", label: fieldLabel("entity_key"), maxLength: 160 },
+      { key: "message", label: fieldLabel("message"), maxLength: 260 },
+      { key: "created_at", label: fieldLabel("created_at"), maxLength: 100 },
+    ],
+    issueRows,
+    "当前日期没有未关闭质量问题。",
+    { sortKind: "qualityIssue", sort: state.sort.qualityIssue || {} },
+  );
+}
+
+function renderQualityItem(row) {
+  const status = row.status || "success";
+  return `
+    <article class="quality-item quality-${statusClass(status)}">
+      <div class="quality-head">
+        <h3>${escapeHtml(row.label || row.dimension || "-")}</h3>
+        ${tag(status)}
+      </div>
+      <div class="quality-number">${number(row.affected_count || 0)}</div>
+      <div class="quality-foot">${escapeHtml(row.sample || "未发现问题")}</div>
+    </article>
+  `;
+}
+
+function renderSourceSummary(rows) {
+  $("source-summary-grid").innerHTML = rows.length
+    ? rows.slice(0, 8).map(renderSourceCard).join("")
+    : '<div class="empty">当前日期暂无供应商采集记录。</div>';
+}
+
+function renderSourceCard(row) {
+  const failures = Number(row.timeout_count || 0) + Number(row.error_count || 0);
+  const foot = row.last_error || `raw ${number(row.raw_object_count || 0)} · 入库 ${number(row.silver_row_count || 0)} 行`;
+  return `
+    <article class="source-card source-${statusClass(row.state)}">
+      <div class="source-head">
+        <h3>${escapeHtml(sourceLabel(row.source_id))}</h3>
+        ${tag(row.state || "empty")}
+      </div>
+      <div class="source-metrics">
+        <span>失败标的 ${number(row.failed_instrument_count || 0)}</span>
+        <span>异常 ${number(failures)}</span>
+        <span>数据集 ${number(row.dataset_count || 0)}</span>
+      </div>
+      <div class="source-foot">${escapeHtml(compact(foot, 180))}</div>
+    </article>
+  `;
 }
 
 function renderBatchTable(rows) {
@@ -630,7 +762,7 @@ function bindNav() {
       $("page-title").textContent = state.activeSection === "data" ? "数据预览" : "今日总览";
       $("page-summary").textContent = state.activeSection === "data"
         ? "按日期查看原始输入和处理后因子两张大宽表。"
-        : "按日期查看每日 5000 多只标的的采集进度、批次状态、缺失标的和覆盖总表。";
+        : "先看今天能不能用，再看采集进度、质量体检和供应商采集质量。";
       if (state.activeSection === "data") refreshPreview();
     });
   });
@@ -718,6 +850,13 @@ function toggleSort(kind, key) {
   }
   if (kind === "coverage") {
     renderDatasetCoverage(state.statusPayload?.dataset_rows || []);
+    return;
+  }
+  if (kind === "qualityIssue") {
+    renderQualitySummary(
+      state.statusPayload?.quality_summary || {},
+      state.statusPayload?.quality_issue_rows || [],
+    );
   }
 }
 

@@ -106,6 +106,27 @@ DAILY_DOCUMENT_DIMENSIONS = {
     "announcement": ("publish_time", "title"),
     "news": ("publish_time", "title"),
 }
+DAILY_STAGE_DATASETS = ("daily_bar", "adj_factor", "price_limit")
+DAILY_JOB_STAGES = ("build_factors", "sync_parquet", "quality", "export_qlib")
+QUALITY_DIMENSION_LABELS = {
+    "completeness": "完整性 (Completeness)",
+    "freshness": "及时性 (Freshness)",
+    "validity": "有效性 (Validity)",
+    "source": "供应商可靠性 (Vendor reliability)",
+}
+QUALITY_ISSUE_DIMENSIONS = {
+    "missing_ohlc": "completeness",
+    "missing_document_identity": "completeness",
+    "missing_publish_time": "freshness",
+    "invalid_adj_factor": "validity",
+    "invalid_price_limit": "validity",
+    "invalid_price_range": "validity",
+    "close_outside_range": "validity",
+    "negative_volume": "validity",
+    "unknown_trade_status": "validity",
+    "invalid_count_factor": "validity",
+    "invalid_sentiment_factor": "validity",
+}
 DAILY_RAW_WIDE_TABLES = {
     "daily_bar": [
         "open",
@@ -474,11 +495,59 @@ class QdcConsoleData:
                 date=resolved_date,
                 expected_count=len(reference_rows),
             )
+            quality_issue_rows = self._daily_quality_issue_rows(
+                conn,
+                control_tables=control_tables,
+                date=resolved_date,
+            )
+            source_summary_rows = self._daily_source_summary_rows(
+                conn,
+                control_tables=control_tables,
+                silver_tables=silver_tables,
+                date=resolved_date,
+                source_dimension_rows=source_dimension_rows,
+            )
+            job_stage_rows = self._daily_job_stage_rows(
+                conn,
+                control_tables=control_tables,
+                date=resolved_date,
+            )
         issue_rows = _daily_issue_rows(reference_rows, required_sets)
         daily_bar_count = len(required_sets.get("daily_bar", set()))
         core_complete_count = len(set.intersection(*required_sets.values())) if required_sets else 0
         expected_count = len(reference_rows)
         batch_summary = _daily_batch_summary(batch_rows)
+        collection = {
+            "collected_instrument_count": daily_bar_count,
+            "remaining_instrument_count": max(expected_count - daily_bar_count, 0),
+            "collection_percent": _percent(daily_bar_count, expected_count),
+            "core_complete_instrument_count": core_complete_count,
+            "core_complete_percent": _percent(core_complete_count, expected_count),
+            "problem_instrument_count": len(issue_rows),
+        }
+        quality_summary = _daily_quality_summary(
+            collection=collection,
+            batches=batch_summary,
+            source_dimension_rows=source_dimension_rows,
+            quality_issue_rows=quality_issue_rows,
+        )
+        stage_rows = _daily_stage_rows(
+            expected_count=expected_count,
+            collection=collection,
+            batches=batch_summary,
+            dataset_rows=dataset_rows,
+            source_summary_rows=source_summary_rows,
+            quality_summary=quality_summary,
+            job_stage_rows=job_stage_rows,
+        )
+        verdict = _daily_verdict(
+            database_exists=True,
+            expected_count=expected_count,
+            collection=collection,
+            batches=batch_summary,
+            quality_summary=quality_summary,
+            source_summary_rows=source_summary_rows,
+        )
         return {
             "status": "ok",
             "date": resolved_date,
@@ -489,18 +558,16 @@ class QdcConsoleData:
                 "source": reference_source,
                 "expected_instrument_count": expected_count,
             },
-            "collection": {
-                "collected_instrument_count": daily_bar_count,
-                "remaining_instrument_count": max(expected_count - daily_bar_count, 0),
-                "collection_percent": _percent(daily_bar_count, expected_count),
-                "core_complete_instrument_count": core_complete_count,
-                "core_complete_percent": _percent(core_complete_count, expected_count),
-                "problem_instrument_count": len(issue_rows),
-            },
+            "verdict": verdict,
+            "collection": collection,
             "batches": batch_summary,
+            "stage_rows": stage_rows,
+            "quality_summary": quality_summary,
+            "source_summary_rows": source_summary_rows,
             "batch_rows": batch_rows,
             "dataset_rows": dataset_rows,
             "source_dimension_rows": source_dimension_rows,
+            "quality_issue_rows": quality_issue_rows,
             "issue_rows": issue_rows,
         }
 
@@ -864,6 +931,326 @@ class QdcConsoleData:
             )
         )
         return rows
+
+    def _daily_quality_issue_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        date: str,
+    ) -> list[dict[str, Any]]:
+        if "quality_issue" not in control_tables:
+            return []
+        return _query_dicts(
+            conn,
+            f"""
+            select *
+            from {CONTROL_SCHEMA}.quality_issue
+            where status <> 'closed'
+              and (
+                entity_key like ?
+                or observed_value like ?
+              )
+            order by created_at desc, severity, dataset, issue_type
+            limit 50
+            """,
+            [f"{date}|%", f"%{date}%"],
+        )
+
+    def _daily_source_summary_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        silver_tables: set[str],
+        date: str,
+        source_dimension_rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        raw_counts = self._daily_source_object_counts(
+            conn,
+            control_tables=control_tables,
+            date=date,
+        )
+        crawl_counts = self._daily_crawl_run_counts(
+            conn,
+            control_tables=control_tables,
+            date=date,
+        )
+        silver_counts = self._daily_silver_source_counts(
+            conn,
+            silver_tables=silver_tables,
+            date=date,
+        )
+
+        by_dataset: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in source_dimension_rows:
+            source_id = str(row.get("source_id") or "-")
+            dataset = str(row.get("dataset") or "-")
+            item = by_dataset.setdefault(
+                (source_id, dataset),
+                {
+                    "source_id": source_id,
+                    "dataset": dataset,
+                    "expected_instrument_count": None,
+                    "success_instrument_count": 0,
+                    "failed_instrument_count": 0,
+                    "timeout_count": 0,
+                    "error_count": 0,
+                    "failed_task_count": 0,
+                    "last_error": None,
+                },
+            )
+            expected = row.get("expected_instrument_count")
+            if expected is not None:
+                item["expected_instrument_count"] = max(
+                    int(item.get("expected_instrument_count") or 0),
+                    int(expected or 0),
+                )
+            item["success_instrument_count"] = max(
+                int(item.get("success_instrument_count") or 0),
+                int(row.get("success_instrument_count") or 0),
+            )
+            item["failed_instrument_count"] = max(
+                int(item.get("failed_instrument_count") or 0),
+                int(row.get("failed_instrument_count") or 0),
+            )
+            item["timeout_count"] = max(
+                int(item.get("timeout_count") or 0),
+                int(row.get("timeout_count") or 0),
+            )
+            item["error_count"] = max(
+                int(item.get("error_count") or 0),
+                int(row.get("error_count") or 0),
+            )
+            item["failed_task_count"] = max(
+                int(item.get("failed_task_count") or 0),
+                int(row.get("failed_task_count") or 0),
+            )
+            if row.get("last_error") and not item.get("last_error"):
+                item["last_error"] = row.get("last_error")
+
+        summaries: dict[str, dict[str, Any]] = {}
+
+        def ensure(source_id: str) -> dict[str, Any]:
+            return summaries.setdefault(
+                source_id,
+                {
+                    "source_id": source_id,
+                    "datasets": set(),
+                    "dataset_count": 0,
+                    "expected_instrument_count": None,
+                    "success_instrument_count": 0,
+                    "failed_instrument_count": 0,
+                    "timeout_count": 0,
+                    "error_count": 0,
+                    "failed_task_count": 0,
+                    "raw_object_count": 0,
+                    "source_object_count": 0,
+                    "silver_row_count": 0,
+                    "document_count": 0,
+                    "planned_count": 0,
+                    "last_error": None,
+                },
+            )
+
+        for (source_id, dataset), item in by_dataset.items():
+            summary = ensure(source_id)
+            summary["datasets"].add(dataset)
+            if item.get("expected_instrument_count") is not None:
+                summary["expected_instrument_count"] = max(
+                    int(summary.get("expected_instrument_count") or 0),
+                    int(item.get("expected_instrument_count") or 0),
+                )
+            summary["success_instrument_count"] = max(
+                int(summary.get("success_instrument_count") or 0),
+                int(item.get("success_instrument_count") or 0),
+            )
+            summary["failed_instrument_count"] = max(
+                int(summary.get("failed_instrument_count") or 0),
+                int(item.get("failed_instrument_count") or 0),
+            )
+            summary["timeout_count"] += int(item.get("timeout_count") or 0)
+            summary["error_count"] += int(item.get("error_count") or 0)
+            summary["failed_task_count"] += int(item.get("failed_task_count") or 0)
+            if item.get("last_error") and not summary.get("last_error"):
+                summary["last_error"] = item.get("last_error")
+
+        for (source_id, dataset), counts in raw_counts.items():
+            summary = ensure(source_id)
+            summary["datasets"].add(dataset)
+            summary["raw_object_count"] += int(counts.get("raw_object_count") or 0)
+            summary["source_object_count"] += int(counts.get("source_object_count") or 0)
+
+        for (source_id, dataset), counts in crawl_counts.items():
+            summary = ensure(source_id)
+            summary["datasets"].add(dataset)
+            summary["planned_count"] += int(counts.get("planned_count") or 0)
+            summary["document_count"] += int(counts.get("document_count") or 0)
+            summary["raw_object_count"] += int(counts.get("raw_object_count") or 0)
+            summary["error_count"] += int(counts.get("failed_count") or 0)
+            if counts.get("last_error") and not summary.get("last_error"):
+                summary["last_error"] = counts.get("last_error")
+
+        for (source_id, dataset), row_count in silver_counts.items():
+            summary = ensure(source_id)
+            summary["datasets"].add(dataset)
+            summary["silver_row_count"] += int(row_count or 0)
+
+        rows = []
+        for summary in summaries.values():
+            dataset_names = sorted(summary.pop("datasets"))
+            expected = summary.get("expected_instrument_count")
+            success = int(summary.get("success_instrument_count") or 0)
+            failed = int(summary.get("failed_instrument_count") or 0)
+            timeout = int(summary.get("timeout_count") or 0)
+            error = int(summary.get("error_count") or 0)
+            failed_task = int(summary.get("failed_task_count") or 0)
+            if timeout or error or failed_task:
+                state = "failed"
+            elif failed:
+                state = "partial"
+            elif success or summary.get("raw_object_count") or summary.get("silver_row_count"):
+                state = "success"
+            else:
+                state = "empty"
+            rows.append(
+                {
+                    **summary,
+                    "datasets": dataset_names,
+                    "dataset_count": len(dataset_names),
+                    "state": state,
+                    "success_percent": _percent(success, expected) if expected else None,
+                }
+            )
+        rows.sort(
+            key=lambda row: (
+                str(row.get("state") or "") != "failed",
+                -(int(row.get("failed_instrument_count") or 0)),
+                -(int(row.get("timeout_count") or 0)),
+                -(int(row.get("error_count") or 0)),
+                str(row.get("source_id") or ""),
+            )
+        )
+        return rows
+
+    def _daily_source_object_counts(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        date: str,
+    ) -> dict[tuple[str, str], dict[str, int]]:
+        if "source_object" not in control_tables:
+            return {}
+        rows = _query_dicts(
+            conn,
+            f"""
+            select
+              source_id,
+              dataset,
+              count(*) as source_object_count,
+              sum(case when layer like 'raw%' then 1 else 0 end) as raw_object_count
+            from {CONTROL_SCHEMA}.source_object
+            where cast(created_at as date) = ?
+            group by source_id, dataset
+            """,
+            [date],
+        )
+        return {
+            (str(row.get("source_id") or "-"), str(row.get("dataset") or "-")): {
+                "source_object_count": int(row.get("source_object_count") or 0),
+                "raw_object_count": int(row.get("raw_object_count") or 0),
+            }
+            for row in rows
+        }
+
+    def _daily_crawl_run_counts(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        date: str,
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        if "crawl_run" not in control_tables:
+            return {}
+        rows = _query_dicts(
+            conn,
+            f"""
+            select
+              source_id,
+              dataset,
+              sum(planned_count) as planned_count,
+              sum(success_count) as success_count,
+              sum(failed_count) as failed_count,
+              sum(document_count) as document_count,
+              sum(raw_object_count) as raw_object_count,
+              max(error_message) as last_error
+            from {CONTROL_SCHEMA}.crawl_run
+            where crawl_date = ?
+            group by source_id, dataset
+            """,
+            [date],
+        )
+        return {
+            (str(row.get("source_id") or "-"), str(row.get("dataset") or "-")): row
+            for row in rows
+        }
+
+    def _daily_silver_source_counts(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        silver_tables: set[str],
+        date: str,
+    ) -> dict[tuple[str, str], int]:
+        counts: dict[tuple[str, str], int] = {}
+        for dataset in DAILY_COLLECTION_DATASETS:
+            if dataset not in silver_tables:
+                continue
+            columns = self._columns(conn, SILVER_SCHEMA, dataset)
+            date_column = _preferred_date_column(columns)
+            if "source_id" not in columns or date_column not in {"trade_date", "publish_date"}:
+                continue
+            rows = conn.execute(
+                f"""
+                select source_id, count(*) as row_count
+                from {SILVER_SCHEMA}.{dataset}
+                where {date_column} = ?
+                group by source_id
+                """,
+                [date],
+            ).fetchall()
+            for source_id, row_count in rows:
+                counts[(str(source_id or "-"), dataset)] = int(row_count or 0)
+        return counts
+
+    def _daily_job_stage_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        date: str,
+    ) -> dict[str, dict[str, Any]]:
+        if "job_run" not in control_tables:
+            return {}
+        placeholders = ", ".join("?" for _ in DAILY_JOB_STAGES)
+        rows = _query_dicts(
+            conn,
+            f"""
+            select *
+            from {CONTROL_SCHEMA}.job_run
+            where job_type in ({placeholders})
+              and (start_date is null or start_date <= ?)
+              and (end_date is null or end_date >= ?)
+            order by start_at desc, created_at desc, job_id
+            """,
+            [*DAILY_JOB_STAGES, date, date],
+        )
+        latest: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            job_type = str(row.get("job_type") or "")
+            latest.setdefault(job_type, row)
+        return latest
 
     def _daily_dataset_source_ids(
         self,
@@ -4390,6 +4777,30 @@ def _empty_daily_collection_status(*, date: str, database_path: str) -> dict[str
         "database_path": database_path,
         "updated_at": datetime.now().replace(microsecond=0).isoformat(),
         "reference": {"source": "none", "expected_instrument_count": 0},
+        "verdict": _daily_verdict(
+            database_exists=False,
+            expected_count=0,
+            collection={
+                "collected_instrument_count": 0,
+                "remaining_instrument_count": 0,
+                "collection_percent": 0,
+                "core_complete_instrument_count": 0,
+                "core_complete_percent": 0,
+                "problem_instrument_count": 0,
+            },
+            batches={
+                "total_batch_count": 0,
+                "success_count": 0,
+                "running_count": 0,
+                "pending_count": 0,
+                "failed_count": 0,
+                "stale_running_count": 0,
+                "complete_percent": 0,
+                "state": "empty",
+            },
+            quality_summary=_empty_daily_quality_summary(),
+            source_summary_rows=[],
+        ),
         "collection": {
             "collected_instrument_count": 0,
             "remaining_instrument_count": 0,
@@ -4406,10 +4817,15 @@ def _empty_daily_collection_status(*, date: str, database_path: str) -> dict[str
             "failed_count": 0,
             "stale_running_count": 0,
             "complete_percent": 0,
+            "state": "empty",
         },
+        "stage_rows": [],
+        "quality_summary": _empty_daily_quality_summary(),
+        "source_summary_rows": [],
         "batch_rows": [],
         "dataset_rows": [],
         "source_dimension_rows": [],
+        "quality_issue_rows": [],
         "issue_rows": [],
     }
 
@@ -4457,6 +4873,332 @@ def _daily_batch_summary(batch_rows: list[dict[str, Any]]) -> dict[str, Any]:
         "failed_count": failed,
         "stale_running_count": stale,
         "complete_percent": _percent(success, total),
+        "state": _progress_state(
+            total=total,
+            success=success,
+            failed=failed,
+            running=running,
+            pending=pending,
+            stale=stale,
+        ),
+    }
+
+
+def _daily_quality_summary(
+    *,
+    collection: dict[str, Any],
+    batches: dict[str, Any],
+    source_dimension_rows: list[dict[str, Any]],
+    quality_issue_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    dimension_rows = {
+        dimension: {
+            "dimension": dimension,
+            "label": QUALITY_DIMENSION_LABELS[dimension],
+            "status": "success",
+            "affected_count": 0,
+            "issue_count": 0,
+            "sample": None,
+        }
+        for dimension in QUALITY_DIMENSION_LABELS
+    }
+
+    completeness = int(collection.get("problem_instrument_count") or 0)
+    if completeness:
+        dimension_rows["completeness"].update(
+            {
+                "status": "failed",
+                "affected_count": completeness,
+                "sample": "存在核心日频缺失标的",
+            }
+        )
+
+    stale = int(batches.get("stale_running_count") or 0)
+    if stale:
+        dimension_rows["freshness"].update(
+            {
+                "status": "failed",
+                "affected_count": stale,
+                "sample": "存在疑似卡住批次",
+            }
+        )
+
+    source_totals = _daily_source_failure_totals(source_dimension_rows)
+    source_failures = source_totals["timeout_count"] + source_totals["error_count"]
+    if source_failures:
+        dimension_rows["source"].update(
+            {
+                "status": "failed",
+                "affected_count": source_failures,
+                "sample": "存在供应商超时或错误",
+            }
+        )
+
+    for issue in quality_issue_rows:
+        issue_type = str(issue.get("issue_type") or "")
+        dimension = QUALITY_ISSUE_DIMENSIONS.get(issue_type, "validity")
+        row = dimension_rows[dimension]
+        row["issue_count"] = int(row.get("issue_count") or 0) + 1
+        row["affected_count"] = int(row.get("affected_count") or 0) + 1
+        row["status"] = "failed"
+        if not row.get("sample"):
+            row["sample"] = issue.get("message") or issue_type
+
+    rows = list(dimension_rows.values())
+    failed_count = sum(1 for row in rows if row.get("status") == "failed")
+    return {
+        "status": "failed" if failed_count else "success",
+        "failed_dimension_count": failed_count,
+        "open_issue_count": len(quality_issue_rows),
+        "source_timeout_count": source_totals["timeout_count"],
+        "source_error_count": source_totals["error_count"],
+        "rows": rows,
+    }
+
+
+def _empty_daily_quality_summary() -> dict[str, Any]:
+    return {
+        "status": "success",
+        "failed_dimension_count": 0,
+        "open_issue_count": 0,
+        "source_timeout_count": 0,
+        "source_error_count": 0,
+        "rows": [
+            {
+                "dimension": dimension,
+                "label": label,
+                "status": "success",
+                "affected_count": 0,
+                "issue_count": 0,
+                "sample": None,
+            }
+            for dimension, label in QUALITY_DIMENSION_LABELS.items()
+        ],
+    }
+
+
+def _daily_source_failure_totals(rows: list[dict[str, Any]]) -> dict[str, int]:
+    by_source_dataset: dict[tuple[str, str], dict[str, int]] = {}
+    for row in rows:
+        key = (str(row.get("source_id") or "-"), str(row.get("dataset") or "-"))
+        item = by_source_dataset.setdefault(
+            key,
+            {"timeout_count": 0, "error_count": 0, "failed_task_count": 0},
+        )
+        item["timeout_count"] = max(
+            item["timeout_count"],
+            int(row.get("timeout_count") or 0),
+        )
+        item["error_count"] = max(item["error_count"], int(row.get("error_count") or 0))
+        item["failed_task_count"] = max(
+            item["failed_task_count"],
+            int(row.get("failed_task_count") or 0),
+        )
+    return {
+        "timeout_count": sum(item["timeout_count"] for item in by_source_dataset.values()),
+        "error_count": sum(item["error_count"] for item in by_source_dataset.values()),
+        "failed_task_count": sum(
+            item["failed_task_count"] for item in by_source_dataset.values()
+        ),
+    }
+
+
+def _daily_stage_rows(
+    *,
+    expected_count: int,
+    collection: dict[str, Any],
+    batches: dict[str, Any],
+    dataset_rows: list[dict[str, Any]],
+    source_summary_rows: list[dict[str, Any]],
+    quality_summary: dict[str, Any],
+    job_stage_rows: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    dataset_by_name = {str(row.get("dataset") or ""): row for row in dataset_rows}
+    rows = [
+        {
+            "stage_id": "universe",
+            "label": "标的清单 (Universe)",
+            "status": "success" if expected_count else "pending",
+            "progress_percent": 100 if expected_count else 0,
+            "primary": f"应采 {expected_count} 只标的",
+            "secondary": "来自 stock_basic / universe / 当日观测标的",
+        },
+        {
+            "stage_id": "daily_pipeline",
+            "label": "采集任务 (Daily pipeline)",
+            "status": batches.get("state") or "pending",
+            "progress_percent": batches.get("complete_percent") or 0,
+            "primary": (
+                f"成功 {int(batches.get('success_count') or 0)} / "
+                f"总批次 {int(batches.get('total_batch_count') or 0)}"
+            ),
+            "secondary": (
+                f"待执行 {int(batches.get('pending_count') or 0)}，"
+                f"失败 {int(batches.get('failed_count') or 0)}，"
+                f"卡住 {int(batches.get('stale_running_count') or 0)}"
+            ),
+        },
+    ]
+    for dataset in DAILY_STAGE_DATASETS:
+        item = dataset_by_name.get(dataset, {})
+        coverage = item.get("coverage_percent")
+        missing = int(item.get("missing_instrument_count") or 0)
+        rows.append(
+            {
+                "stage_id": dataset,
+                "label": _stage_dataset_label(dataset),
+                "status": "success" if coverage == 100 else "failed" if missing else "pending",
+                "progress_percent": coverage or 0,
+                "primary": (
+                    f"覆盖 {int(item.get('instrument_count') or 0)} / "
+                    f"{int(item.get('expected_instrument_count') or expected_count)}"
+                ),
+                "secondary": f"缺失 {missing} 只标的",
+            }
+        )
+
+    announcement_rows = int(dataset_by_name.get("announcement", {}).get("row_count") or 0)
+    news_rows = int(dataset_by_name.get("news", {}).get("row_count") or 0)
+    vendor_failures = sum(
+        int(row.get("timeout_count") or 0) + int(row.get("error_count") or 0)
+        for row in source_summary_rows
+    )
+    rows.append(
+        {
+            "stage_id": "documents",
+            "label": "公告新闻 (Documents)",
+            "status": "failed" if vendor_failures else "success" if announcement_rows or news_rows else "pending",
+            "progress_percent": None,
+            "primary": f"公告 {announcement_rows} 行，新闻 {news_rows} 行",
+            "secondary": f"供应商错误/超时 {vendor_failures} 次；无事件不算缺失",
+        }
+    )
+    rows.append(_job_stage_row("build_factors", "文本因子 (Build factors)", job_stage_rows))
+    rows.append(
+        {
+            "stage_id": "quality",
+            "label": "质量检查 (Quality check)",
+            "status": quality_summary.get("status") or "pending",
+            "progress_percent": 100 if quality_summary.get("status") == "success" else 0,
+            "primary": f"未关闭问题 {int(quality_summary.get('open_issue_count') or 0)} 条",
+            "secondary": f"失败维度 {int(quality_summary.get('failed_dimension_count') or 0)} 个",
+        }
+    )
+    rows.append(_job_stage_row("sync_parquet", "Parquet 同步 (Sync)", job_stage_rows))
+    rows.append(_job_stage_row("export_qlib", "Qlib 导出 (Export)", job_stage_rows))
+    return rows
+
+
+def _job_stage_row(
+    job_type: str,
+    label: str,
+    job_stage_rows: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    job = job_stage_rows.get(job_type)
+    if not job:
+        return {
+            "stage_id": job_type,
+            "label": label,
+            "status": "pending",
+            "progress_percent": 0,
+            "primary": "未看到当天成功记录",
+            "secondary": "等待流水线执行",
+        }
+    status = str(job.get("status") or "pending")
+    return {
+        "stage_id": job_type,
+        "label": label,
+        "status": "success" if status == "success" else "failed" if status == "failed" else status,
+        "progress_percent": 100 if status == "success" else 0,
+        "primary": f"最近状态 {status}",
+        "secondary": str(job.get("error_message") or job.get("end_at") or job.get("start_at") or "-"),
+    }
+
+
+def _stage_dataset_label(dataset: str) -> str:
+    labels = {
+        "daily_bar": "日线行情 (Daily bar)",
+        "adj_factor": "复权因子 (Adjustment factor)",
+        "price_limit": "涨跌停 (Price limit)",
+    }
+    return labels.get(dataset, dataset)
+
+
+def _daily_verdict(
+    *,
+    database_exists: bool,
+    expected_count: int,
+    collection: dict[str, Any],
+    batches: dict[str, Any],
+    quality_summary: dict[str, Any],
+    source_summary_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not database_exists:
+        return {
+            "level": "warning",
+            "title": "还没有初始化数据库",
+            "summary": "控制台没有读到 qdc.duckdb，暂时无法判断采集状态。",
+            "next_action": "先运行 qdc init 或 daily-pipeline。",
+            "readiness_percent": 0,
+        }
+    if expected_count <= 0:
+        return {
+            "level": "warning",
+            "title": "还没有今日标的清单",
+            "summary": "当前日期没有应采标的，可能还没有刷新股票池或今天未开始采集。",
+            "next_action": "先确认日期和 universe，再运行 daily-pipeline。",
+            "readiness_percent": 0,
+        }
+
+    core_percent = float(collection.get("core_complete_percent") or 0)
+    failed_batches = int(batches.get("failed_count") or 0)
+    stale_batches = int(batches.get("stale_running_count") or 0)
+    vendor_failures = sum(
+        int(row.get("timeout_count") or 0) + int(row.get("error_count") or 0)
+        for row in source_summary_rows
+    )
+    quality_failed = quality_summary.get("status") == "failed"
+    if failed_batches or stale_batches:
+        return {
+            "level": "danger",
+            "title": "采集卡住或失败",
+            "summary": f"失败批次 {failed_batches} 个，疑似卡住 {stale_batches} 个。",
+            "next_action": "先看采集任务和问题标的，再重试失败批次。",
+            "readiness_percent": core_percent,
+        }
+    if vendor_failures:
+        return {
+            "level": "danger",
+            "title": "供应商采集有异常",
+            "summary": f"供应商错误或超时 {vendor_failures} 次，可能影响当天覆盖。",
+            "next_action": "先看供应商采集质量，确认是否需要切换备用源。",
+            "readiness_percent": core_percent,
+        }
+    if quality_failed:
+        return {
+            "level": "danger",
+            "title": "采完了但质量未通过",
+            "summary": "质量检查发现未关闭问题，数据暂不建议直接用于研究。",
+            "next_action": "先处理质量体检里的失败维度。",
+            "readiness_percent": core_percent,
+        }
+    if core_percent >= 100:
+        return {
+            "level": "success",
+            "title": "今日核心数据可用",
+            "summary": "日线行情、复权因子和涨跌停三项核心数据已覆盖全部应采标的。",
+            "next_action": "可以继续查看宽表或检查 Qlib 导出结果。",
+            "readiness_percent": core_percent,
+        }
+    return {
+        "level": "running",
+        "title": "今日采集中",
+        "summary": (
+            f"核心完整率 {core_percent:.2f}%，"
+            f"还有 {int(collection.get('problem_instrument_count') or 0)} 只标的缺核心数据。"
+        ),
+        "next_action": "保持页面打开，等待批次继续推进。",
+        "readiness_percent": core_percent,
     }
 
 
