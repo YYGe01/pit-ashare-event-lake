@@ -13,6 +13,12 @@ const FIELD_LABELS = {
   failed_count: "失败",
   stale_running_count: "疑似卡住",
   symbol_count: "批次标的数",
+  symbol_preview: "标的预览",
+  partition_key: "分区",
+  attempt_count: "尝试次数",
+  progress_percent: "进度",
+  task_id: "任务 ID",
+  updated_at: "更新时间",
   complete_percent: "完成率",
   row_count: "行数",
   instrument_count: "覆盖标的",
@@ -136,6 +142,7 @@ const STATUS_LABELS = {
   ok: "正常",
   missing: "缺失",
   warning: "需关注",
+  stale: "疑似卡住",
 };
 
 const moneyFormatter = new Intl.NumberFormat("zh-CN");
@@ -147,11 +154,13 @@ let state = {
   previewMode: "raw",
   statusPayload: null,
   previewPayload: null,
+  runPayload: null,
   issuePage: 1,
   widePage: 1,
   sort: {},
   loading: false,
   previewLoading: false,
+  runStarting: false,
   autoRefreshTimer: null,
 };
 
@@ -209,7 +218,7 @@ function statusClass(value) {
   const key = String(value || "default").toLowerCase();
   if (["complete", "success", "ok"].includes(key)) return "success";
   if (["running"].includes(key)) return "running";
-  if (["failed", "blocked", "missing"].includes(key)) return "danger";
+  if (["failed", "blocked", "missing", "stale"].includes(key)) return "danger";
   if (["pending", "empty", "partial", "warning"].includes(key)) return "warning";
   return "default";
 }
@@ -218,8 +227,8 @@ function tag(value) {
   return `<span class="tag tag-${statusClass(value)}">${escapeHtml(statusLabel(value))}</span>`;
 }
 
-async function api(path) {
-  const response = await fetch(path, { cache: "no-store" });
+async function api(path, options = {}) {
+  const response = await fetch(path, { cache: "no-store", ...options });
   const payload = await response.json();
   if (!response.ok || payload.status === "fail") {
     const error = new Error(payload.error || `HTTP ${response.status}`);
@@ -411,9 +420,10 @@ function renderDashboard(payload) {
   ].join("");
 
   renderStageBoard(payload.stage_rows || []);
+  renderRunStatus(state.runPayload);
   renderQualitySummary(quality, payload.quality_issue_rows || []);
   renderSourceSummary(sources);
-  renderBatchTable(payload.batch_rows || []);
+  renderBatchTable(payload.batch_rows || [], payload.batch_task_rows || [], payload.crawl_task_rows || []);
   renderDatasetCoverage(payload.dataset_rows || []);
   renderSourceDimensions(payload.source_dimension_rows || []);
   renderIssueTable(payload.issue_rows || []);
@@ -438,6 +448,33 @@ function verdictLevelClass(level) {
 
 function sourceFailureCount(rows) {
   return (rows || []).reduce((total, row) => total + Number(row.timeout_count || 0) + Number(row.error_count || 0), 0);
+}
+
+function renderRunStatus(payload) {
+  const target = $("run-status-card");
+  if (!target) return;
+  const run = payload?.run;
+  const running = Boolean(payload?.running);
+  const button = $("run-daily-button");
+  if (button) button.disabled = running || state.runStarting;
+  if (!run) {
+    target.innerHTML = '<div class="empty compact-empty">当前没有由控制台启动的 daily-pipeline。</div>';
+    return;
+  }
+  const command = (run.command || []).join(" ");
+  const logs = [...(run.stderr_tail || []), ...(run.stdout_tail || [])].filter(Boolean).slice(-12);
+  target.innerHTML = `
+    <div class="run-status-head">
+      <div>
+        <div class="run-status-title">最近执行 ${tag(run.status || "pending")}</div>
+        <div class="run-status-meta">开始 ${escapeHtml(run.start_at || "-")} · 结束 ${escapeHtml(run.end_at || "-")} · 返回码 ${escapeHtml(run.return_code ?? "-")}</div>
+      </div>
+      <button class="btn" id="refresh-run-btn" type="button">刷新执行状态</button>
+    </div>
+    <div class="run-command">${escapeHtml(command)}</div>
+    ${logs.length ? `<pre class="run-log">${escapeHtml(logs.join("\n"))}</pre>` : '<div class="empty compact-empty">暂无日志输出。</div>'}
+  `;
+  $("refresh-run-btn")?.addEventListener("click", refreshRunStatus);
 }
 
 function renderStageBoard(rows) {
@@ -524,9 +561,14 @@ function renderSourceCard(row) {
   `;
 }
 
-function renderBatchTable(rows) {
+function renderBatchTable(rows, taskRows = [], crawlRows = []) {
   const sorted = sortedRows(rows, state.sort.batch);
-  $("batch-table").innerHTML = table(
+  const taskSorted = sortedRows(taskRows, state.sort.batchTask);
+  const crawlSorted = sortedRows(crawlRows, state.sort.crawlTask);
+  $("batch-table").innerHTML = `
+    <div class="batch-section">
+      <h3>数据集批次汇总</h3>
+      ${table(
     [
       { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel, maxLength: 90 },
       { key: "state", label: fieldLabel("state"), status: true },
@@ -543,7 +585,64 @@ function renderBatchTable(rows) {
     sorted,
     "当前日期暂无每日采集批次。",
     { sortKind: "batch", sort: state.sort.batch || {} },
+  )}
+    </div>
+    <div class="batch-section">
+      <h3>结构化采集批次</h3>
+      ${renderTaskProgressTable(taskSorted, "batchTask", "当前日期暂无结构化采集批次。")}
+    </div>
+    <div class="batch-section">
+      <h3>公告新闻爬虫批次</h3>
+      ${renderCrawlProgressTable(crawlSorted, "crawlTask", "当前日期暂无公告新闻爬虫批次。")}
+    </div>
+  `;
+}
+
+function renderTaskProgressTable(rows, sortKind, emptyText) {
+  return table(
+    [
+      { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel, maxLength: 90 },
+      { key: "source_id", label: fieldLabel("source_id"), format: sourceLabel, maxLength: 140 },
+      { key: "state", label: fieldLabel("state"), status: true },
+      { key: "progress_percent", label: fieldLabel("progress_percent"), html: progressCell },
+      { key: "symbol_count", label: fieldLabel("symbol_count"), value: (row) => number(row.symbol_count) },
+      { key: "symbol_preview", label: fieldLabel("symbol_preview"), maxLength: 220 },
+      { key: "attempt_count", label: fieldLabel("attempt_count"), value: (row) => number(row.attempt_count) },
+      { key: "updated_at", label: fieldLabel("updated_at"), maxLength: 100 },
+      { key: "last_error", label: fieldLabel("last_error"), maxLength: 260 },
+    ],
+    rows,
+    emptyText,
+    { sortKind, sort: state.sort[sortKind] || {} },
   );
+}
+
+function renderCrawlProgressTable(rows, sortKind, emptyText) {
+  return table(
+    [
+      { key: "dataset", label: fieldLabel("dataset"), format: datasetLabel, maxLength: 90 },
+      { key: "source_id", label: fieldLabel("source_id"), format: sourceLabel, maxLength: 180 },
+      { key: "state", label: fieldLabel("state"), status: true },
+      { key: "progress_percent", label: fieldLabel("progress_percent"), html: progressCell },
+      { key: "partition_key", label: fieldLabel("partition_key"), maxLength: 160 },
+      { key: "attempt_count", label: fieldLabel("attempt_count"), value: (row) => number(row.attempt_count) },
+      { key: "updated_at", label: fieldLabel("updated_at"), maxLength: 100 },
+      { key: "last_error", label: fieldLabel("last_error"), maxLength: 260 },
+    ],
+    rows,
+    emptyText,
+    { sortKind, sort: state.sort[sortKind] || {} },
+  );
+}
+
+function progressCell(row) {
+  const progress = Math.max(0, Math.min(100, Number(row.progress_percent || 0)));
+  return `
+    <div class="task-progress-cell">
+      <div class="progress-bar"><div class="progress-fill progress-${statusClass(row.state)}" style="width:${progress}%"></div></div>
+      <span>${percent(progress)}</span>
+    </div>
+  `;
 }
 
 function renderDatasetCoverage(rows) {
@@ -613,12 +712,54 @@ async function refreshStatus() {
   try {
     const query = new URLSearchParams();
     if (activeDate()) query.set("date", activeDate());
-    const payload = await api(`/api/daily-collection-status?${query.toString()}`);
+    const [payload, runPayload] = await Promise.all([
+      api(`/api/daily-collection-status?${query.toString()}`),
+      api("/api/daily-pipeline-run"),
+    ]);
+    state.runPayload = runPayload;
     renderStatus(payload);
   } catch (error) {
     showError(friendlyError(error));
   } finally {
     state.loading = false;
+  }
+}
+
+async function refreshRunStatus() {
+  try {
+    state.runPayload = await api("/api/daily-pipeline-run");
+    renderRunStatus(state.runPayload);
+  } catch (error) {
+    showError(friendlyError(error));
+  }
+}
+
+async function startDailyPipeline() {
+  if (state.runStarting) return;
+  state.runStarting = true;
+  showError(null);
+  renderRunStatus(state.runPayload);
+  try {
+    const payload = {
+      date: activeDate() || null,
+      symbols: $("run-symbols").value.trim(),
+      batch_size: Number($("run-batch-size").value || 50),
+      refresh_stock_basic: $("run-refresh-stock-basic").checked,
+      crawl_documents: $("run-crawl-documents").checked,
+      control_only: $("run-control-only").checked,
+    };
+    state.runPayload = await api("/api/daily-pipeline-run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    renderRunStatus(state.runPayload);
+    await refreshStatus();
+  } catch (error) {
+    showError(friendlyError(error));
+  } finally {
+    state.runStarting = false;
+    renderRunStatus(state.runPayload);
   }
 }
 
@@ -773,6 +914,7 @@ function bindControls() {
     refreshStatus();
     if (state.activeSection === "data") refreshPreview();
   });
+  $("run-daily-button").addEventListener("click", startDailyPipeline);
   $("active-date").addEventListener("change", () => {
     state.previewPayload = null;
     state.issuePage = 1;
@@ -845,7 +987,19 @@ function toggleSort(kind, key) {
     return;
   }
   if (kind === "batch") {
-    renderBatchTable(state.statusPayload?.batch_rows || []);
+    renderBatchTable(
+      state.statusPayload?.batch_rows || [],
+      state.statusPayload?.batch_task_rows || [],
+      state.statusPayload?.crawl_task_rows || [],
+    );
+    return;
+  }
+  if (kind === "batchTask" || kind === "crawlTask") {
+    renderBatchTable(
+      state.statusPayload?.batch_rows || [],
+      state.statusPayload?.batch_task_rows || [],
+      state.statusPayload?.crawl_task_rows || [],
+    );
     return;
   }
   if (kind === "coverage") {

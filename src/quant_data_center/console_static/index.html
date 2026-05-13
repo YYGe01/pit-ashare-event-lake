@@ -69,6 +69,39 @@
 
           <div id="kpi-grid" class="kpi-grid"></div>
 
+          <section class="panel run-panel">
+            <div class="panel-header">
+              <div>
+                <h2>执行每日采集 (Run daily-pipeline)</h2>
+                <p class="panel-subtitle">从控制台启动一次每日流水线，并在下方批次明细里跟踪每个批次状态。</p>
+              </div>
+              <button id="run-daily-button" class="btn btn-primary" type="button">执行 daily-pipeline</button>
+            </div>
+            <div class="run-controls">
+              <label class="run-field">
+                <span>标的</span>
+                <input id="run-symbols" class="input" placeholder="留空按配置 universe" autocomplete="off" />
+              </label>
+              <label class="run-field compact-field">
+                <span>批次大小</span>
+                <input id="run-batch-size" class="input" type="number" min="1" max="10000" value="50" />
+              </label>
+              <label class="check-field">
+                <input id="run-refresh-stock-basic" type="checkbox" checked />
+                <span>刷新股票池</span>
+              </label>
+              <label class="check-field">
+                <input id="run-crawl-documents" type="checkbox" checked />
+                <span>采集公告新闻</span>
+              </label>
+              <label class="check-field">
+                <input id="run-control-only" type="checkbox" />
+                <span>只跑控制面</span>
+              </label>
+            </div>
+            <div id="run-status-card" class="run-status-card"></div>
+          </section>
+
           <section class="panel">
             <div class="panel-header">
               <div>

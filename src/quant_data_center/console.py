@@ -5,13 +5,19 @@ from __future__ import annotations
 import json
 import math
 import mimetypes
+import os
 import posixpath
+import subprocess
+import sys
+import threading
+from collections import deque
 from datetime import datetime, timedelta
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
+from uuid import uuid4
 
 import duckdb
 
@@ -31,6 +37,8 @@ DEFAULT_LIMIT = 100
 MAX_LIMIT = 500
 MAX_OFFSET = 10000
 MAX_INSTRUMENT_OPTION_LIMIT = 6000
+RUN_LOG_LIMIT = 200
+MAX_POST_BODY_BYTES = 65536
 RAW_OBJECT_SCAN_LIMIT = 1000
 DOCUMENT_DETAIL_LOOKBACK_DAYS = 15
 DOCUMENT_DETAIL_LIMIT = 1000
@@ -488,6 +496,16 @@ class QdcConsoleData:
                 control_tables=control_tables,
                 date=resolved_date,
             )
+            batch_task_rows = self._daily_batch_task_rows(
+                conn,
+                control_tables=control_tables,
+                date=resolved_date,
+            )
+            crawl_task_rows = self._daily_crawl_task_rows(
+                conn,
+                control_tables=control_tables,
+                date=resolved_date,
+            )
             source_dimension_rows = self._daily_source_dimension_rows(
                 conn,
                 control_tables=control_tables,
@@ -565,6 +583,8 @@ class QdcConsoleData:
             "quality_summary": quality_summary,
             "source_summary_rows": source_summary_rows,
             "batch_rows": batch_rows,
+            "batch_task_rows": batch_task_rows,
+            "crawl_task_rows": crawl_task_rows,
             "dataset_rows": dataset_rows,
             "source_dimension_rows": source_dimension_rows,
             "quality_issue_rows": quality_issue_rows,
@@ -1513,6 +1533,91 @@ class QdcConsoleData:
             )
             rows.append(row)
         return rows
+
+    def _daily_batch_task_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        date: str,
+    ) -> list[dict[str, Any]]:
+        if "backfill_task" not in control_tables:
+            return []
+        placeholders = ", ".join("?" for _ in DAILY_BATCH_DATASETS)
+        stale_threshold = _now_for_console_minutes_ago(STALE_RUNNING_MINUTES)
+        rows = _query_dicts(
+            conn,
+            f"""
+            select task_id, dataset, source_id, universe, start_date, end_date,
+                   symbol_batch_json, status, attempt_count, last_error, created_at, updated_at
+            from {CONTROL_SCHEMA}.backfill_task
+            where start_date <= ?
+              and end_date >= ?
+              and status <> 'superseded'
+              and dataset in ({placeholders})
+            order by dataset, source_id, created_at, task_id
+            """,
+            [date, date, *DAILY_BATCH_DATASETS],
+        )
+        task_rows = []
+        for row in rows:
+            symbols = row.get("symbol_batch_json") or []
+            if not isinstance(symbols, list):
+                symbols = []
+            state = _task_state(
+                status=str(row.get("status") or "pending"),
+                updated_at=row.get("updated_at"),
+                stale_threshold=stale_threshold,
+            )
+            task_rows.append(
+                {
+                    **row,
+                    "state": state,
+                    "symbol_count": len(symbols),
+                    "symbol_preview": _symbol_preview(symbols),
+                    "progress_percent": _task_progress_percent(state),
+                    "is_stale": state == "stale",
+                }
+            )
+        return task_rows
+
+    def _daily_crawl_task_rows(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        date: str,
+    ) -> list[dict[str, Any]]:
+        if "crawl_task" not in control_tables:
+            return []
+        stale_threshold = _now_for_console_minutes_ago(STALE_RUNNING_MINUTES)
+        rows = _query_dicts(
+            conn,
+            f"""
+            select task_id, source_id, dataset, crawl_date, partition_key, status,
+                   attempt_count, last_error, created_at, updated_at
+            from {CONTROL_SCHEMA}.crawl_task
+            where crawl_date = ?
+            order by dataset, source_id, created_at, task_id
+            """,
+            [date],
+        )
+        task_rows = []
+        for row in rows:
+            state = _task_state(
+                status=str(row.get("status") or "pending"),
+                updated_at=row.get("updated_at"),
+                stale_threshold=stale_threshold,
+            )
+            task_rows.append(
+                {
+                    **row,
+                    "state": state,
+                    "progress_percent": _task_progress_percent(state),
+                    "is_stale": state == "stale",
+                }
+            )
+        return task_rows
 
     def _daily_wide_rows(
         self,
@@ -3370,6 +3475,254 @@ class QdcConsoleData:
         return [str(row[0]) for row in rows]
 
 
+class DailyPipelineProcessManager:
+    """Start at most one local daily-pipeline process for the console session."""
+
+    def __init__(self, settings: QdcSettings) -> None:
+        self.settings = settings
+        self._lock = threading.Lock()
+        self._run: dict[str, Any] | None = None
+
+    def start(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            self._refresh_locked()
+            if self._run and self._run["status"] == "running":
+                snapshot = self._snapshot_locked()
+                snapshot["accepted"] = False
+                snapshot["message"] = "daily-pipeline 已在运行"
+                return snapshot
+
+            command = _daily_pipeline_command(self.settings, payload)
+            run_id = str(uuid4())
+            now = datetime.now().replace(microsecond=0).isoformat()
+            run = {
+                "run_id": run_id,
+                "status": "running",
+                "command": command,
+                "start_at": now,
+                "end_at": None,
+                "return_code": None,
+                "stdout": deque(maxlen=RUN_LOG_LIMIT),
+                "stderr": deque(maxlen=RUN_LOG_LIMIT),
+                "process": None,
+            }
+            process = subprocess.Popen(
+                command,
+                cwd=str(self.settings.project_root),
+                env=_daily_pipeline_process_env(self.settings),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+            run["process"] = process
+            self._run = run
+
+        self._start_reader(run_id, process.stdout, "stdout")
+        self._start_reader(run_id, process.stderr, "stderr")
+        threading.Thread(target=self._watch_process, args=(run_id,), daemon=True).start()
+
+        snapshot = self.snapshot()
+        snapshot["accepted"] = True
+        return snapshot
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            self._refresh_locked()
+            return self._snapshot_locked()
+
+    def _start_reader(self, run_id: str, stream: Any, stream_name: str) -> None:
+        if stream is None:
+            return
+        threading.Thread(
+            target=self._read_stream,
+            args=(run_id, stream, stream_name),
+            daemon=True,
+        ).start()
+
+    def _read_stream(self, run_id: str, stream: Any, stream_name: str) -> None:
+        try:
+            for line in iter(stream.readline, ""):
+                text = line.rstrip("\n")
+                with self._lock:
+                    if not self._run or self._run.get("run_id") != run_id:
+                        return
+                    self._run[stream_name].append(text)
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    def _watch_process(self, run_id: str) -> None:
+        process: subprocess.Popen[str] | None = None
+        with self._lock:
+            if self._run and self._run.get("run_id") == run_id:
+                process = self._run.get("process")
+        if process is None:
+            return
+        process.wait()
+        with self._lock:
+            self._refresh_locked()
+
+    def _refresh_locked(self) -> None:
+        if not self._run or self._run["status"] != "running":
+            return
+        process: subprocess.Popen[str] | None = self._run.get("process")
+        if process is None:
+            return
+        return_code = process.poll()
+        if return_code is None:
+            return
+        self._run["return_code"] = int(return_code)
+        self._run["status"] = "success" if return_code == 0 else "failed"
+        self._run["end_at"] = datetime.now().replace(microsecond=0).isoformat()
+
+    def _snapshot_locked(self) -> dict[str, Any]:
+        if not self._run:
+            return {"status": "ok", "running": False, "run": None}
+        run = self._run
+        return {
+            "status": "ok",
+            "running": run["status"] == "running",
+            "run": {
+                "run_id": run["run_id"],
+                "status": run["status"],
+                "return_code": run["return_code"],
+                "start_at": run["start_at"],
+                "end_at": run["end_at"],
+                "command": [str(part) for part in run["command"]],
+                "stdout_tail": list(run["stdout"])[-40:],
+                "stderr_tail": list(run["stderr"])[-80:],
+            },
+        }
+
+
+def _daily_pipeline_command(settings: QdcSettings, payload: dict[str, Any]) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "quant_data_center.cli",
+        "--config",
+        str(settings.config_path),
+        "daily-pipeline",
+        "--watch",
+    ]
+    run_date = _payload_text(payload, "date")
+    if run_date:
+        _validate_run_date(run_date)
+        command.extend(["--date", run_date])
+
+    symbols = _payload_symbols(payload.get("symbols"))
+    if symbols:
+        command.extend(["--symbols", symbols])
+
+    batch_size = _payload_int(payload, "batch_size")
+    if batch_size is not None:
+        if batch_size <= 0 or batch_size > 10000:
+            raise ValueError("batch_size must be between 1 and 10000")
+        command.extend(["--batch-size", str(batch_size)])
+
+    if _payload_bool(payload, "control_only") is True:
+        command.append("--control-only")
+
+    _append_optional_bool(command, payload, key="crawl_documents", flag="crawl-documents")
+    _append_refresh_stock_basic(command, payload)
+    _append_optional_bool(
+        command,
+        payload,
+        key="skip_crawl_pdf_download",
+        flag="skip-crawl-pdf-download",
+    )
+    for key, flag in (
+        ("skip_factors", "skip-factors"),
+        ("skip_sync", "skip-sync"),
+        ("skip_quality", "skip-quality"),
+        ("skip_export", "skip-export"),
+    ):
+        _append_optional_bool(command, payload, key=key, flag=flag)
+    return command
+
+
+def _daily_pipeline_process_env(settings: QdcSettings) -> dict[str, str]:
+    env = dict(os.environ)
+    src_path = str(settings.project_root / "src")
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = src_path if not existing else f"{src_path}{os.pathsep}{existing}"
+    return env
+
+
+def _payload_text(payload: dict[str, Any], key: str) -> str | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _payload_symbols(value: Any) -> str | None:
+    if value is None:
+        return None
+    symbols = [str(item).strip().upper() for item in str(value).split(",") if str(item).strip()]
+    if not symbols:
+        return None
+    if len(symbols) > 10000:
+        raise ValueError("symbols is too large")
+    return ",".join(symbols)
+
+
+def _payload_int(payload: dict[str, Any], key: str) -> int | None:
+    value = payload.get(key)
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+
+
+def _payload_bool(payload: dict[str, Any], key: str) -> bool | None:
+    if key not in payload:
+        return None
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    raise ValueError(f"{key} must be a boolean")
+
+
+def _append_optional_bool(
+    command: list[str],
+    payload: dict[str, Any],
+    *,
+    key: str,
+    flag: str,
+) -> None:
+    value = _payload_bool(payload, key)
+    if value is None:
+        return
+    command.append(f"--{flag}" if value else f"--no-{flag}")
+
+
+def _append_refresh_stock_basic(command: list[str], payload: dict[str, Any]) -> None:
+    value = _payload_bool(payload, "refresh_stock_basic")
+    if value is None:
+        return
+    command.append("--no-skip-stock-basic-refresh" if value else "--skip-stock-basic-refresh")
+
+
+def _validate_run_date(value: str) -> None:
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError("date must use YYYY-MM-DD") from exc
+
+
 def run_console(settings: QdcSettings, *, host: str = "127.0.0.1", port: int = 8765) -> None:
     """Start the blocking local HTTP server."""
 
@@ -3391,6 +3744,7 @@ def _make_handler(
     static_root: Path,
 ) -> type[BaseHTTPRequestHandler]:
     data = QdcConsoleData(settings)
+    pipeline_runner = DailyPipelineProcessManager(settings)
 
     class QdcConsoleHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -3401,6 +3755,16 @@ def _make_handler(
                 self._handle_api(parsed.path, parse_qs(parsed.query))
                 return
             self._serve_static(parsed.path)
+
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            if parsed.path.startswith("/api/"):
+                self._handle_post_api(parsed.path)
+                return
+            self._send_json(
+                {"status": "fail", "error": f"unsupported path: {parsed.path}"},
+                status=HTTPStatus.NOT_FOUND,
+            )
 
         def log_message(self, format: str, *args: Any) -> None:
             return
@@ -3413,6 +3777,8 @@ def _make_handler(
                     self._send_json(
                         data.daily_collection_status(date=_query_value(query, "date"))
                     )
+                elif path == "/api/daily-pipeline-run":
+                    self._send_json(pipeline_runner.snapshot())
                 elif path == "/api/daily-wide-preview":
                     raw_limit = _query_value(query, "limit")
                     self._send_json(
@@ -3516,6 +3882,45 @@ def _make_handler(
                     {"status": "fail", "error": str(exc)},
                     status=HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
+
+        def _handle_post_api(self, path: str) -> None:
+            try:
+                if path == "/api/daily-pipeline-run":
+                    self._send_json(pipeline_runner.start(self._read_json_body()))
+                else:
+                    self._send_json(
+                        {"status": "fail", "error": f"unknown api endpoint: {path}"},
+                        status=HTTPStatus.NOT_FOUND,
+                    )
+            except ValueError as exc:
+                self._send_json(
+                    {"status": "fail", "error": str(exc)},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+            except Exception as exc:  # pragma: no cover - defensive HTTP guard
+                self._send_json(
+                    {"status": "fail", "error": str(exc)},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+
+        def _read_json_body(self) -> dict[str, Any]:
+            raw_length = self.headers.get("Content-Length", "0")
+            try:
+                length = int(raw_length or "0")
+            except ValueError as exc:
+                raise ValueError("invalid Content-Length") from exc
+            if length > MAX_POST_BODY_BYTES:
+                raise ValueError("request body too large")
+            if length <= 0:
+                return {}
+            body = self.rfile.read(length)
+            try:
+                payload = json.loads(body.decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                raise ValueError("request body must be JSON") from exc
+            if not isinstance(payload, dict):
+                raise ValueError("request body must be a JSON object")
+            return payload
 
         def _serve_static(self, request_path: str) -> None:
             relative_path = "index.html" if request_path in {"", "/"} else request_path.lstrip("/")
@@ -4823,6 +5228,8 @@ def _empty_daily_collection_status(*, date: str, database_path: str) -> dict[str
         "quality_summary": _empty_daily_quality_summary(),
         "source_summary_rows": [],
         "batch_rows": [],
+        "batch_task_rows": [],
+        "crawl_task_rows": [],
         "dataset_rows": [],
         "source_dimension_rows": [],
         "quality_issue_rows": [],
@@ -5310,6 +5717,31 @@ def _percent(numerator: int, denominator: int) -> float:
 
 def _now_for_console_minutes_ago(minutes: int) -> str:
     return (datetime.now().replace(microsecond=0) - timedelta(minutes=minutes)).isoformat()
+
+
+def _task_state(*, status: str, updated_at: Any, stale_threshold: str) -> str:
+    if status == "running" and str(updated_at or "") <= stale_threshold:
+        return "stale"
+    return status or "pending"
+
+
+def _task_progress_percent(state: str) -> int:
+    if state == "success":
+        return 100
+    if state == "running":
+        return 50
+    if state in {"failed", "stale"}:
+        return 100
+    return 0
+
+
+def _symbol_preview(symbols: list[Any], *, max_items: int = 8) -> str:
+    values = [str(symbol) for symbol in symbols]
+    if not values:
+        return "-"
+    shown = values[:max_items]
+    suffix = f"...(+{len(values) - max_items})" if len(values) > max_items else ""
+    return ",".join(shown) + suffix
 
 
 def _progress_state(

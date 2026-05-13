@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
-from quant_data_center.console import QdcConsoleData
+from quant_data_center.console import QdcConsoleData, _daily_pipeline_command
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.database import QdcDatabase
 from quant_data_center.storage.silver import SilverStore
@@ -102,6 +103,14 @@ def test_qdc_daily_status_returns_beginner_dashboard_sections(tmp_path: Path) ->
         status="failed",
         last_error="Read timed out",
     )
+    crawl_task_id, _inserted = database.insert_crawl_task(
+        source_id="cninfo_announcement",
+        dataset="announcement",
+        crawl_date="2026-05-11",
+        partition_key="2026-05-11",
+        request={"date": "2026-05-11"},
+    )
+    database.mark_crawl_task_running(crawl_task_id)
     database.insert_quality_issue(
         dataset="daily_bar",
         source_id="akshare",
@@ -138,3 +147,36 @@ def test_qdc_daily_status_returns_beginner_dashboard_sections(tmp_path: Path) ->
     assert source_rows["akshare"]["state"] == "failed"
     assert source_rows["akshare"]["timeout_count"] == 1
     assert source_rows["cninfo_announcement"]["raw_object_count"] == 2
+    assert payload["batch_task_rows"][0]["task_id"] == task_id
+    assert payload["batch_task_rows"][0]["state"] == "failed"
+    assert payload["batch_task_rows"][0]["progress_percent"] == 100
+    assert payload["batch_task_rows"][0]["symbol_preview"] == "SZ000001"
+    assert payload["crawl_task_rows"][0]["task_id"] == crawl_task_id
+    assert payload["crawl_task_rows"][0]["state"] == "running"
+    assert payload["crawl_task_rows"][0]["progress_percent"] == 50
+
+
+def test_qdc_console_builds_restricted_daily_pipeline_command(tmp_path: Path) -> None:
+    settings = QdcSettings.from_yaml(_write_config(tmp_path))
+
+    command = _daily_pipeline_command(
+        settings,
+        {
+            "date": "2026-05-13",
+            "symbols": " sh600000, sz000001 ",
+            "batch_size": 2,
+            "control_only": True,
+            "refresh_stock_basic": True,
+            "crawl_documents": False,
+        },
+    )
+
+    assert command[:3] == [sys.executable, "-m", "quant_data_center.cli"]
+    assert command[command.index("--config") + 1] == str(settings.config_path)
+    assert "daily-pipeline" in command
+    assert "--watch" in command
+    assert command[command.index("--symbols") + 1] == "SH600000,SZ000001"
+    assert command[command.index("--batch-size") + 1] == "2"
+    assert "--control-only" in command
+    assert "--no-skip-stock-basic-refresh" in command
+    assert "--no-crawl-documents" in command
