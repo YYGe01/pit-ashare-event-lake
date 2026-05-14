@@ -51,40 +51,91 @@
         <div id="error-banner" class="error-banner hidden"></div>
 
         <section id="dashboard" class="page-section active">
-          <section class="hero-panel">
-            <div>
-              <div class="eyebrow">TODAY VERDICT 今日结论</div>
-              <div id="hero-state" class="hero-state tag tag-warning">读取中</div>
-              <h2 id="hero-title">正在读取</h2>
-              <p id="hero-summary">正在读取当前日期的采集状态。</p>
-              <div id="hero-action" class="hero-action">等待刷新结果。</div>
-            </div>
-            <div class="hero-meter">
-              <div class="hero-meter-label">核心完整率 (Core completeness)</div>
-              <div id="hero-percent" class="hero-percent">0%</div>
-              <div class="progress-bar hero-progress"><div id="hero-progress-fill" class="progress-fill"></div></div>
-              <div id="hero-meter-foot" class="hero-meter-foot">等待数据</div>
-            </div>
+          <div id="status-strip" class="status-strip"></div>
+
+          <section class="daily-dashboard-grid">
+            <section class="hero-panel verdict-panel">
+              <div>
+                <div class="eyebrow">TODAY VERDICT 今日结论</div>
+                <div id="hero-state" class="hero-state tag tag-warning">读取中</div>
+                <h2 id="hero-title">正在读取</h2>
+                <p id="hero-summary">正在读取当前日期的采集状态。</p>
+                <div id="hero-action" class="hero-action">等待刷新结果。</div>
+                <div id="provider-note" class="provider-note">等待 Qlib provider 状态。</div>
+              </div>
+            </section>
+
+            <section class="panel source-health-panel">
+              <div class="panel-header">
+                <div>
+                  <h2>源级健康</h2>
+                  <p class="panel-subtitle">优先看空结果、重复、解析失败和标的映射。</p>
+                </div>
+              </div>
+              <div id="source-health-table"></div>
+            </section>
+
+            <section class="panel factor-status-panel">
+              <div class="panel-header">
+                <div>
+                  <h2>因子状态</h2>
+                  <p class="panel-subtitle">确认 external factor 是否已生成并被 Qlib handler 读取。</p>
+                </div>
+              </div>
+              <div id="factor-status-table"></div>
+            </section>
           </section>
 
-          <div id="kpi-grid" class="kpi-grid"></div>
+          <section class="panel action-panel">
+            <div class="panel-header">
+              <div>
+                <h2>操作建议</h2>
+                <p class="panel-subtitle">按当前日期生成可直接复制的下一步命令。</p>
+              </div>
+            </div>
+            <div id="action-command-list" class="action-command-list"></div>
+          </section>
+
+          <div id="kpi-grid" class="kpi-grid hidden"></div>
 
           <section class="panel run-panel">
             <div class="panel-header">
               <div>
-                <h2>执行每日采集 (Run daily-pipeline)</h2>
-                <p class="panel-subtitle">启动一次每日流水线，运行状态和日志在这里持续刷新。</p>
+                <h2>启动采集 (Run collection)</h2>
+                <p class="panel-subtitle">默认启动公告新闻采集；需要历史结构化诊断时切换到 daily-pipeline。</p>
               </div>
-              <button id="run-daily-button" class="btn btn-primary" type="button">执行 daily-pipeline</button>
+              <button id="run-daily-button" class="btn btn-primary" type="button">启动采集</button>
             </div>
             <div class="run-controls">
+              <label class="run-field">
+                <span>模式</span>
+                <select id="run-workflow" class="input">
+                  <option value="crawl_daily" selected>公告新闻采集 crawl-daily</option>
+                  <option value="daily_pipeline">历史流水线 daily-pipeline</option>
+                </select>
+              </label>
+              <label class="run-field">
+                <span>数据源</span>
+                <select id="run-source-id" class="input">
+                  <option value="">默认每日源</option>
+                  <option value="cninfo_announcement">巨潮公告</option>
+                  <option value="sse_announcement">上交所公告</option>
+                  <option value="eastmoney_roll_news">东方财富新闻</option>
+                  <option value="sina_finance_news">新浪财经新闻</option>
+                  <option value="nbd_company_news">每经新闻 smoke</option>
+                </select>
+              </label>
               <label class="run-field">
                 <span>标的</span>
                 <input id="run-symbols" class="input" placeholder="留空按配置 universe" autocomplete="off" />
               </label>
               <label class="run-field compact-field">
-                <span>批次大小</span>
+                <span>批次/页大小</span>
                 <input id="run-batch-size" class="input" type="number" min="1" max="10000" value="50" />
+              </label>
+              <label class="run-field compact-field">
+                <span>最大页数</span>
+                <input id="run-max-pages" class="input" type="number" min="1" max="10000" value="1" />
               </label>
               <label class="check-field switch-field">
                 <input id="run-refresh-stock-basic" type="checkbox" checked />
@@ -97,6 +148,11 @@
                 <span>采集公告新闻</span>
               </label>
               <label class="check-field switch-field">
+                <input id="run-download-pdfs" type="checkbox" />
+                <span class="switch-ui" aria-hidden="true"></span>
+                <span>下载 PDF</span>
+              </label>
+              <label class="check-field switch-field">
                 <input id="run-control-only" type="checkbox" />
                 <span class="switch-ui" aria-hidden="true"></span>
                 <span>只跑控制面</span>
@@ -105,15 +161,15 @@
             <div id="run-status-card" class="run-status-card"></div>
           </section>
 
-          <section class="panel">
-            <div class="panel-header">
+          <details class="panel diagnostic-panel">
+            <summary class="panel-header">
               <div>
-                <h2>采集路线图 (Pipeline)</h2>
-                <p class="panel-subtitle">从标的清单到 Qlib 导出，每一步用中文结论和进度条展示。</p>
+                <h2>历史结构化诊断 (Legacy diagnostics)</h2>
+                <p class="panel-subtitle">daily_bar / adj_factor / price_limit 只作为历史结构化链路诊断，不再作为首页可用性口径。</p>
               </div>
-            </div>
+            </summary>
             <div id="stage-board" class="stage-board"></div>
-          </section>
+          </details>
 
           <section class="panel">
             <div class="panel-header">

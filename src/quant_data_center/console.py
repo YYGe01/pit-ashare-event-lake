@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import duckdb
 
+from quant_data_center.crawlers.registry import CRAWL_DAILY_SOURCE_IDS
 from quant_data_center.exports.qlib import inspect_qlib_provider
 from quant_data_center.factor_engine.calendar_align import TradeDayAligner, date_minus_days
 from quant_data_center.settings import QdcSettings
@@ -117,6 +118,7 @@ DAILY_DOCUMENT_DIMENSIONS = {
 }
 DAILY_STAGE_DATASETS = ("daily_bar", "adj_factor", "price_limit")
 DAILY_JOB_STAGES = ("build_factors", "sync_parquet", "quality", "export_qlib")
+DAILY_CONSOLE_SOURCE_IDS = (*CRAWL_DAILY_SOURCE_IDS, "nbd_company_news")
 QUALITY_DIMENSION_LABELS = {
     "completeness": "完整性 (Completeness)",
     "freshness": "及时性 (Freshness)",
@@ -1011,6 +1013,11 @@ class QdcConsoleData:
             control_tables=control_tables,
             date=date,
         )
+        document_metrics = self._daily_document_source_metrics(
+            conn,
+            control_tables=control_tables,
+            date=date,
+        )
         crawl_counts = self._daily_crawl_run_counts(
             conn,
             control_tables=control_tables,
@@ -1089,6 +1096,18 @@ class QdcConsoleData:
                     "silver_row_count": 0,
                     "document_count": 0,
                     "planned_count": 0,
+                    "provider_record_count": 0,
+                    "manifest_count": 0,
+                    "empty_result_count": 0,
+                    "empty_result_rate": None,
+                    "duplicate_record_count": 0,
+                    "duplicate_rate": None,
+                    "parse_failed_count": 0,
+                    "parse_failed_rate": None,
+                    "parsed_unique_record_count": 0,
+                    "mapped_source_record_count": 0,
+                    "mapping_failed_count": 0,
+                    "mapping_rate": None,
                     "last_error": None,
                 },
             )
@@ -1131,13 +1150,33 @@ class QdcConsoleData:
             if counts.get("last_error") and not summary.get("last_error"):
                 summary["last_error"] = counts.get("last_error")
 
+        for source_id, metrics in document_metrics.items():
+            summary = ensure(source_id)
+            if metrics.get("dataset"):
+                summary["datasets"].add(str(metrics["dataset"]))
+            for key in (
+                "provider_record_count",
+                "manifest_count",
+                "empty_result_count",
+                "duplicate_record_count",
+                "parse_failed_count",
+                "parsed_unique_record_count",
+                "mapped_source_record_count",
+                "mapping_failed_count",
+            ):
+                summary[key] += int(metrics.get(key) or 0)
+
         for (source_id, dataset), row_count in silver_counts.items():
             summary = ensure(source_id)
             summary["datasets"].add(dataset)
             summary["silver_row_count"] += int(row_count or 0)
 
+        for source_id in DAILY_CONSOLE_SOURCE_IDS:
+            ensure(source_id)
+
         rows = []
         for summary in summaries.values():
+            source_id = str(summary.get("source_id") or "-")
             dataset_names = sorted(summary.pop("datasets"))
             expected = summary.get("expected_instrument_count")
             success = int(summary.get("success_instrument_count") or 0)
@@ -1145,8 +1184,32 @@ class QdcConsoleData:
             timeout = int(summary.get("timeout_count") or 0)
             error = int(summary.get("error_count") or 0)
             failed_task = int(summary.get("failed_task_count") or 0)
+            provider_records = int(summary.get("provider_record_count") or 0)
+            manifest_count = int(summary.get("manifest_count") or 0)
+            summary["empty_result_rate"] = _ratio(
+                int(summary.get("empty_result_count") or 0),
+                manifest_count,
+            )
+            summary["duplicate_rate"] = _ratio(
+                int(summary.get("duplicate_record_count") or 0),
+                provider_records,
+            )
+            summary["parse_failed_rate"] = _ratio(
+                int(summary.get("parse_failed_count") or 0),
+                provider_records,
+            )
+            summary["mapping_rate"] = _ratio(
+                int(summary.get("mapped_source_record_count") or 0),
+                int(summary.get("parsed_unique_record_count") or 0),
+            )
             if timeout or error or failed_task:
                 state = "failed"
+            elif source_id == "nbd_company_news" and not (
+                success or summary.get("raw_object_count") or summary.get("silver_row_count")
+            ):
+                state = "manual"
+            elif summary.get("empty_result_count") and not summary.get("silver_row_count"):
+                state = "empty"
             elif failed:
                 state = "partial"
             elif success or summary.get("raw_object_count") or summary.get("silver_row_count"):
@@ -1165,6 +1228,7 @@ class QdcConsoleData:
         rows.sort(
             key=lambda row: (
                 str(row.get("state") or "") != "failed",
+                _document_source_priority(row.get("source_id")),
                 -(int(row.get("failed_instrument_count") or 0)),
                 -(int(row.get("timeout_count") or 0)),
                 -(int(row.get("error_count") or 0)),
@@ -1172,6 +1236,71 @@ class QdcConsoleData:
             )
         )
         return rows
+
+    def _daily_document_source_metrics(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        control_tables: set[str],
+        date: str,
+    ) -> dict[str, dict[str, Any]]:
+        if "source_object" not in control_tables:
+            return {}
+        rows = _query_dicts(
+            conn,
+            f"""
+            select source_id, dataset, uri, created_at
+            from {CONTROL_SCHEMA}.source_object
+            where layer = 'raw_manifest'
+              and dataset in ('announcement', 'news')
+              and (uri like ? or uri like ?)
+            order by created_at desc
+            limit ?
+            """,
+            [f"%documents\\{date}\\%", f"%documents/{date}/%", RAW_OBJECT_SCAN_LIMIT],
+        )
+        metrics: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            uri = str(row.get("uri") or "")
+            if f"/documents/{date}/" not in uri.replace("\\", "/"):
+                continue
+            path = Path(uri)
+            if not path.is_file():
+                continue
+            try:
+                manifest = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if str(manifest.get("partition_value") or "") != date:
+                continue
+            source_id = str(manifest.get("source_id") or row.get("source_id") or "-")
+            item = metrics.setdefault(
+                source_id,
+                {
+                    "source_id": source_id,
+                    "dataset": manifest.get("dataset") or row.get("dataset"),
+                    "provider_record_count": 0,
+                    "manifest_count": 0,
+                    "empty_result_count": 0,
+                    "duplicate_record_count": 0,
+                    "parse_failed_count": 0,
+                    "parsed_unique_record_count": 0,
+                    "mapped_source_record_count": 0,
+                    "mapping_failed_count": 0,
+                },
+            )
+            item["manifest_count"] += 1
+            for key in (
+                "provider_record_count",
+                "empty_result_count",
+                "duplicate_record_count",
+                "parse_failed_count",
+                "parsed_unique_record_count",
+                "mapped_source_record_count",
+                "mapping_failed_count",
+            ):
+                item[key] += int(manifest.get(key) or 0)
+        return metrics
 
     def _daily_source_object_counts(
         self,
@@ -3497,7 +3626,7 @@ class QdcConsoleData:
 
 
 class DailyPipelineProcessManager:
-    """Start at most one local daily-pipeline process for the console session."""
+    """Start at most one local collection process for the console session."""
 
     def __init__(self, settings: QdcSettings) -> None:
         self.settings = settings
@@ -3510,7 +3639,7 @@ class DailyPipelineProcessManager:
             if self._run and self._run["status"] == "running":
                 snapshot = self._snapshot_locked()
                 snapshot["accepted"] = False
-                snapshot["message"] = "daily-pipeline 已在运行"
+                snapshot["message"] = "控制台采集任务已在运行"
                 return snapshot
 
             command = _daily_pipeline_command(self.settings, payload)
@@ -3560,7 +3689,7 @@ class DailyPipelineProcessManager:
             if not self._run or self._run["status"] != "running":
                 snapshot = self._snapshot_locked()
                 snapshot["accepted"] = False
-                snapshot["message"] = "当前没有运行中的 daily-pipeline"
+                snapshot["message"] = "当前没有运行中的控制台采集任务"
                 return snapshot
             process: subprocess.Popen[str] | None = self._run.get("process")
             self._run["stop_requested_at"] = datetime.now().replace(microsecond=0).isoformat()
@@ -3651,6 +3780,12 @@ class DailyPipelineProcessManager:
 
 
 def _daily_pipeline_command(settings: QdcSettings, payload: dict[str, Any]) -> list[str]:
+    workflow = _payload_text(payload, "workflow") or "daily_pipeline"
+    if workflow in {"crawl_daily", "crawl-daily"}:
+        return _crawl_daily_command(settings, payload)
+    if workflow not in {"daily_pipeline", "daily-pipeline"}:
+        raise ValueError("workflow must be one of: crawl_daily, daily_pipeline")
+
     command = [
         sys.executable,
         "-m",
@@ -3693,6 +3828,48 @@ def _daily_pipeline_command(settings: QdcSettings, payload: dict[str, Any]) -> l
         ("skip_export", "skip-export"),
     ):
         _append_optional_bool(command, payload, key=key, flag=flag)
+    return command
+
+
+def _crawl_daily_command(settings: QdcSettings, payload: dict[str, Any]) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "quant_data_center.cli",
+        "--config",
+        str(settings.config_path),
+        "crawl-daily",
+    ]
+    run_date = _payload_text(payload, "date")
+    if run_date:
+        _validate_run_date(run_date)
+        command.extend(["--date", run_date])
+
+    source_id = _payload_text(payload, "source_id")
+    if source_id:
+        command.extend(["--source-id", source_id])
+
+    symbols = _payload_symbols(payload.get("symbols"))
+    if symbols:
+        command.extend(["--symbols", symbols])
+
+    for key, flag, upper_bound in (
+        ("page_size", "page-size", 10000),
+        ("max_pages", "max-pages", 10000),
+        ("parallel_sources", "parallel-sources", 64),
+    ):
+        value = _payload_int(payload, key)
+        if value is None:
+            continue
+        if value <= 0 or value > upper_bound:
+            raise ValueError(f"{key} must be between 1 and {upper_bound}")
+        command.extend([f"--{flag}", str(value)])
+
+    if _payload_bool(payload, "download_pdfs") is True:
+        command.append("--download-pdfs")
+
+    if _payload_bool(payload, "control_only") is True:
+        command.append("--control-only")
     return command
 
 
@@ -5803,6 +5980,12 @@ def _percent(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0
     return round((numerator / denominator) * 100, 2)
+
+
+def _ratio(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 6)
 
 
 def _now_for_console_minutes_ago(minutes: int) -> str:

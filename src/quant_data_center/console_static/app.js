@@ -144,11 +144,64 @@ const STATUS_LABELS = {
   missing: "缺失",
   warning: "需关注",
   stale: "疑似卡住",
+  provider_stale: "已过期",
+  manual: "手动",
+  matched: "已匹配",
 };
 
 const moneyFormatter = new Intl.NumberFormat("zh-CN");
 const $ = (id) => document.getElementById(id);
 const PAGE_SIZE = 10;
+const DASHBOARD_SOURCE_IDS = [
+  "cninfo_announcement",
+  "sse_announcement",
+  "eastmoney_roll_news",
+  "sina_finance_news",
+  "nbd_company_news",
+];
+const NEWS_SOURCE_IDS = ["eastmoney_roll_news", "sina_finance_news"];
+const ANNOUNCEMENT_SOURCE_IDS = ["cninfo_announcement", "sse_announcement"];
+const FACTOR_TABLE_FIELDS = {
+  daily_news_factor: [
+    "news_count",
+    "news_sentiment_mean",
+    "news_positive_count",
+    "news_negative_count",
+    "news_growth_count",
+    "news_risk_count",
+    "news_financing_count",
+    "news_weighted_sentiment_sum",
+    "news_importance_sum",
+    "news_contract_count",
+    "news_buyback_count",
+    "news_shareholder_change_count",
+    "news_regulatory_count",
+    "news_litigation_count",
+    "news_performance_count",
+  ],
+  daily_announcement_factor: [
+    "announcement_count",
+    "announcement_growth_count",
+    "announcement_risk_count",
+    "announcement_financing_count",
+    "announcement_operation_count",
+    "announcement_sentiment_mean",
+    "announcement_positive_count",
+    "announcement_negative_count",
+    "announcement_weighted_sentiment_sum",
+    "announcement_importance_sum",
+    "announcement_contract_count",
+    "announcement_buyback_count",
+    "announcement_shareholder_change_count",
+    "announcement_regulatory_count",
+    "announcement_litigation_count",
+    "announcement_performance_count",
+  ],
+};
+const HANDLER_EXTERNAL_FIELDS = new Set([
+  ...FACTOR_TABLE_FIELDS.daily_news_factor,
+  ...FACTOR_TABLE_FIELDS.daily_announcement_factor,
+]);
 
 let state = {
   activeSection: "dashboard",
@@ -181,6 +234,11 @@ function number(value) {
 function percent(value) {
   const numeric = Number(value || 0);
   return `${numeric.toFixed(numeric % 1 === 0 ? 0 : 2)}%`;
+}
+
+function ratioPercent(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  return percent(Number(value || 0) * 100);
 }
 
 function compact(value, maxLength = 120) {
@@ -217,10 +275,10 @@ function statusLabel(value) {
 
 function statusClass(value) {
   const key = String(value || "default").toLowerCase();
-  if (["complete", "success", "ok"].includes(key)) return "success";
+  if (["complete", "success", "ok", "matched"].includes(key)) return "success";
   if (["running"].includes(key)) return "running";
   if (["failed", "fail", "blocked", "missing", "stale"].includes(key)) return "danger";
-  if (["pending", "empty", "partial", "warning", "stopped"].includes(key)) return "warning";
+  if (["pending", "empty", "partial", "warning", "stopped", "manual", "provider_stale"].includes(key)) return "warning";
   return "default";
 }
 
@@ -401,14 +459,16 @@ function renderDashboard(payload) {
   const vendorFailures = sourceFailureCount(sources);
   const blockedBatches = Number(batches.failed_count || 0) + Number(batches.stale_running_count || 0);
 
+  renderStatusStrip(payload);
   $("hero-state").textContent = verdictLevelLabel(verdict.level);
   $("hero-state").className = `hero-state tag tag-${verdictLevelClass(verdict.level)}`;
   $("hero-title").textContent = verdict.title || "等待采集状态";
-  $("hero-summary").textContent = `${payload.date || "-"} · ${verdict.summary || "暂无结论。"} 基准：${reference.source || "unknown"}。`;
+  $("hero-summary").textContent = `当前日期：${payload.date || "-"}。${verdict.summary || "暂无结论。"}`;
   $("hero-action").textContent = verdict.next_action || "等待下一次刷新。";
-  $("hero-percent").textContent = percent(readiness);
-  $("hero-progress-fill").style.width = `${Math.max(0, Math.min(100, readiness))}%`;
-  $("hero-meter-foot").textContent = `15 秒自动刷新 · ${payload.updated_at || "-"}`;
+  $("provider-note").textContent = providerNote(qlib, reference, readiness);
+  if ($("hero-percent")) $("hero-percent").textContent = percent(readiness);
+  if ($("hero-progress-fill")) $("hero-progress-fill").style.width = `${Math.max(0, Math.min(100, readiness))}%`;
+  if ($("hero-meter-foot")) $("hero-meter-foot").textContent = `15 秒自动刷新 · ${payload.updated_at || "-"}`;
 
   $("kpi-grid").innerHTML = [
     summaryCard(
@@ -428,6 +488,9 @@ function renderDashboard(payload) {
   ].join("");
 
   renderStageBoard(payload.stage_rows || []);
+  renderSourceHealth(sources);
+  renderFactorStatus(payload.dataset_rows || []);
+  renderActionCommands(payload);
   renderRunStatus(state.runPayload);
   renderQualitySummary(quality, payload.quality_issue_rows || []);
   renderSourceSummary(sources);
@@ -458,6 +521,170 @@ function sourceFailureCount(rows) {
   return (rows || []).reduce((total, row) => total + Number(row.timeout_count || 0) + Number(row.error_count || 0), 0);
 }
 
+function providerNote(qlib, reference, readiness) {
+  const latest = qlib.calendar_latest_date || "-";
+  const expected = qlib.expected_latest_date || "-";
+  const suffix = statusClass(qlib.status) === "success"
+    ? "基础行情 provider 可作为 external factor 对齐底座。"
+    : "QDC 文档因子可继续采集，但训练底座不可声明可用。";
+  return `Provider 最新日历：${latest}，目标日期：${expected}。基准：${reference.source || "unknown"}；首页可用性 ${percent(readiness)}。${suffix}`;
+}
+
+function renderStatusStrip(payload) {
+  const qlib = payload.qlib_provider_status || {};
+  const sources = payload.source_summary_rows || [];
+  const quality = payload.quality_summary || {};
+  const factorRows = factorStatusRows(payload.dataset_rows || [], payload.date);
+  const factorStatus = factorRows.some((row) => Number(row.row_count || 0) > 0) ? "ok" : "warning";
+  const items = [
+    statusStripItem("Qlib provider", qlibStripStatus(qlib), qlib.calendar_latest_date || "-"),
+    statusStripItem("公告", sourceGroupStatus(sources, ANNOUNCEMENT_SOURCE_IDS), sourceGroupFoot(sources, ANNOUNCEMENT_SOURCE_IDS)),
+    statusStripItem("新闻", sourceGroupStatus(sources, NEWS_SOURCE_IDS), sourceGroupFoot(sources, NEWS_SOURCE_IDS)),
+    statusStripItem("因子", factorStatus, `${number(factorRows.reduce((sum, row) => sum + Number(row.row_count || 0), 0))} 行`),
+    statusStripItem("质量", quality.status === "success" ? "ok" : quality.status || "pending", `${number(quality.open_issue_count || 0)} 个未关闭问题`),
+  ];
+  $("status-strip").innerHTML = items.map(renderStatusPill).join("");
+}
+
+function statusStripItem(label, status, foot) {
+  return { label, status, foot };
+}
+
+function renderStatusPill(item) {
+  const cls = item.status === "stale" ? "warning" : statusClass(item.status);
+  return `
+    <div class="status-pill status-pill-${cls}">
+      <div class="status-pill-label">${escapeHtml(item.label)}</div>
+      <div class="status-pill-value">${escapeHtml(statusLabel(item.status))}</div>
+      <div class="status-pill-foot">${escapeHtml(item.foot || "-")}</div>
+    </div>
+  `;
+}
+
+function qlibStripStatus(qlib) {
+  const status = String(qlib.status || "missing");
+  const stale = (qlib.issues || []).some((issue) => issue.issue_type === "stale_calendar");
+  if (status === "warning" && stale) return "provider_stale";
+  return status;
+}
+
+function sourceGroupStatus(rows, sourceIds) {
+  const selected = sourceIds.map((sourceId) => (rows || []).find((row) => row.source_id === sourceId)).filter(Boolean);
+  if (!selected.length) return "empty";
+  if (selected.some((row) => row.state === "failed")) return "failed";
+  if (selected.some((row) => row.state === "empty" || row.state === "partial")) return "warning";
+  if (selected.some((row) => row.state === "success")) return "ok";
+  return "empty";
+}
+
+function sourceGroupFoot(rows, sourceIds) {
+  const selected = sourceIds.map((sourceId) => (rows || []).find((row) => row.source_id === sourceId)).filter(Boolean);
+  const silverRows = selected.reduce((sum, row) => sum + Number(row.silver_row_count || 0), 0);
+  const errors = selected.reduce((sum, row) => sum + Number(row.timeout_count || 0) + Number(row.error_count || 0), 0);
+  return `入库 ${number(silverRows)} · 异常 ${number(errors)}`;
+}
+
+function renderSourceHealth(rows) {
+  const target = $("source-health-table");
+  if (!target) return;
+  const bySource = new Map((rows || []).map((row) => [row.source_id, row]));
+  const displayRows = sortedRows(
+    DASHBOARD_SOURCE_IDS.map((sourceId) => normalizeSourceHealthRow(sourceId, bySource.get(sourceId))),
+    state.sort.sourceHealth,
+  );
+  target.innerHTML = table(
+    [
+      { key: "source_id", label: "source_id", format: sourceLabel, maxLength: 120 },
+      { key: "state", label: "状态", status: true },
+      { key: "provider_record_count", label: "provider", value: (row) => sourceHealthNumber(row, "provider_record_count") },
+      { key: "silver_row_count", label: "入库", value: (row) => sourceHealthNumber(row, "silver_row_count") },
+      { key: "mapping_rate", label: "映射率", value: (row) => row.state === "manual" ? "-" : ratioPercent(row.mapping_rate) },
+      { key: "empty_result_count", label: "空结果", value: (row) => sourceHealthNumber(row, "empty_result_count") },
+      { key: "duplicate_rate", label: "重复率", value: (row) => row.state === "manual" ? "-" : ratioPercent(row.duplicate_rate) },
+      { key: "parse_failed_rate", label: "解析失败", value: (row) => row.state === "manual" ? "-" : ratioPercent(row.parse_failed_rate) },
+      { key: "last_error", label: "最近错误", value: (row) => row.last_error || (row.state === "manual" ? "已退出默认" : "-"), maxLength: 160 },
+    ],
+    displayRows,
+    "当前日期暂无源级健康记录。",
+    { sortKind: "sourceHealth", sort: state.sort.sourceHealth || {} },
+  );
+}
+
+function normalizeSourceHealthRow(sourceId, row) {
+  if (row) return row;
+  return {
+    source_id: sourceId,
+    state: sourceId === "nbd_company_news" ? "manual" : "empty",
+    provider_record_count: sourceId === "nbd_company_news" ? null : 0,
+    silver_row_count: sourceId === "nbd_company_news" ? null : 0,
+    empty_result_count: sourceId === "nbd_company_news" ? null : 0,
+    duplicate_rate: null,
+    parse_failed_rate: null,
+    mapping_rate: null,
+    last_error: null,
+  };
+}
+
+function sourceHealthNumber(row, key) {
+  if (row.state === "manual") return "-";
+  const value = row[key];
+  return value === null || value === undefined || value === "" ? "-" : number(value);
+}
+
+function renderFactorStatus(datasetRows) {
+  const target = $("factor-status-table");
+  if (!target) return;
+  const rows = sortedRows(factorStatusRows(datasetRows, state.statusPayload?.date), state.sort.factorStatus);
+  target.innerHTML = table(
+    [
+      { key: "dataset", label: "factor table", format: datasetLabel, maxLength: 120 },
+      { key: "row_count", label: "行数", value: (row) => number(row.row_count || 0) },
+      { key: "instrument_count", label: "标的数", value: (row) => number(row.instrument_count || 0) },
+      { key: "date_range", label: "日期范围", maxLength: 80 },
+      { key: "handler_status", label: "Qlib handler", html: (row) => tag(row.handler_status) },
+    ],
+    rows,
+    "当前日期暂无 external factor。",
+    { sortKind: "factorStatus", sort: state.sort.factorStatus || {} },
+  );
+}
+
+function factorStatusRows(datasetRows, date) {
+  const byDataset = new Map((datasetRows || []).map((row) => [row.dataset, row]));
+  return ["daily_announcement_factor", "daily_news_factor"].map((dataset) => {
+    const row = byDataset.get(dataset) || {};
+    const fields = FACTOR_TABLE_FIELDS[dataset] || [];
+    const missing = fields.filter((field) => !HANDLER_EXTERNAL_FIELDS.has(field));
+    return {
+      dataset,
+      row_count: Number(row.row_count || 0),
+      instrument_count: Number(row.instrument_count || 0),
+      date_range: Number(row.row_count || 0) ? (date || "-") : "-",
+      handler_status: missing.length ? "missing" : "matched",
+    };
+  });
+}
+
+function renderActionCommands(payload) {
+  const target = $("action-command-list");
+  if (!target) return;
+  const date = payload.date || activeDate() || "";
+  const qlib = payload.qlib_provider_status || {};
+  const providerUri = qlib.provider_uri || "~/.qlib/qlib_data/cn_data";
+  const instruments = (qlib.sample_instruments || []).slice(0, 2).map((item) => String(item).toUpperCase()).join(",") || "SH600000,SZ000001";
+  const commands = [
+    `qdc verify-qlib --provider-uri ${providerUri} --start ${date} --end ${date} --instruments "${instruments}" --fields '$close,$volume,$factor'`,
+    `qdc crawl-daily --date ${date} --source-id cninfo_announcement --page-size 20 --max-pages 1 --skip-pdf-download`,
+    `qdc build-factors --factor-set all --start ${date} --end ${date}`,
+  ];
+  target.innerHTML = commands.map((command) => `
+    <div class="action-command">
+      <button class="btn" type="button" data-copy-command="${escapeHtml(command)}">复制命令</button>
+      <code>${escapeHtml(command)}</code>
+    </div>
+  `).join("");
+}
+
 function renderRunStatus(payload) {
   const target = $("run-status-card");
   if (!target) return;
@@ -466,7 +693,7 @@ function renderRunStatus(payload) {
   const button = $("run-daily-button");
   if (button) button.disabled = running || state.runStarting;
   if (!run) {
-    target.innerHTML = '<div class="empty compact-empty">当前没有由控制台启动的 daily-pipeline。</div>';
+    target.innerHTML = `${renderRunProgressBoard()}<div class="empty compact-empty">当前没有由控制台启动的采集任务。</div>`;
     return;
   }
   const command = (run.command || []).join(" ");
@@ -485,6 +712,7 @@ function renderRunStatus(payload) {
         <button class="btn" id="refresh-run-btn" type="button">刷新执行状态</button>
       </div>
     </div>
+    ${renderRunProgressBoard()}
     <div class="run-resume-strip">
       <div>
         <span class="run-resume-label">断点续跑批次</span>
@@ -511,6 +739,63 @@ function renderRunStatus(payload) {
   $("stop-run-btn")?.addEventListener("click", stopDailyPipeline);
   const logBox = target.querySelector(".run-log");
   if (logBox) logBox.scrollTop = logBox.scrollHeight;
+}
+
+function renderRunProgressBoard() {
+  const status = state.statusPayload || {};
+  const structured = summarizeTaskProgress(status.batch_task_rows || [], status.batches || {});
+  const crawlers = summarizeTaskProgress(status.crawl_task_rows || [], null);
+  return `
+    <div class="run-progress-grid">
+      ${runProgressItem("公告新闻批次", crawlers)}
+      ${runProgressItem("结构化诊断批次", structured)}
+    </div>
+  `;
+}
+
+function summarizeTaskProgress(rows, fallback) {
+  if (!rows.length && fallback) {
+    const total = Number(fallback.total_batch_count || 0);
+    const success = Number(fallback.success_count || 0);
+    const running = Number(fallback.running_count || 0);
+    const pending = Number(fallback.pending_count || 0);
+    const failed = Number(fallback.failed_count || 0) + Number(fallback.stale_running_count || 0);
+    return {
+      total,
+      success,
+      running,
+      pending,
+      failed,
+      progress: Number(fallback.complete_percent || 0),
+      state: fallback.state || "empty",
+    };
+  }
+  const total = rows.length;
+  const success = rows.filter((row) => row.state === "success").length;
+  const running = rows.filter((row) => row.state === "running").length;
+  const pending = rows.filter((row) => row.state === "pending").length;
+  const failed = rows.filter((row) => ["failed", "stale", "blocked"].includes(row.state)).length;
+  const progress = total
+    ? rows.reduce((sum, row) => sum + Number(row.progress_percent || 0), 0) / total
+    : 0;
+  const stateName = failed ? "failed" : running ? "running" : pending ? "pending" : success && success === total ? "success" : "empty";
+  return { total, success, running, pending, failed, progress, state: stateName };
+}
+
+function runProgressItem(label, summary) {
+  const progress = Math.max(0, Math.min(100, Number(summary.progress || 0)));
+  return `
+    <div class="run-progress-item run-progress-${statusClass(summary.state)}">
+      <div class="run-progress-head">
+        <strong>${escapeHtml(label)}</strong>
+        ${tag(summary.state || "empty")}
+      </div>
+      <div class="progress-bar"><div class="progress-fill progress-${statusClass(summary.state)}" style="width:${progress}%"></div></div>
+      <div class="run-progress-foot">
+        ${percent(progress)} · 成功 ${number(summary.success)} / 总 ${number(summary.total)} · 运行 ${number(summary.running)} · 待执行 ${number(summary.pending)} · 失败 ${number(summary.failed)}
+      </div>
+    </div>
+  `;
 }
 
 function runLogLines(run) {
@@ -787,11 +1072,17 @@ async function startDailyPipeline() {
   renderRunStatus(state.runPayload);
   try {
     const payload = {
+      workflow: $("run-workflow").value,
       date: activeDate() || null,
+      source_id: $("run-source-id").value,
       symbols: $("run-symbols").value.trim(),
       batch_size: Number($("run-batch-size").value || 50),
+      page_size: Number($("run-batch-size").value || 50),
+      max_pages: Number($("run-max-pages").value || 1),
       refresh_stock_basic: $("run-refresh-stock-basic").checked,
       crawl_documents: $("run-crawl-documents").checked,
+      download_pdfs: $("run-download-pdfs").checked,
+      skip_crawl_pdf_download: !$("run-download-pdfs").checked,
       control_only: $("run-control-only").checked,
     };
     state.runPayload = await api("/api/daily-pipeline-run", {
@@ -955,6 +1246,41 @@ function closeModal() {
   $("document-modal").classList.add("hidden");
 }
 
+async function copyCommand(button) {
+  const command = button.dataset.copyCommand || "";
+  if (!command) return;
+  try {
+    await navigator.clipboard.writeText(command);
+    const previous = button.textContent;
+    button.textContent = "已复制";
+    window.setTimeout(() => {
+      button.textContent = previous || "复制命令";
+    }, 1200);
+  } catch (error) {
+    showError(`复制失败：${friendlyError(error)}`);
+  }
+}
+
+function syncRunControls() {
+  const workflow = $("run-workflow")?.value || "crawl_daily";
+  const isCrawlDaily = workflow === "crawl_daily";
+  setControlDisabled("run-source-id", !isCrawlDaily);
+  setControlDisabled("run-max-pages", !isCrawlDaily);
+  setControlDisabled("run-download-pdfs", !isCrawlDaily);
+  setControlDisabled("run-refresh-stock-basic", isCrawlDaily);
+  setControlDisabled("run-crawl-documents", isCrawlDaily);
+  if ($("run-daily-button")) {
+    $("run-daily-button").textContent = isCrawlDaily ? "启动采集" : "启动流水线";
+  }
+}
+
+function setControlDisabled(id, disabled) {
+  const control = $(id);
+  if (!control) return;
+  control.disabled = disabled;
+  control.closest(".run-field, .check-field")?.classList.toggle("disabled", disabled);
+}
+
 function bindNav() {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.addEventListener("click", () => {
@@ -976,6 +1302,7 @@ function bindControls() {
     if (state.activeSection === "data") refreshPreview();
   });
   $("run-daily-button").addEventListener("click", startDailyPipeline);
+  $("run-workflow").addEventListener("change", syncRunControls);
   $("active-date").addEventListener("change", () => {
     state.previewPayload = null;
     state.issuePage = 1;
@@ -1001,6 +1328,11 @@ function bindControls() {
     });
   });
   document.addEventListener("click", (event) => {
+    const copyButton = event.target.closest("[data-copy-command]");
+    if (copyButton) {
+      copyCommand(copyButton);
+      return;
+    }
     const docButton = event.target.closest(".document-count");
     if (docButton) {
       openDocuments(docButton.dataset.kind, docButton.dataset.instrument);
@@ -1031,6 +1363,7 @@ function bindControls() {
     }
     if (event.target.closest("[data-close-modal]")) closeModal();
   });
+  syncRunControls();
 }
 
 function toggleSort(kind, key) {
@@ -1065,6 +1398,14 @@ function toggleSort(kind, key) {
   }
   if (kind === "coverage") {
     renderDatasetCoverage(state.statusPayload?.dataset_rows || []);
+    return;
+  }
+  if (kind === "sourceHealth") {
+    renderSourceHealth(state.statusPayload?.source_summary_rows || []);
+    return;
+  }
+  if (kind === "factorStatus") {
+    renderFactorStatus(state.statusPayload?.dataset_rows || []);
     return;
   }
   if (kind === "qualityIssue") {

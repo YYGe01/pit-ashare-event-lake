@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from collections import deque
 from pathlib import Path
@@ -135,6 +136,40 @@ def test_qdc_daily_status_returns_beginner_dashboard_sections(tmp_path: Path) ->
         document_count=3,
         raw_object_count=2,
     )
+    manifest_path = (
+        settings.raw_root
+        / "documents"
+        / "2026-05-11"
+        / "sina_finance_news"
+        / "unit-test"
+        / "manifest.json"
+    )
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "dataset": "news",
+                "source_id": "sina_finance_news",
+                "partition_value": "2026-05-11",
+                "provider_record_count": 10,
+                "empty_result_count": 0,
+                "duplicate_record_count": 2,
+                "parse_failed_count": 1,
+                "parsed_unique_record_count": 7,
+                "mapped_source_record_count": 3,
+                "mapping_failed_count": 4,
+            }
+        ),
+        encoding="utf-8",
+    )
+    database.insert_source_object(
+        dataset="news",
+        source_id="sina_finance_news",
+        layer="raw_manifest",
+        uri=str(manifest_path),
+        content_hash="unit-test",
+        size_bytes=manifest_path.stat().st_size,
+    )
 
     payload = QdcConsoleData(settings).daily_collection_status(date="2026-05-11")
 
@@ -153,6 +188,11 @@ def test_qdc_daily_status_returns_beginner_dashboard_sections(tmp_path: Path) ->
     assert source_rows["akshare"]["state"] == "failed"
     assert source_rows["akshare"]["timeout_count"] == 1
     assert source_rows["cninfo_announcement"]["raw_object_count"] == 2
+    assert source_rows["sina_finance_news"]["provider_record_count"] == 10
+    assert source_rows["sina_finance_news"]["duplicate_rate"] == 0.2
+    assert source_rows["sina_finance_news"]["parse_failed_rate"] == 0.1
+    assert source_rows["sina_finance_news"]["mapping_rate"] == round(3 / 7, 6)
+    assert source_rows["nbd_company_news"]["state"] == "manual"
     assert payload["batch_task_rows"][0]["task_id"] == task_id
     assert payload["batch_task_rows"][0]["state"] == "failed"
     assert payload["batch_task_rows"][0]["progress_percent"] == 100
@@ -186,6 +226,35 @@ def test_qdc_console_builds_restricted_daily_pipeline_command(tmp_path: Path) ->
     assert "--control-only" in command
     assert "--no-skip-stock-basic-refresh" in command
     assert "--no-crawl-documents" in command
+
+
+def test_qdc_console_builds_crawl_daily_command(tmp_path: Path) -> None:
+    settings = QdcSettings.from_yaml(_write_config(tmp_path))
+
+    command = _daily_pipeline_command(
+        settings,
+        {
+            "workflow": "crawl_daily",
+            "date": "2026-05-13",
+            "source_id": "cninfo_announcement",
+            "symbols": " sh600000, sz000001 ",
+            "page_size": 20,
+            "max_pages": 2,
+            "download_pdfs": True,
+            "control_only": True,
+        },
+    )
+
+    assert command[:3] == [sys.executable, "-m", "quant_data_center.cli"]
+    assert command[command.index("--config") + 1] == str(settings.config_path)
+    assert "crawl-daily" in command
+    assert "daily-pipeline" not in command
+    assert command[command.index("--source-id") + 1] == "cninfo_announcement"
+    assert command[command.index("--symbols") + 1] == "SH600000,SZ000001"
+    assert command[command.index("--page-size") + 1] == "20"
+    assert command[command.index("--max-pages") + 1] == "2"
+    assert "--download-pdfs" in command
+    assert "--control-only" in command
 
 
 def test_qdc_console_can_stop_running_daily_pipeline_process(tmp_path: Path) -> None:
