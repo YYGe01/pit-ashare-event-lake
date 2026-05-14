@@ -338,6 +338,16 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
 
     rows = {row["instrument"]: row for row in payload["rows"]}
     assert payload["reference_source"] == "stock_basic_active"
+    assert payload["columns"][:8] == [
+        "instrument",
+        "symbol",
+        "exchange",
+        "name",
+        "industry",
+        "news_count",
+        "announcement_count",
+        "research_report_count",
+    ]
     assert payload["row_count"] == 2
     assert set(rows) == {"SH600000", "SZ000001"}
     assert rows["SH600000"]["announcement_count"] == 1
@@ -348,6 +358,26 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
     assert rows["SZ000001"]["announcement_count"] == 0
     assert rows["SZ000001"]["news_count"] == 0
     assert rows["SZ000001"]["research_report_count"] == 0
+
+    factor_payload = QdcConsoleData(settings).daily_wide_preview(
+        date="2026-05-13",
+        mode="factor",
+        limit=20,
+    )
+
+    assert factor_payload["columns"][:11] == [
+        "instrument",
+        "symbol",
+        "exchange",
+        "name",
+        "industry",
+        "news_count",
+        "announcement_count",
+        "research_report_count",
+        "raw_news_count",
+        "raw_announcement_count",
+        "raw_research_report_count",
+    ]
 
 
 def test_qdc_console_can_stop_running_daily_pipeline_process(tmp_path: Path) -> None:

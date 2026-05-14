@@ -6048,15 +6048,35 @@ def _daily_preview_columns(mode: str) -> list[str]:
             for table_fields in DAILY_FACTOR_WIDE_TABLES.values()
             for field in table_fields
         ]
-        return [
+        return _dedupe_columns([
             *base,
-            *fields,
+            "news_count",
+            "announcement_count",
+            "research_report_count",
             "raw_news_count",
             "raw_announcement_count",
             "raw_research_report_count",
-        ]
+            *fields,
+        ])
     fields = [field for table_fields in DAILY_RAW_WIDE_TABLES.values() for field in table_fields]
-    return [*base, *fields, "news_count", "announcement_count", "research_report_count"]
+    return [
+        *base,
+        "news_count",
+        "announcement_count",
+        "research_report_count",
+        *fields,
+    ]
+
+
+def _dedupe_columns(columns: list[str]) -> list[str]:
+    seen = set()
+    ordered = []
+    for column in columns:
+        if column in seen:
+            continue
+        seen.add(column)
+        ordered.append(column)
+    return ordered
 
 
 def _empty_data_coverage() -> dict[str, Any]:
