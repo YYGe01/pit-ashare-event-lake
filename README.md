@@ -42,9 +42,9 @@ qdc verify-qlib --provider-uri ~/.qlib/qlib_data/cn_data --start 2026-05-13 --en
 当前默认工作流是非结构化采集和外部因子加工：
 
 ```powershell
-qdc crawl-daily --date 2026-05-13 --source-id cninfo_announcement --page-size 100 --max-pages 20 --skip-pdf-download
-qdc crawl-daily --date 2026-05-13 --source-id sse_announcement --page-size 100 --max-pages 20 --skip-pdf-download
-qdc crawl-daily --date 2026-05-13 --source-id eastmoney_roll_news --page-size 100 --max-pages 5
+qdc crawl-daily --date 2026-05-13 --source-id cninfo_announcement --page-size 100 --skip-pdf-download
+qdc crawl-daily --date 2026-05-13 --source-id sse_announcement --page-size 100 --skip-pdf-download
+qdc crawl-daily --date 2026-05-13 --source-id eastmoney_roll_news --page-size 100
 qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
 qdc sync-parquet --layer all
 qdc quality
@@ -52,6 +52,7 @@ qdc console --host 127.0.0.1 --port 8765
 ```
 
 `crawl-run` / `crawl-daily` 默认只采公告 metadata，不下载 PDF；需要留存公开 PDF 时显式加 `--download-pdfs`，可再配合 `--pdf-limit` 控制 smoke 下载量。
+滚动新闻源会按目标日期窗口向后翻页，跳过目标日之后的新闻，直到完整覆盖目标日；完整采集不建议传 `--max-pages`，只做接口 smoke 时再用它限制页数。
 
 单条文本事件分类可用于规则或 LLM 冒烟验证；全量因子默认仍走规则引擎：
 

@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from quant_data_center.crawlers.date_scan import RollingDateWindowScanner
 from quant_data_center.crawlers.runtime import (
     make_deadline,
     raise_if_deadline_exceeded,
@@ -49,9 +50,11 @@ class SinaFinanceNewsCrawler:
         deadline = make_deadline(source_timeout_seconds)
         pages = []
         provider_rows: list[dict[str, Any]] = []
+        target_provider_rows: list[dict[str, Any]] = []
         observed_at = _timestamp()
-        page_count = max_pages or 1
-        for page_num in range(1, page_count + 1):
+        scanner = RollingDateWindowScanner(target_date=crawl_date, max_pages=max_pages)
+        page_num = 1
+        while True:
             raise_if_deadline_exceeded(deadline, source_id=source_id)
             params = _query_params(page_num=page_num, page_size=page_size)
             response = requests.get(
@@ -68,16 +71,26 @@ class SinaFinanceNewsCrawler:
             body = response.json()
             rows = _extract_rows(body)
             provider_rows.extend(rows)
+            scan_result = scanner.scan_page(
+                page_num=page_num,
+                rows=rows,
+                publish_time_getter=_publish_time,
+            )
+            target_provider_rows.extend(scan_result.target_rows)
             pages.append(
                 {
                     "page_num": page_num,
                     "request": params,
                     "status_code": response.status_code,
                     "news_count": len(rows),
+                    **scan_result.metrics,
                     "items": rows,
                 }
             )
-            if page_num < page_count and min_delay_seconds > 0:
+            page_num += 1
+            if not scanner.should_continue(next_page_num=page_num):
+                break
+            if min_delay_seconds > 0:
                 sleep_with_deadline(
                     min_delay_seconds,
                     deadline=deadline,
@@ -111,18 +124,24 @@ class SinaFinanceNewsCrawler:
         instrument_hints = self._instrument_hints(instrument_filter=instrument_filter)
         records = _normalize_news(
             source_id=source_id,
-            rows=provider_rows,
+            rows=target_provider_rows,
             instrument_hints=instrument_hints,
             observed_at=observed_at,
             raw_object_id=raw_object_id,
         )
         source_metrics = build_document_source_metrics(
-            provider_record_count=len(provider_rows),
-            provider_record_keys=(_provider_key(row) for row in provider_rows),
+            provider_record_count=len(target_provider_rows),
+            provider_record_keys=(_provider_key(row) for row in target_provider_rows),
             parsed_record_keys=(
-                _provider_key(row) for row in provider_rows if _is_parsable_row(row)
+                _provider_key(row) for row in target_provider_rows if _is_parsable_row(row)
             ),
             mapped_source_record_ids=(record.get("source_record_id") for record in records),
+        )
+        scan_fields = scanner.manifest_fields()
+        mapping_failure_reason = (
+            "empty_instrument_dictionary"
+            if not instrument_hints and source_metrics["parsed_unique_record_count"]
+            else None
         )
         document_bundle = self.objects.put_document_bundle(
             dataset="news",
@@ -136,7 +155,11 @@ class SinaFinanceNewsCrawler:
                 "copyright_policy": "metadata_only",
                 "instrument_filter": instrument_filter or [],
                 "raw_object_id": raw_object_id,
-                "provider_record_count": len(provider_rows),
+                "scanned_provider_record_count": len(provider_rows),
+                "provider_record_count": len(target_provider_rows),
+                "instrument_dictionary_count": len(instrument_hints),
+                "mapping_failure_reason": mapping_failure_reason,
+                **scan_fields,
                 **source_metrics,
             },
             records=records,
@@ -152,8 +175,12 @@ class SinaFinanceNewsCrawler:
             "raw_object_id": raw_object_id,
             "bronze_object_id": bronze_object_id,
             **document_bundle,
-            "provider_record_count": len(provider_rows),
+            "scanned_provider_record_count": len(provider_rows),
+            "provider_record_count": len(target_provider_rows),
             "mapped_record_count": row_count,
+            "instrument_dictionary_count": len(instrument_hints),
+            "mapping_failure_reason": mapping_failure_reason,
+            **scan_fields,
             **source_metrics,
             "observed_at": observed_at,
         }

@@ -7,6 +7,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from quant_data_center.crawlers.date_scan import exact_date_query_scan_fields
 from quant_data_center.settings import QdcSettings
 from quant_data_center.crawlers.runtime import (
     make_deadline,
@@ -112,6 +113,13 @@ class CninfoAnnouncementCrawler:
                 "pages": pages,
             },
         )
+        scan_fields = exact_date_query_scan_fields(
+            target_date=crawl_date,
+            page_count_scanned=len(pages),
+            source_reported_page_count=total_pages,
+            max_pages=max_pages,
+            provider_record_count=len(announcements),
+        )
         bronze_object_id = self.objects.put_bronze_parquet(
             dataset="announcement",
             source_id=source_id,
@@ -151,6 +159,7 @@ class CninfoAnnouncementCrawler:
                 "accepted_date_rule": "query seDate is exactly crawl_date; publish_date comes from announcementTime when present",
                 "raw_object_id": raw_object_id,
                 "instrument_filter": instrument_filter or [],
+                **scan_fields,
             },
             records=records,
         )
@@ -165,6 +174,7 @@ class CninfoAnnouncementCrawler:
             "bronze_object_id": bronze_object_id,
             **document_bundle,
             "provider_record_count": len(announcements),
+            **scan_fields,
             "pdf_downloaded_count": pdf_stats["downloaded"],
             "pdf_failed_count": pdf_stats["failed"],
             "pdf_skipped_count": pdf_stats["skipped"],

@@ -1734,6 +1734,11 @@ def test_qdc_crawl_run_real_cninfo_with_fake_response(
         "raw_manifest",
         "raw_records",
     }
+    manifest_uri = next(item["uri"] for item in source_objects if item["layer"] == "raw_manifest")
+    manifest = json.loads(Path(manifest_uri).read_text(encoding="utf-8"))
+    assert manifest["date_scan_strategy"] == "source_exact_date_query"
+    assert manifest["date_scan_complete"] is True
+    assert manifest["provider_record_count"] == 2
     records_uri = next(item["uri"] for item in source_objects if item["layer"] == "raw_records")
     assert "/raw/documents/2026-05-11/cninfo_announcement/" in records_uri.replace("\\", "/")
     pdf_hash = hashlib.sha256(FakePdfResponse.content).hexdigest()
@@ -1952,6 +1957,11 @@ def test_qdc_crawl_run_real_sse_announcement_with_fake_response(
         "raw_manifest",
         "raw_records",
     }
+    manifest_uri = next(item["uri"] for item in source_objects if item["layer"] == "raw_manifest")
+    manifest = json.loads(Path(manifest_uri).read_text(encoding="utf-8"))
+    assert manifest["date_scan_strategy"] == "source_exact_date_query"
+    assert manifest["date_scan_complete"] is True
+    assert manifest["provider_record_count"] == 2
     with database.connect() as conn:
         row = conn.execute(
             """
@@ -2014,44 +2024,67 @@ def test_qdc_crawl_run_real_sina_news_with_fake_response(
     class FakeResponse:
         status_code = 200
 
+        def __init__(self, rows: list[dict[str, object]]) -> None:
+            self._rows = rows
+
         def raise_for_status(self) -> None:
             return None
 
         def json(self) -> dict[str, object]:
-            return {
-                "result": {
-                    "data": [
-                        {
-                            "id": "news-1",
-                            "title": "浦发银行签订重大合同",
-                            "ctime": "2026-05-11 18:20:00",
-                            "url": "https://finance.sina.com.cn/news/1.shtml",
-                        },
-                        {
-                            "id": "news-2",
-                            "title": "市场综述未提及个股",
-                            "ctime": "2026-05-11 18:21:00",
-                            "url": "https://finance.sina.com.cn/news/2.shtml",
-                        },
-                        {
-                            "id": "news-3",
-                            "title": "平安银行公告解读",
-                            "ctime": "2026-05-10 18:21:00",
-                            "url": "https://finance.sina.com.cn/news/3.shtml",
-                        },
-                    ]
-                }
-            }
+            return {"result": {"data": self._rows}}
 
     calls = []
 
     def fake_get(url, headers, params, timeout):
         calls.append({"url": url, "headers": headers, "params": params, "timeout": timeout})
-        return FakeResponse()
+        page = int(params["page"])
+        rows_by_page = {
+            1: [
+                {
+                    "id": "news-newer",
+                    "title": "浦发银行次日新闻",
+                    "ctime": "2026-05-12 09:01:00",
+                    "url": "https://finance.sina.com.cn/news/newer.shtml",
+                }
+            ],
+            2: [
+                {
+                    "id": "news-1",
+                    "title": "浦发银行签订重大合同",
+                    "ctime": "2026-05-11 18:20:00",
+                    "url": "https://finance.sina.com.cn/news/1.shtml",
+                },
+                {
+                    "id": "news-2",
+                    "title": "市场综述未提及个股",
+                    "ctime": "2026-05-11 18:21:00",
+                    "url": "https://finance.sina.com.cn/news/2.shtml",
+                },
+            ],
+            3: [
+                {
+                    "id": "news-older-1",
+                    "title": "平安银行历史新闻一",
+                    "ctime": "2026-05-10 18:21:00",
+                    "url": "https://finance.sina.com.cn/news/older-1.shtml",
+                }
+            ],
+            4: [
+                {
+                    "id": "news-older-2",
+                    "title": "平安银行历史新闻二",
+                    "ctime": "2026-05-10 17:21:00",
+                    "url": "https://finance.sina.com.cn/news/older-2.shtml",
+                }
+            ],
+        }
+        return FakeResponse(rows_by_page.get(page, []))
 
     import requests
+    import quant_data_center.crawlers.sources.sina as sina_module
 
     monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(sina_module, "sleep_with_deadline", lambda *args, **kwargs: None)
 
     assert (
         main(
@@ -2064,7 +2097,7 @@ def test_qdc_crawl_run_real_sina_news_with_fake_response(
                 "--page-size",
                 "3",
                 "--max-pages",
-                "1",
+                "4",
             ]
         )
         == 0
@@ -2073,7 +2106,8 @@ def test_qdc_crawl_run_real_sina_news_with_fake_response(
     task = database.list_crawl_tasks(source_id="sina_finance_news")[0]
     assert task["status"] == "success"
     assert calls[0]["params"] == {"pageid": "153", "lid": "1686", "num": "3", "page": "1"}
-    assert database.silver_table_counts()["news"] == 2
+    assert [call["params"]["page"] for call in calls] == ["1", "2", "3", "4"]
+    assert database.silver_table_counts()["news"] == 1
     source_objects = database.list_source_objects(
         dataset="news",
         source_id="sina_finance_news",
@@ -2103,15 +2137,15 @@ def test_qdc_crawl_run_real_sina_news_with_fake_response(
             "https://finance.sina.com.cn/news/1.shtml",
             "sina_finance_news",
         ),
-        (
-            "SZ000001",
-            datetime(2026, 5, 10).date(),
-            datetime(2026, 5, 10, 18, 21),
-            "平安银行公告解读",
-            "https://finance.sina.com.cn/news/3.shtml",
-            "sina_finance_news",
-        ),
     ]
+    manifest_uri = next(item["uri"] for item in source_objects if item["layer"] == "raw_manifest")
+    manifest = json.loads(Path(manifest_uri).read_text(encoding="utf-8"))
+    assert manifest["date_scan_complete"] is True
+    assert manifest["date_scan_stop_reason"] == "older_page_lookahead"
+    assert manifest["scanned_provider_record_count"] == 5
+    assert manifest["provider_record_count"] == 2
+    assert manifest["newer_skipped_count"] == 1
+    assert manifest["older_seen_count"] == 2
 
 
 def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
@@ -2181,20 +2215,46 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
                 </body></html>
                 """
             )
+        if "default_1.html" in url:
+            return FakeResponse(
+                """
+                <li><span>2026-05-12 09:01</span>[<a href="stock.html">股票</a>]
+                <a href="http://stock.eastmoney.com/a/202605121111.html"
+                title="浦发银行次日新闻" target="_blank">浦发银行次日新闻</a></li>
+                """
+            )
+        if "default_2.html" in url:
+            return FakeResponse(
+                """
+                <li><span>2026-05-11 18:20</span>[<a href="stock.html">股票</a>]
+                <a href="http://stock.eastmoney.com/a/202605111111.html"
+                title="浦发银行签订重大合同" target="_blank">浦发银行签订重大合同</a></li>
+                <li><span>2026-05-11 18:21</span>[<a href="stock.html">股票</a>]
+                <a href="http://stock.eastmoney.com/a/202605111112.html"
+                title="市场综述未提及个股" target="_blank">市场综述未提及个股</a></li>
+                """
+            )
+        if "default_3.html" in url:
+            return FakeResponse(
+                """
+                <li><span>2026-05-10 18:21</span>[<a href="stock.html">股票</a>]
+                <a href="http://stock.eastmoney.com/a/202605101111.html"
+                title="浦发银行历史新闻一" target="_blank">浦发银行历史新闻一</a></li>
+                """
+            )
         return FakeResponse(
             """
-            <li><span>2026-05-11 18:20</span>[<a href="stock.html">股票</a>]
-            <a href="http://stock.eastmoney.com/a/202605111111.html"
-            title="浦发银行签订重大合同" target="_blank">浦发银行签订重大合同</a></li>
             <li><span>2026-05-10 18:21</span>[<a href="stock.html">股票</a>]
-            <a href="http://stock.eastmoney.com/a/202605101111.html"
-            title="浦发银行历史新闻" target="_blank">浦发银行历史新闻</a></li>
+            <a href="http://stock.eastmoney.com/a/202605101112.html"
+            title="浦发银行历史新闻二" target="_blank">浦发银行历史新闻二</a></li>
             """
         )
 
     import requests
+    import quant_data_center.crawlers.sources.eastmoney as eastmoney_module
 
     monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(eastmoney_module, "sleep_with_deadline", lambda *args, **kwargs: None)
 
     assert (
         main(
@@ -2207,7 +2267,7 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
                 "--page-size",
                 "5",
                 "--max-pages",
-                "1",
+                "4",
             ]
         )
         == 0
@@ -2216,7 +2276,13 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
     task = database.list_crawl_tasks(source_id="eastmoney_roll_news")[0]
     assert task["status"] == "success"
     assert calls[0]["url"] == "https://roll.eastmoney.com/default_1.html"
-    assert database.silver_table_counts()["news"] == 2
+    assert [call["url"] for call in calls[:4]] == [
+        "https://roll.eastmoney.com/default_1.html",
+        "https://roll.eastmoney.com/default_2.html",
+        "https://roll.eastmoney.com/default_3.html",
+        "https://roll.eastmoney.com/default_4.html",
+    ]
+    assert database.silver_table_counts()["news"] == 1
     source_objects = database.list_source_objects(
         dataset="news",
         source_id="eastmoney_roll_news",
@@ -2247,16 +2313,15 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
             "浦发银行签订重大合同正文第一段。\n第二段包含合同金额和业务影响。",
             "success",
         ),
-        (
-            "SH600000",
-            datetime(2026, 5, 10).date(),
-            datetime(2026, 5, 10, 18, 21),
-            "浦发银行历史新闻",
-            "eastmoney_roll_news",
-            "浦发银行签订重大合同正文第一段。\n第二段包含合同金额和业务影响。",
-            "success",
-        ),
     ]
+    manifest_uri = next(item["uri"] for item in source_objects if item["layer"] == "raw_manifest")
+    manifest = json.loads(Path(manifest_uri).read_text(encoding="utf-8"))
+    assert manifest["date_scan_complete"] is True
+    assert manifest["date_scan_stop_reason"] == "older_page_lookahead"
+    assert manifest["scanned_provider_record_count"] == 5
+    assert manifest["provider_record_count"] == 2
+    assert manifest["newer_skipped_count"] == 1
+    assert manifest["older_seen_count"] == 2
 
 
 def test_qdc_crawl_run_real_nbd_news_with_fake_response(
