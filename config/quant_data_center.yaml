@@ -39,7 +39,7 @@ daily_pipeline:
   daily_parallelism: 1
   crawl_documents: true
   crawl_page_size: 30
-  crawl_parallelism: 4
+  crawl_parallelism: 1
   crawl_request_timeout_seconds: 30
   crawl_source_timeout_seconds: 180
   skip_stock_basic_refresh: false

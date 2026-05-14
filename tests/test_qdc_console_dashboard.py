@@ -5,6 +5,11 @@ import sys
 from collections import deque
 from pathlib import Path
 
+from quant_data_center.cli import (
+    DEFAULT_CRAWL_SOURCE_PARALLELISM,
+    _daily_pipeline_document_instrument_filter,
+    _qlib_provider_stock_instruments,
+)
 from quant_data_center.console import (
     DailyPipelineProcessManager,
     QdcConsoleData,
@@ -255,6 +260,43 @@ def test_qdc_console_builds_crawl_daily_command(tmp_path: Path) -> None:
     assert command[command.index("--max-pages") + 1] == "2"
     assert "--download-pdfs" in command
     assert "--control-only" in command
+
+
+def test_qdc_crawl_defaults_to_serial_provider_stock_universe(tmp_path: Path) -> None:
+    settings = QdcSettings.from_yaml(_write_config(tmp_path))
+    instruments_path = settings.qlib_root / "cn_data" / "instruments" / "all.txt"
+    instruments_path.parent.mkdir(parents=True)
+    instruments_path.write_text(
+        "\n".join(
+            [
+                "SH000300\t2005-01-04\t2026-05-13",
+                "SH600000\t2000-01-04\t2026-05-13",
+                "SZ000001\t2000-01-04\t2026-05-13",
+                "SZ399300\t2005-01-04\t2026-05-13",
+                "BJ430017\t2023-05-31\t2025-09-30",
+                "SH600001\t2000-01-04\t2009-12-15",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert DEFAULT_CRAWL_SOURCE_PARALLELISM == 1
+    assert _qlib_provider_stock_instruments(settings, trade_date="2026-05-13") == [
+        "SH600000",
+        "SZ000001",
+    ]
+    instrument_filter, mode = _daily_pipeline_document_instrument_filter(
+        settings=settings,
+        universe="all_a",
+        symbols_arg=None,
+        symbols=["SH600000", "SZ000001", "SH600001"],
+        all_market=True,
+        crawl_date="2026-05-13",
+    )
+
+    assert mode == "qlib_provider"
+    assert instrument_filter == ["SH600000", "SZ000001"]
 
 
 def test_qdc_console_can_stop_running_daily_pipeline_process(tmp_path: Path) -> None:

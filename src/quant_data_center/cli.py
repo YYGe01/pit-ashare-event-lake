@@ -66,7 +66,7 @@ EASTMONEY_DAILY_DATASETS = [
     "trade_status",
 ]
 SINA_DAILY_DATASETS = ["trade_calendar", "daily_bar", "adj_factor", "price_limit"]
-DEFAULT_CRAWL_SOURCE_PARALLELISM = 4
+DEFAULT_CRAWL_SOURCE_PARALLELISM = 1
 DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS = 30.0
 DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS = 180.0
 DEFAULT_DAILY_TASK_PARALLELISM = 1
@@ -549,6 +549,12 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
             }
         )
         return 0
+    task_dates = {str(task["crawl_date"]) for task in tasks}
+    instrument_filter, instrument_filter_mode = _resolve_crawl_document_instrument_filter(
+        settings=settings,
+        symbols_arg=args.symbols,
+        crawl_date=next(iter(task_dates)) if len(task_dates) == 1 else None,
+    )
     results, has_failures = _run_crawl_tasks(
         settings=settings,
         database=database,
@@ -558,7 +564,7 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
         max_pages=args.max_pages,
         download_pdfs=not bool(args.skip_pdf_download),
         pdf_limit=args.pdf_limit,
-        instrument_filter=parse_symbols(args.symbols),
+        instrument_filter=instrument_filter,
         parallelism=args.parallel_sources,
         request_timeout_seconds=args.request_timeout_seconds,
         source_timeout_seconds=args.source_timeout_seconds,
@@ -581,7 +587,9 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
             "max_pages": args.max_pages,
             "download_pdfs": not bool(args.skip_pdf_download),
             "pdf_limit": args.pdf_limit,
-            "instrument_filter": parse_symbols(args.symbols),
+            "instrument_filter_mode": instrument_filter_mode,
+            "instrument_filter_count": len(instrument_filter or []),
+            "instrument_filter_preview": (instrument_filter or [])[:10],
             "parallel_sources": args.parallel_sources,
             "request_timeout_seconds": args.request_timeout_seconds,
             "source_timeout_seconds": args.source_timeout_seconds,
@@ -630,6 +638,11 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         if task["crawl_date"] == crawl_date
     ]
     selected_tasks = tasks[: args.limit_tasks] if args.limit_tasks else tasks
+    instrument_filter, instrument_filter_mode = _resolve_crawl_document_instrument_filter(
+        settings=settings,
+        symbols_arg=args.symbols,
+        crawl_date=crawl_date,
+    )
     results, has_failures = _run_crawl_tasks(
         settings=settings,
         database=database,
@@ -639,7 +652,7 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         max_pages=args.max_pages,
         download_pdfs=not bool(args.skip_pdf_download),
         pdf_limit=args.pdf_limit,
-        instrument_filter=parse_symbols(args.symbols),
+        instrument_filter=instrument_filter,
         parallelism=args.parallel_sources,
         request_timeout_seconds=args.request_timeout_seconds,
         source_timeout_seconds=args.source_timeout_seconds,
@@ -663,7 +676,9 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
             "max_pages": args.max_pages,
             "download_pdfs": not bool(args.skip_pdf_download),
             "pdf_limit": args.pdf_limit,
-            "instrument_filter": parse_symbols(args.symbols),
+            "instrument_filter_mode": instrument_filter_mode,
+            "instrument_filter_count": len(instrument_filter or []),
+            "instrument_filter_preview": (instrument_filter or [])[:10],
             "parallel_sources": args.parallel_sources,
             "request_timeout_seconds": args.request_timeout_seconds,
             "source_timeout_seconds": args.source_timeout_seconds,
@@ -1220,10 +1235,12 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     _validate_backfill_plan_symbols(dataset="daily_bar", symbols=symbols)
     crawl_instrument_filter, crawl_instrument_filter_mode = (
         _daily_pipeline_document_instrument_filter(
+            settings=settings,
             universe=pipeline_universe,
             symbols_arg=args.symbols,
             symbols=symbols,
             all_market=all_market,
+            crawl_date=run_date,
         )
     )
 
@@ -1546,16 +1563,88 @@ def _run_daily_pipeline_crawl_documents(
 
 def _daily_pipeline_document_instrument_filter(
     *,
+    settings: QdcSettings,
     universe: str,
     symbols_arg: str | None,
     symbols: list[str],
     all_market: bool,
+    crawl_date: str,
 ) -> tuple[list[str] | None, str]:
     if parse_symbols(symbols_arg):
         return symbols, "explicit_symbols"
+    provider_symbols = _qlib_provider_stock_instruments(settings, trade_date=crawl_date)
+    if provider_symbols:
+        return provider_symbols, "qlib_provider"
     if all_market or _is_full_market_universe(universe):
         return None, "all_market_unfiltered"
     return symbols, "universe"
+
+
+def _resolve_crawl_document_instrument_filter(
+    *,
+    settings: QdcSettings,
+    symbols_arg: str | None,
+    crawl_date: str | None,
+) -> tuple[list[str] | None, str]:
+    explicit_symbols = parse_symbols(symbols_arg)
+    if explicit_symbols:
+        return explicit_symbols, "explicit_symbols"
+    provider_symbols = _qlib_provider_stock_instruments(settings, trade_date=crawl_date)
+    if provider_symbols:
+        return provider_symbols, "qlib_provider"
+    return None, "unfiltered"
+
+
+def _qlib_provider_stock_instruments(
+    settings: QdcSettings,
+    *,
+    trade_date: str | None = None,
+) -> list[str]:
+    root = _qlib_provider_root(settings)
+    instruments_path = root / "instruments" / "all.txt"
+    if not instruments_path.exists():
+        return []
+    result: list[str] = []
+    for line in instruments_path.read_text(encoding="utf-8").splitlines():
+        parts = line.split("\t")
+        if not parts:
+            continue
+        instrument = parts[0].strip().upper()
+        if not _is_stock_instrument(instrument):
+            continue
+        if trade_date and len(parts) >= 3:
+            start_date = parts[1].strip()
+            end_date = parts[2].strip()
+            if start_date and trade_date < start_date:
+                continue
+            if end_date and trade_date > end_date:
+                continue
+        result.append(instrument)
+    return sorted(set(result))
+
+
+def _qlib_provider_root(settings: QdcSettings) -> Path:
+    value = settings.qlib_provider.provider_uri or str(settings.qlib_root / "cn_data")
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return (settings.project_root / path).resolve()
+
+
+def _is_stock_instrument(instrument: str) -> bool:
+    if len(instrument) != 8:
+        return False
+    exchange = instrument[:2]
+    code = instrument[2:]
+    if not code.isdigit():
+        return False
+    if exchange == "BJ":
+        return True
+    if exchange == "SH":
+        return code.startswith(("60", "68", "90"))
+    if exchange == "SZ":
+        return code.startswith(("00", "20", "30"))
+    return False
 
 
 def _crawl_exhausted_datasets(
