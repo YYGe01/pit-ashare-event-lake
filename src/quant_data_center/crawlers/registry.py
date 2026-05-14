@@ -117,6 +117,25 @@ DEFAULT_CRAWLER_SOURCES: dict[str, CrawlerSourceSpec] = {
             "but PDF bytes are not downloaded by default."
         ),
     ),
+    "cninfo_investor_interaction": CrawlerSourceSpec(
+        source_id="cninfo_investor_interaction",
+        source_type="investor_interaction",
+        dataset="investor_interaction",
+        base_url="https://irm.cninfo.com.cn/",
+        enabled=True,
+        robots_url="https://irm.cninfo.com.cn/robots.txt",
+        robots_status="manual_review_required",
+        terms_review_status="manual_review_required",
+        copyright_policy="metadata_and_inline_preview",
+        rate_limit_per_minute=60,
+        min_delay_seconds=1.0,
+        max_retry=3,
+        parser_version="cninfo_investor_interaction_v1",
+        notes=(
+            "Daily CNINFO investor-interaction metadata source; public question/reply "
+            "text is retained for factor explainability."
+        ),
+    ),
     "nbd_company_news": CrawlerSourceSpec(
         source_id="nbd_company_news",
         source_type="news",
@@ -285,6 +304,7 @@ CRAWL_DAILY_SOURCE_IDS = [
     "sina_finance_news",
     "eastmoney_roll_news",
     "eastmoney_research_report",
+    "cninfo_investor_interaction",
 ]
 
 

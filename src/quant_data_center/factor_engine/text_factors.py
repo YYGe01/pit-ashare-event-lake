@@ -23,7 +23,7 @@ from quant_data_center.factor_engine.text_events import (
 )
 from quant_data_center.storage.database import QdcDatabase
 
-DOCUMENT_TABLES = {"announcement", "news", "research_report"}
+DOCUMENT_TABLES = {"announcement", "news", "research_report", "investor_interaction"}
 DOCUMENT_LOOKBACK_DAYS = 15
 DOCUMENT_FACTOR_SOURCE_IDS = {
     "announcement": ("cninfo_announcement", "sse_announcement"),
@@ -42,6 +42,7 @@ DOCUMENT_FACTOR_SOURCE_IDS = {
         "yicai",
     ),
     "research_report": ("eastmoney_research_report",),
+    "investor_interaction": ("cninfo_investor_interaction",),
 }
 
 NEWS_FACTOR_FIELDS = (
@@ -89,6 +90,34 @@ RESEARCH_REPORT_FACTOR_FIELDS = (
     "research_risk_count",
     "research_topic_strength",
     "research_sentiment_mean",
+)
+INVESTOR_INTERACTION_FACTOR_FIELDS = (
+    "question_count",
+    "reply_count",
+    "reply_delay_hours_mean",
+    "risk_topic_count",
+    "new_business_topic_count",
+    "sentiment_mean",
+)
+NEW_BUSINESS_KEYWORDS = (
+    "AI",
+    "人工智能",
+    "大模型",
+    "算力",
+    "数据中心",
+    "机器人",
+    "低空经济",
+    "卫星",
+    "芯片",
+    "半导体",
+    "新能源",
+    "储能",
+    "光伏",
+    "氢能",
+    "无人驾驶",
+    "智能驾驶",
+    "车联网",
+    "数字化",
 )
 
 
@@ -225,6 +254,62 @@ def build_research_report_factor_rows(
     return rows
 
 
+def build_investor_interaction_factor_rows(
+    database: QdcDatabase,
+    *,
+    start_date: str,
+    end_date: str,
+    source_id: str,
+) -> list[dict[str, Any]]:
+    documents = _load_investor_interactions(database, start_date=start_date, end_date=end_date)
+    classifier = RuleBasedTextEventClassifier()
+    grouped: dict[tuple[str, str], dict[str, Any]] = defaultdict(
+        _investor_interaction_factor_seed
+    )
+    reply_delay_sums: dict[tuple[str, str], float] = defaultdict(float)
+    reply_delay_counts: dict[tuple[str, str], int] = defaultdict(int)
+    for document in documents:
+        key = (document["trade_date"], document["instrument"])
+        row = grouped[key]
+        result = classifier.classify(
+            title=document["question_text"],
+            body=document.get("answer_text"),
+            document_type="investor_interaction",
+        )
+        row["question_count"] += 1.0
+        row["_sentiment_sum"] += result.sentiment_score
+        if document.get("answer_text"):
+            row["reply_count"] += 1.0
+        delay_hours = _float_or_none(document.get("reply_delay_hours"))
+        if delay_hours is not None and delay_hours >= 0:
+            reply_delay_sums[key] += delay_hours
+            reply_delay_counts[key] += 1
+        row["risk_topic_count"] += _event_count(result, RISK_EVENTS)
+        row["new_business_topic_count"] += (
+            1.0 if _contains_new_business_topic(document["question_text"], document.get("answer_text")) else 0.0
+        )
+    rows = []
+    for trade_date, instrument in sorted(grouped):
+        key = (trade_date, instrument)
+        factor_row = grouped[key]
+        factor_row["trade_date"] = trade_date
+        factor_row["instrument"] = instrument
+        factor_row["source_id"] = source_id
+        factor_row["reply_delay_hours_mean"] = (
+            reply_delay_sums[key] / reply_delay_counts[key]
+            if reply_delay_counts[key]
+            else 0.0
+        )
+        factor_row["sentiment_mean"] = (
+            factor_row["_sentiment_sum"] / factor_row["question_count"]
+            if factor_row["question_count"]
+            else 0.0
+        )
+        del factor_row["_sentiment_sum"]
+        rows.append(factor_row)
+    return rows
+
+
 def _load_documents(
     database: QdcDatabase,
     *,
@@ -353,6 +438,72 @@ def _load_research_reports(
     return documents
 
 
+def _load_investor_interactions(
+    database: QdcDatabase,
+    *,
+    start_date: str,
+    end_date: str,
+) -> list[dict[str, Any]]:
+    publish_start = date_minus_days(start_date, DOCUMENT_LOOKBACK_DAYS)
+    source_ids = DOCUMENT_FACTOR_SOURCE_IDS["investor_interaction"]
+    placeholders = ", ".join("?" for _ in source_ids)
+    with database.connect() as conn:
+        aligner = TradeDayAligner.from_connection(conn)
+        columns = {
+            str(row[0])
+            for row in conn.execute(
+                """
+                select column_name
+                from information_schema.columns
+                where table_schema = 'qdc_silver' and table_name = 'investor_interaction'
+                """
+            ).fetchall()
+        }
+        if not columns:
+            return []
+        answer_expr = "answer_text" if "answer_text" in columns else "null as answer_text"
+        delay_expr = (
+            "reply_delay_hours"
+            if "reply_delay_hours" in columns
+            else "null as reply_delay_hours"
+        )
+        rows = conn.execute(
+            f"""
+            select publish_date, instrument, title, source_id,
+                   {answer_expr}, {delay_expr}
+            from qdc_silver.investor_interaction
+            where publish_date >= ? and publish_date <= ?
+              and source_id in ({placeholders})
+            order by publish_date, instrument, source_id
+            """,
+            [publish_start, end_date, *source_ids],
+        ).fetchall()
+    documents = []
+    seen_keys = set()
+    for publish_date, instrument, title, source_id_value, answer_text, reply_delay_hours in rows:
+        trade_date = aligner.align(publish_date)
+        if start_date <= trade_date <= end_date:
+            key = (
+                str(publish_date),
+                str(instrument),
+                _dedupe_title_key(str(title)),
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            documents.append(
+                {
+                    "trade_date": trade_date,
+                    "instrument": str(instrument),
+                    "question_text": str(title),
+                    "answer_text": str(answer_text) if answer_text else "",
+                    "reply_delay_hours": reply_delay_hours,
+                    "source_id": str(source_id_value),
+                }
+            )
+    return documents
+
+
 def _dedupe_title_key(title: str) -> str:
     return "".join(ch for ch in title.lower() if ch.isalnum())
 
@@ -415,6 +566,18 @@ def _research_report_factor_seed() -> dict[str, float]:
     }
 
 
+def _investor_interaction_factor_seed() -> dict[str, float]:
+    return {
+        "question_count": 0.0,
+        "reply_count": 0.0,
+        "reply_delay_hours_mean": 0.0,
+        "risk_topic_count": 0.0,
+        "new_business_topic_count": 0.0,
+        "sentiment_mean": 0.0,
+        "_sentiment_sum": 0.0,
+    }
+
+
 def _add_text_event_fields(
     row: dict[str, float],
     result: TextEventResult,
@@ -462,3 +625,17 @@ def _analyst_names(value: Any) -> list[str]:
     for separator in ("；", ";", "，", ",", "、", "/", "|"):
         text = text.replace(separator, " ")
     return [item.strip() for item in text.split() if item.strip()]
+
+
+def _contains_new_business_topic(question_text: str, answer_text: Any) -> bool:
+    text = f"{question_text or ''} {answer_text or ''}".upper()
+    return any(keyword.upper() in text for keyword in NEW_BUSINESS_KEYWORDS)
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

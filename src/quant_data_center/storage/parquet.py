@@ -24,9 +24,11 @@ SILVER_ORDER_BY = {
     "announcement": "publish_date, instrument, announcement_id",
     "news": "publish_date, instrument, news_id",
     "research_report": "publish_date, instrument, research_report_id",
+    "investor_interaction": "publish_date, instrument, investor_interaction_id",
     "daily_news_factor": "trade_date, instrument",
     "daily_announcement_factor": "trade_date, instrument",
     "daily_research_report_factor": "trade_date, instrument",
+    "daily_investor_interaction_factor": "trade_date, instrument",
 }
 
 
@@ -136,6 +138,12 @@ class QdcParquetSync:
                   coalesce(rf.research_risk_count, 0) as research_risk_count,
                   coalesce(rf.research_topic_strength, 0) as research_topic_strength,
                   coalesce(rf.research_sentiment_mean, 0) as research_sentiment_mean,
+                  coalesce(ii.question_count, 0) as question_count,
+                  coalesce(ii.reply_count, 0) as reply_count,
+                  coalesce(ii.reply_delay_hours_mean, 0) as reply_delay_hours_mean,
+                  coalesce(ii.risk_topic_count, 0) as risk_topic_count,
+                  coalesce(ii.new_business_topic_count, 0) as new_business_topic_count,
+                  coalesce(ii.sentiment_mean, 0) as sentiment_mean,
                   b.source_id as daily_bar_source_id
                 from qdc_silver.daily_bar b
                 left join qdc_silver.adj_factor a
@@ -150,6 +158,8 @@ class QdcParquetSync:
                   on b.trade_date = af.trade_date and b.instrument = af.instrument
                 left join qdc_silver.daily_research_report_factor rf
                   on b.trade_date = rf.trade_date and b.instrument = rf.instrument
+                left join qdc_silver.daily_investor_interaction_factor ii
+                  on b.trade_date = ii.trade_date and b.instrument = ii.instrument
                 order by b.trade_date, b.instrument
                 """
             ).fetchdf()

@@ -67,6 +67,12 @@ QLIB_FIELDS = {
     "research_risk_count": "research_risk_count",
     "research_topic_strength": "research_topic_strength",
     "research_sentiment_mean": "research_sentiment_mean",
+    "question_count": "question_count",
+    "reply_count": "reply_count",
+    "reply_delay_hours_mean": "reply_delay_hours_mean",
+    "risk_topic_count": "risk_topic_count",
+    "new_business_topic_count": "new_business_topic_count",
+    "sentiment_mean": "sentiment_mean",
 }
 
 
@@ -234,7 +240,13 @@ class QlibExporter:
                   coalesce(rf.research_rating_negative_count, 0) as research_rating_negative_count,
                   coalesce(rf.research_risk_count, 0) as research_risk_count,
                   coalesce(rf.research_topic_strength, 0) as research_topic_strength,
-                  coalesce(rf.research_sentiment_mean, 0) as research_sentiment_mean
+                  coalesce(rf.research_sentiment_mean, 0) as research_sentiment_mean,
+                  coalesce(ii.question_count, 0) as question_count,
+                  coalesce(ii.reply_count, 0) as reply_count,
+                  coalesce(ii.reply_delay_hours_mean, 0) as reply_delay_hours_mean,
+                  coalesce(ii.risk_topic_count, 0) as risk_topic_count,
+                  coalesce(ii.new_business_topic_count, 0) as new_business_topic_count,
+                  coalesce(ii.sentiment_mean, 0) as sentiment_mean
                 from qdc_silver.daily_bar b
                 left join qdc_silver.adj_factor a
                   on b.trade_date = a.trade_date and b.instrument = a.instrument
@@ -246,6 +258,8 @@ class QlibExporter:
                   on b.trade_date = af.trade_date and b.instrument = af.instrument
                 left join qdc_silver.daily_research_report_factor rf
                   on b.trade_date = rf.trade_date and b.instrument = rf.instrument
+                left join qdc_silver.daily_investor_interaction_factor ii
+                  on b.trade_date = ii.trade_date and b.instrument = ii.instrument
                 {where_clause}
                 order by b.trade_date, b.instrument
                 """,

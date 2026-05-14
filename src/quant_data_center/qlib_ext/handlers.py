@@ -55,6 +55,12 @@ DEFAULT_EXTERNAL_FIELDS = (
     "research_risk_count",
     "research_topic_strength",
     "research_sentiment_mean",
+    "question_count",
+    "reply_count",
+    "reply_delay_hours_mean",
+    "risk_topic_count",
+    "new_business_topic_count",
+    "sentiment_mean",
 )
 DEFAULT_EXTERNAL_WINDOWS = (0, 3, 5)
 

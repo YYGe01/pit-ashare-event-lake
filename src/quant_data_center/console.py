@@ -62,6 +62,7 @@ DAILY_DOCUMENT_SOURCE_IDS = {
         "yicai",
     ),
     "research_report": ("eastmoney_research_report",),
+    "investor_interaction": ("cninfo_investor_interaction",),
 }
 DOCUMENT_SOURCE_PRIORITY = {
     "cninfo_announcement": 0,
@@ -79,8 +80,16 @@ DOCUMENT_SOURCE_PRIORITY = {
     "cls": 10,
     "yicai": 11,
     "eastmoney_research_report": 0,
+    "cninfo_investor_interaction": 0,
 }
-DOCUMENT_LOCAL_CONTENT_FIELDS = ("body_text", "content", "正文", "summary", "摘要")
+DOCUMENT_LOCAL_CONTENT_FIELDS = (
+    "body_text",
+    "answer_text",
+    "content",
+    "正文",
+    "summary",
+    "摘要",
+)
 DOCUMENT_OBJECT_FIELDS = (
     "raw_object_id",
     "body_download_status",
@@ -105,9 +114,11 @@ DAILY_COLLECTION_DATASETS = (
     "announcement",
     "news",
     "research_report",
+    "investor_interaction",
     "daily_news_factor",
     "daily_announcement_factor",
     "daily_research_report_factor",
+    "daily_investor_interaction_factor",
 )
 DAILY_BATCH_DATASETS = ("daily_bar", "adj_factor", "price_limit", "news")
 DAILY_SOURCE_DIMENSIONS = {
@@ -120,6 +131,7 @@ DAILY_DOCUMENT_DIMENSIONS = {
     "announcement": ("publish_time", "title"),
     "news": ("publish_time", "title"),
     "research_report": ("publish_time", "title", "institution", "analyst", "rating"),
+    "investor_interaction": ("publish_time", "title", "answer_time", "reply_status"),
 }
 DAILY_STAGE_DATASETS = ("daily_bar", "adj_factor", "price_limit")
 DAILY_JOB_STAGES = ("build_factors", "sync_parquet", "quality", "export_qlib")
@@ -218,6 +230,14 @@ DAILY_FACTOR_WIDE_TABLES = {
         "research_topic_strength",
         "research_sentiment_mean",
     ],
+    "daily_investor_interaction_factor": [
+        "question_count",
+        "reply_count",
+        "reply_delay_hours_mean",
+        "risk_topic_count",
+        "new_business_topic_count",
+        "sentiment_mean",
+    ],
 }
 RAW_PREVIEW_DATASETS = (
     "stock_basic",
@@ -229,6 +249,7 @@ RAW_PREVIEW_DATASETS = (
     "announcement",
     "news",
     "research_report",
+    "investor_interaction",
 )
 INSTRUMENT_COVERAGE_DATASETS = (
     "stock_basic",
@@ -240,9 +261,11 @@ INSTRUMENT_COVERAGE_DATASETS = (
     "announcement",
     "news",
     "research_report",
+    "investor_interaction",
     "daily_news_factor",
     "daily_announcement_factor",
     "daily_research_report_factor",
+    "daily_investor_interaction_factor",
 )
 OBSERVED_REFERENCE_DATASETS = (
     "daily_bar",
@@ -251,9 +274,11 @@ OBSERVED_REFERENCE_DATASETS = (
     "announcement",
     "news",
     "research_report",
+    "investor_interaction",
     "daily_news_factor",
     "daily_announcement_factor",
     "daily_research_report_factor",
+    "daily_investor_interaction_factor",
 )
 ALL_INSTRUMENT_COVERAGE_DIMENSIONS = (
     "stock_basic",
@@ -265,9 +290,11 @@ ALL_INSTRUMENT_COVERAGE_DIMENSIONS = (
     "news",
     "announcement",
     "research_report",
+    "investor_interaction",
     "daily_news_factor",
     "daily_announcement_factor",
     "daily_research_report_factor",
+    "daily_investor_interaction_factor",
 )
 INSTRUMENT_TIMELINE_TABLES = {
     "daily_bar": [
@@ -329,6 +356,14 @@ INSTRUMENT_TIMELINE_TABLES = {
         "research_topic_strength",
         "research_sentiment_mean",
     ],
+    "daily_investor_interaction_factor": [
+        "question_count",
+        "reply_count",
+        "reply_delay_hours_mean",
+        "risk_topic_count",
+        "new_business_topic_count",
+        "sentiment_mean",
+    ],
 }
 RAW_FACTOR_INPUT_PURPOSES = {
     "stock_basic": "标的基础资料，用来识别代码、名称、交易所和行业",
@@ -340,6 +375,7 @@ RAW_FACTOR_INPUT_PURPOSES = {
     "announcement": "公告文本输入，用来生成公告数量、情绪和事件类型因子",
     "news": "新闻文本输入，用来生成新闻数量、情绪和事件类型因子",
     "research_report": "研报 metadata 输入，用来生成研报数量、机构覆盖、分析师覆盖和评级方向因子",
+    "investor_interaction": "互动问答输入，用来生成投资者关注度、回复延迟、风险和新业务主题因子",
 }
 
 
@@ -717,7 +753,7 @@ class QdcConsoleData:
             value = conn.execute(f"select max(trade_date) from {SILVER_SCHEMA}.daily_bar").fetchone()[0]
             if value:
                 return str(value)
-        for table in ("research_report", "announcement", "news"):
+        for table in ("investor_interaction", "research_report", "announcement", "news"):
             if table in silver_tables:
                 value = conn.execute(
                     f"select max(publish_date) from {SILVER_SCHEMA}.{table}"
@@ -754,6 +790,22 @@ class QdcConsoleData:
                 """,
             )
             if rows:
+                observed = self._observed_instruments(
+                    conn,
+                    silver_tables=silver_tables,
+                    date=date,
+                    datasets=OBSERVED_REFERENCE_DATASETS,
+                )
+                known = {str(row.get("instrument") or "") for row in rows}
+                missing_observed = [instrument for instrument in observed if instrument not in known]
+                if missing_observed:
+                    identity = self._instrument_identity_by_instrument(
+                        conn,
+                        silver_tables=silver_tables,
+                        instruments=missing_observed,
+                    )
+                    rows.extend(identity[instrument] for instrument in missing_observed)
+                    return rows, f"stock_basic_active+observed:{date}"
                 return rows, "stock_basic_active"
         if "universe_constituent" in silver_tables:
             snapshot = conn.execute(
@@ -1853,6 +1905,13 @@ class QdcConsoleData:
             table="research_report",
             date=date,
         )
+        investor_interaction_groups = self._daily_document_groups(
+            conn,
+            control_tables=control_tables,
+            silver_tables=silver_tables,
+            table="investor_interaction",
+            date=date,
+        )
         rows = []
         for identity in reference_rows[:limit]:
             instrument = str(identity.get("instrument") or "")
@@ -1877,14 +1936,25 @@ class QdcConsoleData:
             research_reports = research_report_groups.get(
                 instrument, {"count": 0, "documents": []}
             )
+            investor_interactions = investor_interaction_groups.get(
+                instrument, {"count": 0, "documents": []}
+            )
             row["raw_news_count" if mode == "factor" else "news_count"] = news["count"]
             row["raw_announcement_count" if mode == "factor" else "announcement_count"] = announcements["count"]
             row[
                 "raw_research_report_count" if mode == "factor" else "research_report_count"
             ] = research_reports["count"]
+            row[
+                (
+                    "raw_investor_interaction_count"
+                    if mode == "factor"
+                    else "investor_interaction_count"
+                )
+            ] = investor_interactions["count"]
             row["_news_documents"] = news["documents"]
             row["_announcement_documents"] = announcements["documents"]
             row["_research_report_documents"] = research_reports["documents"]
+            row["_investor_interaction_documents"] = investor_interactions["documents"]
             rows.append(row)
         return rows
 
@@ -1939,6 +2009,7 @@ class QdcConsoleData:
             "announcement": "announcement_id",
             "news": "news_id",
             "research_report": "research_report_id",
+            "investor_interaction": "investor_interaction_id",
         }
         id_field = id_fields.get(table, f"{table}_id")
         columns = self._columns(conn, SILVER_SCHEMA, table)
@@ -1952,6 +2023,16 @@ class QdcConsoleData:
                 "rating_change",
                 "industry",
                 "report_type",
+                "question_text",
+                "question_time",
+                "answer_text",
+                "answer_time",
+                "reply_status",
+                "reply_delay_hours",
+                "questioner",
+                "channel",
+                "topic_tags",
+                "sentiment_score",
                 *DOCUMENT_OBJECT_FIELDS,
             )
             if field in columns
@@ -2274,6 +2355,7 @@ class QdcConsoleData:
             "announcement": "announcement_id",
             "news": "news_id",
             "research_report": "research_report_id",
+            "investor_interaction": "investor_interaction_id",
         }
         id_field = id_fields.get(table, f"{table}_id")
         target_trade_dates = {str(trade_date) for trade_date in trade_dates if trade_date}
@@ -4589,6 +4671,7 @@ def _daily_document_key(row: dict[str, Any]) -> str:
         row.get("news_id")
         or row.get("announcement_id")
         or row.get("research_report_id")
+        or row.get("investor_interaction_id")
         or ""
     )
 
@@ -5038,7 +5121,7 @@ def _raw_factor_input_row(
         }
     elif dataset in {"daily_bar", "adj_factor", "price_limit", "trade_status"}:
         row = _raw_daily_input_row(dataset, record, instrument)
-    elif dataset in {"news", "announcement"}:
+    elif dataset in {"news", "announcement", "research_report", "investor_interaction"}:
         row = _raw_document_input_row(dataset, record, instrument)
     else:
         row = {
@@ -5152,11 +5235,12 @@ def _raw_document_input_row(
         "publish_date": _raw_record_date(record),
         "instrument": _raw_record_instrument(record) or instrument,
         "symbol": _raw_first_value(record, _raw_symbol_keys()),
-        "title": _raw_first_value(record, ("title", "新闻标题", "公告标题", "标题")),
+        "title": _raw_first_value(record, ("title", "mainContent", "问题", "新闻标题", "公告标题", "标题")),
         "url": _raw_first_value(record, ("url", "链接", "公告链接", "新闻链接", "网址", "URL")),
         "source": _raw_first_value(record, ("source", "来源", "新闻来源", "文章来源")),
         "document_type": _raw_first_value(record, ("document_type", "公告类型", "类型", "category")),
         "keyword": _raw_first_value(record, ("keyword", "关键词")),
+        "answer": _raw_first_value(record, ("answer_text", "attachedContent", "回答内容", "回答")),
     }
 
 
@@ -5181,6 +5265,8 @@ def _raw_symbol_keys() -> tuple[str, ...]:
         "成分券代码",
         "样本代码",
         "SECURITY_CODE",
+        "stockCode",
+        "source_sec_code",
     )
 
 
@@ -5248,6 +5334,8 @@ def _raw_record_matches_instrument(record: dict[str, Any], instrument: str) -> b
         "成分券代码",
         "样本代码",
         "SECURITY_CODE",
+        "stockCode",
+        "source_sec_code",
     ):
         if key in record and _raw_value_matches_instrument(record.get(key), instrument):
             return True
@@ -5294,6 +5382,8 @@ def _raw_record_date(record: dict[str, Any]) -> str | None:
         "新闻时间",
         "发布时间",
         "公告时间",
+        "pubDate",
+        "updateDate",
         "time",
     ):
         if key in record:
@@ -5307,6 +5397,11 @@ def _normalize_date_text(value: Any) -> str | None:
     text = str(value).strip()
     if len(text) >= 10 and text[4] == "-" and text[7] == "-":
         return text[:10]
+    if text.isdigit() and len(text) >= 12:
+        try:
+            return datetime.fromtimestamp(int(text) / 1000).date().isoformat()
+        except (OSError, OverflowError, ValueError):
+            return None
     digits = "".join(ch for ch in text if ch.isdigit())
     if len(digits) >= 8:
         return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
@@ -6053,9 +6148,11 @@ def _daily_preview_columns(mode: str) -> list[str]:
             "news_count",
             "announcement_count",
             "research_report_count",
+            "investor_interaction_count",
             "raw_news_count",
             "raw_announcement_count",
             "raw_research_report_count",
+            "raw_investor_interaction_count",
             *fields,
         ])
     fields = [field for table_fields in DAILY_RAW_WIDE_TABLES.values() for field in table_fields]
@@ -6064,6 +6161,7 @@ def _daily_preview_columns(mode: str) -> list[str]:
         "news_count",
         "announcement_count",
         "research_report_count",
+        "investor_interaction_count",
         *fields,
     ]
 

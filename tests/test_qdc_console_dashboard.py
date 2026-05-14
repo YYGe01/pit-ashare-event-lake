@@ -329,6 +329,22 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
             }
         ]
     )
+    silver.upsert_investor_interactions(
+        [
+            {
+                "investor_interaction_id": "ir-1",
+                "publish_date": "2026-05-13",
+                "publish_time": "2026-05-13 10:00:00",
+                "instrument": "SH600000",
+                "title": "请问公司新业务进展如何？",
+                "source_id": "cninfo_investor_interaction",
+                "answer_text": "公司会按规则披露相关进展。",
+                "answer_time": "2026-05-13 11:00:00",
+                "reply_status": "replied",
+                "reply_delay_hours": 1.0,
+            }
+        ]
+    )
 
     payload = QdcConsoleData(settings).daily_wide_preview(
         date="2026-05-13",
@@ -338,7 +354,7 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
 
     rows = {row["instrument"]: row for row in payload["rows"]}
     assert payload["reference_source"] == "stock_basic_active"
-    assert payload["columns"][:8] == [
+    assert payload["columns"][:9] == [
         "instrument",
         "symbol",
         "exchange",
@@ -347,17 +363,21 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
         "news_count",
         "announcement_count",
         "research_report_count",
+        "investor_interaction_count",
     ]
     assert payload["row_count"] == 2
     assert set(rows) == {"SH600000", "SZ000001"}
     assert rows["SH600000"]["announcement_count"] == 1
     assert rows["SH600000"]["news_count"] == 0
     assert rows["SH600000"]["research_report_count"] == 1
+    assert rows["SH600000"]["investor_interaction_count"] == 1
     assert rows["SH600000"]["_research_report_documents"][0]["institution"] == "单元证券"
     assert rows["SH600000"]["_research_report_documents"][0]["rating"] == "买入"
+    assert rows["SH600000"]["_investor_interaction_documents"][0]["reply_status"] == "replied"
     assert rows["SZ000001"]["announcement_count"] == 0
     assert rows["SZ000001"]["news_count"] == 0
     assert rows["SZ000001"]["research_report_count"] == 0
+    assert rows["SZ000001"]["investor_interaction_count"] == 0
 
     factor_payload = QdcConsoleData(settings).daily_wide_preview(
         date="2026-05-13",
@@ -365,7 +385,7 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
         limit=20,
     )
 
-    assert factor_payload["columns"][:11] == [
+    assert factor_payload["columns"][:13] == [
         "instrument",
         "symbol",
         "exchange",
@@ -374,9 +394,11 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
         "news_count",
         "announcement_count",
         "research_report_count",
+        "investor_interaction_count",
         "raw_news_count",
         "raw_announcement_count",
         "raw_research_report_count",
+        "raw_investor_interaction_count",
     ]
 
 

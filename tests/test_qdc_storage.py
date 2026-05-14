@@ -3211,6 +3211,127 @@ def test_qdc_crawl_daily_collects_eastmoney_research_reports(
     assert row[6] == "https://pdf.dfcfw.com/pdf/H3_AP202605110001_1.pdf"
 
 
+def test_qdc_crawl_daily_collects_cninfo_investor_interactions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    database.init_schema()
+
+    question_time = int(
+        pd.Timestamp("2026-05-14 09:30:00", tz="Asia/Shanghai").timestamp() * 1000
+    )
+    answer_time = int(
+        pd.Timestamp("2026-05-14 11:00:00", tz="Asia/Shanghai").timestamp() * 1000
+    )
+
+    class InvestorInteractionResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return self.payload
+
+    request_params = []
+
+    def fake_post(url, **kwargs):
+        params = kwargs.get("params") or {}
+        request_params.append((url, params))
+        if url.endswith("/queryKeyboardInfo"):
+            return InvestorInteractionResponse(
+                {
+                    "statusCode": 200,
+                    "message": "success",
+                    "data": [
+                        {
+                            "stockCode": "002594",
+                            "shortName": "比亚迪",
+                            "secid": "gshk0001211",
+                        }
+                    ],
+                }
+            )
+        return InvestorInteractionResponse(
+            {
+                "pageNo": 1,
+                "pageSize": 10,
+                "total": 1,
+                "totalPage": 1,
+                "rows": [
+                    {
+                        "indexId": "2267000000000000001",
+                        "trade": ["制造业"],
+                        "mainContent": "请问公司 AI 机器人新业务进展如何？",
+                        "pubDate": question_time,
+                        "stockCode": "002594",
+                        "companyShortName": "比亚迪",
+                        "authorName": "irm-unit-test",
+                        "pubClient": "4",
+                        "attachedContent": "公司持续推进人工智能和机器人相关业务。",
+                        "attachedPubDate": answer_time,
+                        "updateDate": answer_time,
+                    }
+                ],
+            }
+        )
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-daily",
+                "--date",
+                "2026-05-14",
+                "--source-id",
+                "cninfo_investor_interaction",
+                "--symbols",
+                "SZ002594",
+                "--page-size",
+                "10",
+            ]
+        )
+        == 0
+    )
+
+    assert request_params[1][1]["startDay"] == "2026-05-14"
+    assert request_params[1][1]["endDay"] == "2026-05-14"
+    assert request_params[1][1]["orgId"] == "gshk0001211"
+    assert database.silver_table_counts()["investor_interaction"] == 1
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            select
+              publish_date,
+              instrument,
+              title,
+              answer_text,
+              reply_status,
+              reply_delay_hours,
+              topic_tags
+            from qdc_silver.investor_interaction
+            """
+        ).fetchone()
+    assert (str(row[0]), row[1], row[2], row[3], row[4]) == (
+        "2026-05-14",
+        "SZ002594",
+        "请问公司 AI 机器人新业务进展如何？",
+        "公司持续推进人工智能和机器人相关业务。",
+        "replied",
+    )
+    assert row[5] == 1.5
+    assert "new_business" in row[6]
+
+
 def test_qdc_crawl_exhausted_dataset_tolerates_one_failed_source() -> None:
     assert (
         _crawl_exhausted_datasets(
@@ -3325,13 +3446,14 @@ def test_qdc_crawl_daily_control_only_plans_and_runs_default_sources(tmp_path: P
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 5
+    assert len(tasks) == 6
     assert {task["source_id"] for task in tasks} == {
         "cninfo_announcement",
         "sse_announcement",
         "sina_finance_news",
         "eastmoney_roll_news",
         "eastmoney_research_report",
+        "cninfo_investor_interaction",
     }
     assert {task["status"] for task in tasks} == {"success"}
     assert database.table_counts()["crawl_run"] == 1
@@ -4029,13 +4151,14 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 5
+    assert len(tasks) == 6
     assert {task["source_id"] for task in tasks} == {
         "cninfo_announcement",
         "sse_announcement",
         "sina_finance_news",
         "eastmoney_roll_news",
         "eastmoney_research_report",
+        "cninfo_investor_interaction",
     }
     assert {task["status"] for task in tasks} == {"success"}
     with database.connect() as conn:
@@ -4053,7 +4176,7 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
             """
         ).fetchone()
     assert crawl_run is not None
-    assert crawl_run[0:3] == ("success", 5, 5)
+    assert crawl_run[0:3] == ("success", 6, 6)
     crawl_parameters = json.loads(crawl_run[3])
     assert crawl_parameters["command"] == "daily-pipeline"
     assert crawl_parameters["instrument_filter"] == []
@@ -4063,8 +4186,8 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
     parameters = json.loads(pipeline_job[0])
     assert parameters["crawl_documents"] is True
     assert parameters["crawl_status"] == "ok"
-    assert parameters["crawl_planned_count"] == 5
-    assert parameters["crawl_ran_count"] == 5
+    assert parameters["crawl_planned_count"] == 6
+    assert parameters["crawl_ran_count"] == 6
 
 
 def test_qdc_plan_backfill_rejects_unsupported_source(tmp_path: Path) -> None:
@@ -4714,6 +4837,22 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
             },
         ]
     )
+    silver.upsert_investor_interactions(
+        [
+            {
+                "investor_interaction_id": "ir1",
+                "publish_date": "2026-05-11",
+                "publish_time": "2026-05-11 09:30:00",
+                "instrument": "SH600000",
+                "title": "请问公司 AI 机器人新业务进展如何，是否存在退市风险？",
+                "source_id": "cninfo_investor_interaction",
+                "answer_text": "公司持续推进人工智能和机器人业务，不存在应披露而未披露风险。",
+                "answer_time": "2026-05-11 10:30:00",
+                "reply_status": "replied",
+                "reply_delay_hours": 1.0,
+            }
+        ]
+    )
 
     assert (
         main(
@@ -4777,6 +4916,19 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
             where instrument = 'SH600000'
             """
         ).fetchone()
+        investor_interaction_row = conn.execute(
+            """
+            select
+              question_count,
+              reply_count,
+              reply_delay_hours_mean,
+              risk_topic_count,
+              new_business_topic_count,
+              sentiment_mean
+            from qdc_silver.daily_investor_interaction_factor
+            where instrument = 'SH600000'
+            """
+        ).fetchone()
 
     assert (
         news_row[0],
@@ -4813,6 +4965,8 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
     ) == (2.0, 0.0, 0.0, 1.0, 1.0, 0.15)
     assert research_report_row[:5] == (1.0, 1.0, 1.0, 1.0, 1.0)
     assert float(research_report_row[5]) > 0
+    assert investor_interaction_row[:5] == (1.0, 1.0, 1.0, 1.0, 1.0)
+    assert float(investor_interaction_row[5]) < 0
 
 
 def test_qdc_classify_text_event_rule_and_mock_litellm(
@@ -5065,9 +5219,11 @@ def test_silver_store_upserts_core_research_tables(tmp_path: Path) -> None:
         "announcement": 0,
         "news": 0,
         "research_report": 0,
+        "investor_interaction": 0,
         "daily_news_factor": 0,
         "daily_announcement_factor": 0,
         "daily_research_report_factor": 0,
+        "daily_investor_interaction_factor": 0,
     }
 
     silver.upsert_daily_bar(
@@ -5334,7 +5490,7 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> No
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["object_id_count"] == 53
+    assert payload["object_id_count"] == 59
     assert len(payload["object_id_sample"]) == 5
     assert "object_ids" not in payload
 
@@ -5356,7 +5512,7 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> No
     ).read_bytes()
     assert struct.unpack("<fff", sentiment_bin) == (0.0, 0.5, 0.0)
     qlib_objects = database.list_source_objects(dataset="qlib_export", layer="qlib")
-    assert len(qlib_objects) == 53
+    assert len(qlib_objects) == 59
 
 
 def test_qdc_external_factor_fields_match_qlib_handler() -> None:

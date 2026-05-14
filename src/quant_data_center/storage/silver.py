@@ -61,6 +61,27 @@ DOCUMENT_OPTIONAL_FIELDS = {
         "raw_object_id",
         "parser_version",
     ],
+    "investor_interaction": [
+        "publish_time",
+        "source_record_id",
+        "source_sec_code",
+        "source_sec_name",
+        "question_text",
+        "question_time",
+        "answer_text",
+        "answer_time",
+        "reply_status",
+        "reply_delay_hours",
+        "questioner",
+        "industry",
+        "channel",
+        "topic_tags",
+        "sentiment_score",
+        "observed_at",
+        "collect_time",
+        "raw_object_id",
+        "parser_version",
+    ],
 }
 PDF_METADATA_FIELDS = {"pdf_sha256", "pdf_size_bytes", "pdf_object_id"}
 
@@ -356,6 +377,13 @@ class SilverStore:
             records=records,
         )
 
+    def upsert_investor_interactions(self, records: list[dict[str, Any]]) -> int:
+        return self._upsert_document_table(
+            table="investor_interaction",
+            id_field="investor_interaction_id",
+            records=records,
+        )
+
     def upsert_daily_news_factor(self, records: list[dict[str, Any]]) -> int:
         return self._upsert_factor_table(
             table="daily_news_factor",
@@ -416,6 +444,20 @@ class SilverStore:
                 "research_risk_count",
                 "research_topic_strength",
                 "research_sentiment_mean",
+            ],
+            records=records,
+        )
+
+    def upsert_daily_investor_interaction_factor(self, records: list[dict[str, Any]]) -> int:
+        return self._upsert_factor_table(
+            table="daily_investor_interaction_factor",
+            factor_fields=[
+                "question_count",
+                "reply_count",
+                "reply_delay_hours_mean",
+                "risk_topic_count",
+                "new_business_topic_count",
+                "sentiment_mean",
             ],
             records=records,
         )

@@ -302,6 +302,35 @@ create table if not exists qdc_silver.research_report (
   updated_at timestamp not null
 );
 
+create table if not exists qdc_silver.investor_interaction (
+  investor_interaction_id varchar primary key,
+  publish_date date not null,
+  publish_time timestamp,
+  instrument varchar not null,
+  title varchar not null,
+  url varchar,
+  source_id varchar not null,
+  source_record_id varchar,
+  source_sec_code varchar,
+  source_sec_name varchar,
+  question_text varchar,
+  question_time timestamp,
+  answer_text varchar,
+  answer_time timestamp,
+  reply_status varchar,
+  reply_delay_hours double,
+  questioner varchar,
+  industry varchar,
+  channel varchar,
+  topic_tags varchar,
+  sentiment_score double,
+  observed_at timestamp,
+  collect_time timestamp,
+  raw_object_id varchar,
+  parser_version varchar,
+  updated_at timestamp not null
+);
+
 create table if not exists qdc_silver.daily_news_factor (
   trade_date date not null,
   instrument varchar not null,
@@ -349,6 +378,20 @@ create table if not exists qdc_silver.daily_announcement_factor (
   primary key (trade_date, instrument)
 );
 
+create table if not exists qdc_silver.daily_investor_interaction_factor (
+  trade_date date not null,
+  instrument varchar not null,
+  question_count double not null,
+  reply_count double not null,
+  reply_delay_hours_mean double not null,
+  risk_topic_count double not null,
+  new_business_topic_count double not null,
+  sentiment_mean double not null,
+  source_id varchar not null,
+  updated_at timestamp not null,
+  primary key (trade_date, instrument)
+);
+
 create table if not exists qdc_silver.daily_research_report_factor (
   trade_date date not null,
   instrument varchar not null,
@@ -378,8 +421,10 @@ SILVER_TABLES = [
     "announcement",
     "news",
     "research_report",
+    "investor_interaction",
     "daily_news_factor",
     "daily_announcement_factor",
+    "daily_investor_interaction_factor",
     "daily_research_report_factor",
 ]
 
@@ -435,6 +480,27 @@ SILVER_SCHEMA_MIGRATIONS = {
         "raw_object_id": "varchar",
         "parser_version": "varchar",
     },
+    "investor_interaction": {
+        "publish_time": "timestamp",
+        "source_record_id": "varchar",
+        "source_sec_code": "varchar",
+        "source_sec_name": "varchar",
+        "question_text": "varchar",
+        "question_time": "timestamp",
+        "answer_text": "varchar",
+        "answer_time": "timestamp",
+        "reply_status": "varchar",
+        "reply_delay_hours": "double",
+        "questioner": "varchar",
+        "industry": "varchar",
+        "channel": "varchar",
+        "topic_tags": "varchar",
+        "sentiment_score": "double",
+        "observed_at": "timestamp",
+        "collect_time": "timestamp",
+        "raw_object_id": "varchar",
+        "parser_version": "varchar",
+    },
     "daily_news_factor": {
         "news_sentiment_mean": "double default 0",
         "news_positive_count": "double default 0",
@@ -477,5 +543,13 @@ SILVER_SCHEMA_MIGRATIONS = {
         "research_risk_count": "double default 0",
         "research_topic_strength": "double default 0",
         "research_sentiment_mean": "double default 0",
+    },
+    "daily_investor_interaction_factor": {
+        "question_count": "double default 0",
+        "reply_count": "double default 0",
+        "reply_delay_hours_mean": "double default 0",
+        "risk_topic_count": "double default 0",
+        "new_business_topic_count": "double default 0",
+        "sentiment_mean": "double default 0",
     },
 }

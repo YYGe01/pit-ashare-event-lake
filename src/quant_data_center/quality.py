@@ -22,8 +22,10 @@ SUPPORTED_QUALITY_DATASETS = {
     "announcement",
     "news",
     "research_report",
+    "investor_interaction",
     "daily_news_factor",
     "daily_announcement_factor",
+    "daily_investor_interaction_factor",
     "daily_research_report_factor",
 }
 DOCUMENT_PUBLISH_TIME_REQUIRED_SOURCES = {
@@ -42,6 +44,7 @@ DOCUMENT_PUBLISH_TIME_REQUIRED_SOURCES = {
     "cls",
     "yicai",
     "eastmoney_research_report",
+    "cninfo_investor_interaction",
 }
 
 
@@ -108,7 +111,7 @@ class QualityChecker:
         params: list[Any] = []
         date_field = (
             "publish_date"
-            if dataset in {"announcement", "news", "research_report"}
+            if dataset in {"announcement", "news", "research_report", "investor_interaction"}
             else "trade_date"
         )
         if dataset not in {"stock_basic", "universe_constituent"}:
@@ -124,7 +127,7 @@ class QualityChecker:
             order_by = "snapshot_date, universe, instrument"
         if dataset == "trade_calendar":
             order_by = "trade_date, calendar_id"
-        if dataset in {"announcement", "news", "research_report"}:
+        if dataset in {"announcement", "news", "research_report", "investor_interaction"}:
             order_by = "publish_date, instrument"
         with self.database.connect() as conn:
             return conn.execute(
@@ -144,8 +147,10 @@ class QualityChecker:
             "announcement": _check_document_table,
             "news": _check_document_table,
             "research_report": _check_document_table,
+            "investor_interaction": _check_document_table,
             "daily_news_factor": _check_count_factor,
             "daily_announcement_factor": _check_count_factor,
+            "daily_investor_interaction_factor": _check_count_factor,
             "daily_research_report_factor": _check_count_factor,
         }
         return checks[dataset](frame)
@@ -365,6 +370,8 @@ def _check_count_factor(frame: pd.DataFrame) -> list[dict[str, Any]]:
         dataset = "daily_news_factor"
     elif "research_report_count" in frame.columns:
         dataset = "daily_research_report_factor"
+    elif "question_count" in frame.columns:
+        dataset = "daily_investor_interaction_factor"
     else:
         dataset = "daily_announcement_factor"
     count_fields = [column for column in frame.columns if column.endswith("_count")]

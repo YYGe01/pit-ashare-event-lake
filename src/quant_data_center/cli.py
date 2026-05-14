@@ -22,6 +22,9 @@ from quant_data_center.console import run_console
 from quant_data_center.crawlers.registry import crawler_source_spec, enabled_daily_source_specs
 from quant_data_center.crawlers.sources.cninfo import CninfoAnnouncementCrawler
 from quant_data_center.crawlers.sources.eastmoney import EastmoneyRollNewsCrawler
+from quant_data_center.crawlers.sources.investor_interaction import (
+    CninfoInvestorInteractionCrawler,
+)
 from quant_data_center.crawlers.sources.nbd import NbdCompanyNewsCrawler
 from quant_data_center.crawlers.sources.research_report import EastmoneyResearchReportCrawler
 from quant_data_center.crawlers.sources.sina import SinaFinanceNewsCrawler
@@ -1001,6 +1004,18 @@ def _run_real_crawl_task(
             request_timeout_seconds=request_timeout_seconds,
             source_timeout_seconds=source_timeout_seconds,
         )
+    if source_id == "cninfo_investor_interaction":
+        spec = crawler_source_spec(source_id)
+        return CninfoInvestorInteractionCrawler(settings).crawl_date(
+            source_id=source_id,
+            crawl_date=str(task["crawl_date"]),
+            page_size=page_size,
+            max_pages=max_pages,
+            min_delay_seconds=spec.min_delay_seconds,
+            instrument_filter=instrument_filter,
+            request_timeout_seconds=request_timeout_seconds,
+            source_timeout_seconds=source_timeout_seconds,
+        )
     if source_id == "nbd_company_news":
         spec = crawler_source_spec(source_id)
         return NbdCompanyNewsCrawler(settings).crawl_date(
@@ -1636,7 +1651,7 @@ def _ensure_stock_basic_for_document_mapping(
 ) -> dict[str, Any]:
     if control_only or instrument_filter_mode != "stock_basic_mapping":
         return {"required": False, "refreshed": False}
-    if not any(str(task["dataset"]) == "news" for task in selected_tasks):
+    if not any(str(task["dataset"]) in {"news", "investor_interaction"} for task in selected_tasks):
         return {"required": False, "refreshed": False}
 
     active_count = len(database.stock_basic_instruments(active_only=True))
@@ -2016,7 +2031,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["rule", "llm"],
         help="Optional provider override; defaults to llm.text_event.provider in config",
     )
-    classify_parser.add_argument("--document-type", choices=["news", "announcement"], default="news")
+    classify_parser.add_argument(
+        "--document-type",
+        choices=["news", "announcement", "investor_interaction"],
+        default="news",
+    )
     classify_parser.add_argument("--title", required=True)
     classify_parser.add_argument("--body")
     classify_parser.set_defaults(func=cmd_classify_text_event)

@@ -46,6 +46,7 @@ qdc crawl-daily --date 2026-05-13 --source-id cninfo_announcement --page-size 10
 qdc crawl-daily --date 2026-05-13 --source-id sse_announcement --page-size 100 --skip-pdf-download
 qdc crawl-daily --date 2026-05-13 --source-id eastmoney_roll_news --page-size 100
 qdc crawl-daily --date 2026-05-13 --source-id eastmoney_research_report --page-size 100
+qdc crawl-daily --date 2026-05-14 --source-id cninfo_investor_interaction --symbols SZ002594 --page-size 20 --max-pages 1
 qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
 qdc sync-parquet --layer all
 qdc quality
@@ -54,6 +55,7 @@ qdc console --host 127.0.0.1 --port 8765
 
 `crawl-run` / `crawl-daily` 默认只采公告 metadata，不下载 PDF；需要留存公开 PDF 时显式加 `--download-pdfs`，可再配合 `--pdf-limit` 控制 smoke 下载量。
 滚动新闻源会按目标日期窗口向后翻页，跳过目标日之后的新闻，直到完整覆盖目标日；完整采集不建议传 `--max-pages`，只做接口 smoke 时再用它限制页数。
+互动问答源 `cninfo_investor_interaction` 按标的访问互动易公开问答接口；建议日常 smoke 先传 `--symbols`，未传标的时会从 `stock_basic` 活跃标的中取前 50 个作为保护性默认值。
 新闻采集依赖 `qdc_silver.stock_basic` 做标题到 instrument 的映射；当本地 `stock_basic` 为空时，`crawl-run` / `crawl-daily` 会先用 AkShare 初始化映射基准。`crawl-daily` 会自动重跑同日 failed 任务；若修复映射或解析逻辑后需要重跑已 success 的同日任务，显式加 `--force`。
 
 ```powershell
@@ -121,6 +123,7 @@ QDC external factors 是否能和该日历、instrument 对齐
 | 新闻 | `eastmoney_roll_news` | 当日滚动新闻补位 |
 | 新闻 | `sina_finance_news` | 近实时补位，历史日期可靠性有限 |
 | 研报 | `eastmoney_research_report` | 东方财富个股研报 metadata，默认不下载 PDF |
+| 互动问答 | `cninfo_investor_interaction` | 互动易公开问答 metadata，按标的采集 |
 | 新闻 | `nbd_company_news` | 手动 smoke 源；已退出默认每日源 |
 
 额外 opt-in 新闻源：
@@ -143,7 +146,6 @@ yicai
 
 ```text
 研报全文 / 研报评论
-互动问答 / 投资者关系
 股吧 / 雪球 / 公开舆情
 交易所监管问询和处罚
 法律诉讼和执行信息
@@ -202,6 +204,12 @@ $announcement_regulatory_count
 $research_report_count
 $research_institution_count
 $research_rating_positive_count
+$question_count
+$reply_count
+$reply_delay_hours_mean
+$risk_topic_count
+$new_business_topic_count
+$sentiment_mean
 ```
 
 当前仓库保留 Qlib handler 示例：

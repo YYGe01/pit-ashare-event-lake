@@ -6,6 +6,7 @@ from typing import Any
 
 from quant_data_center.factor_engine import (
     build_announcement_factor_rows,
+    build_investor_interaction_factor_rows,
     build_news_factor_rows,
     build_research_report_factor_rows,
 )
@@ -14,7 +15,13 @@ from quant_data_center.storage.database import QdcDatabase
 from quant_data_center.storage.silver import SilverStore
 
 
-SUPPORTED_FACTOR_SETS = {"all", "news_v1", "announcement_v1", "research_report_v1"}
+SUPPORTED_FACTOR_SETS = {
+    "all",
+    "news_v1",
+    "announcement_v1",
+    "research_report_v1",
+    "investor_interaction_v1",
+}
 
 
 class FactorBuilder:
@@ -68,6 +75,21 @@ class FactorBuilder:
                     "factor_set": "research_report_v1",
                     "row_count": self.silver.upsert_daily_research_report_factor(
                         research_report_rows
+                    ),
+                }
+            )
+        if factor_set in {"all", "investor_interaction_v1"}:
+            investor_interaction_rows = build_investor_interaction_factor_rows(
+                self.database,
+                start_date=start_date,
+                end_date=end_date,
+                source_id="qdc_investor_interaction_v1",
+            )
+            results.append(
+                {
+                    "factor_set": "investor_interaction_v1",
+                    "row_count": self.silver.upsert_daily_investor_interaction_factor(
+                        investor_interaction_rows
                     ),
                 }
             )
