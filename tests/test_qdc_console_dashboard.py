@@ -8,7 +8,6 @@ from pathlib import Path
 from quant_data_center.cli import (
     DEFAULT_CRAWL_SOURCE_PARALLELISM,
     _daily_pipeline_document_instrument_filter,
-    _qlib_provider_stock_instruments,
 )
 from quant_data_center.console import (
     DailyPipelineProcessManager,
@@ -62,25 +61,6 @@ universes:
         encoding="utf-8",
     )
     return config_path
-
-
-def _write_qlib_instruments(settings: QdcSettings) -> None:
-    instruments_path = settings.qlib_root / "cn_data" / "instruments" / "all.txt"
-    instruments_path.parent.mkdir(parents=True)
-    instruments_path.write_text(
-        "\n".join(
-            [
-                "SH000300\t2005-01-04\t2026-05-13",
-                "SH600000\t2000-01-04\t2026-05-13",
-                "SZ000001\t2000-01-04\t2026-05-13",
-                "SZ399300\t2005-01-04\t2026-05-13",
-                "BJ430017\t2023-05-31\t2025-09-30",
-                "SH600001\t2000-01-04\t2009-12-15",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
 
 
 def test_qdc_daily_status_returns_beginner_dashboard_sections(tmp_path: Path) -> None:
@@ -281,15 +261,10 @@ def test_qdc_console_builds_crawl_daily_command(tmp_path: Path) -> None:
     assert "--control-only" in command
 
 
-def test_qdc_crawl_defaults_to_serial_provider_stock_universe(tmp_path: Path) -> None:
+def test_qdc_crawl_defaults_to_serial_stock_basic_mapping(tmp_path: Path) -> None:
     settings = QdcSettings.from_yaml(_write_config(tmp_path))
-    _write_qlib_instruments(settings)
 
     assert DEFAULT_CRAWL_SOURCE_PARALLELISM == 1
-    assert _qlib_provider_stock_instruments(settings, trade_date="2026-05-13") == [
-        "SH600000",
-        "SZ000001",
-    ]
     instrument_filter, mode = _daily_pipeline_document_instrument_filter(
         settings=settings,
         universe="all_a",
@@ -299,16 +274,36 @@ def test_qdc_crawl_defaults_to_serial_provider_stock_universe(tmp_path: Path) ->
         crawl_date="2026-05-13",
     )
 
-    assert mode == "qlib_provider"
-    assert instrument_filter == ["SH600000", "SZ000001"]
+    assert mode == "all_market_stock_basic_mapping"
+    assert instrument_filter is None
 
 
-def test_qdc_daily_preview_keeps_qlib_provider_symbols_without_documents(tmp_path: Path) -> None:
+def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None:
     settings = QdcSettings.from_yaml(_write_config(tmp_path))
     database = QdcDatabase(settings)
     database.init_schema()
-    _write_qlib_instruments(settings)
-    SilverStore(settings).upsert_announcements(
+    silver = SilverStore(settings)
+    silver.upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+            {
+                "instrument": "SZ000001",
+                "symbol": "000001",
+                "exchange": "SZ",
+                "name": "平安银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+        ]
+    )
+    silver.upsert_announcements(
         [
             {
                 "announcement_id": "ann-1",
@@ -327,7 +322,7 @@ def test_qdc_daily_preview_keeps_qlib_provider_symbols_without_documents(tmp_pat
     )
 
     rows = {row["instrument"]: row for row in payload["rows"]}
-    assert payload["reference_source"] == "qlib_provider"
+    assert payload["reference_source"] == "stock_basic_active"
     assert payload["row_count"] == 2
     assert set(rows) == {"SH600000", "SZ000001"}
     assert rows["SH600000"]["announcement_count"] == 1

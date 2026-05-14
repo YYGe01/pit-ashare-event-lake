@@ -32,7 +32,6 @@ from quant_data_center.crawlers.sources.vendor_news import (
 from quant_data_center.exports.qlib import (
     QlibExporter,
     QlibProviderVerifier,
-    qlib_provider_stock_instruments,
 )
 from quant_data_center.factor_engine import build_text_event_classifier
 from quant_data_center.factors import FactorBuilder
@@ -1576,11 +1575,9 @@ def _daily_pipeline_document_instrument_filter(
 ) -> tuple[list[str] | None, str]:
     if parse_symbols(symbols_arg):
         return symbols, "explicit_symbols"
-    provider_symbols = _qlib_provider_stock_instruments(settings, trade_date=crawl_date)
-    if provider_symbols:
-        return provider_symbols, "qlib_provider"
+    del settings, crawl_date
     if all_market or _is_full_market_universe(universe):
-        return None, "all_market_unfiltered"
+        return None, "all_market_stock_basic_mapping"
     return symbols, "universe"
 
 
@@ -1593,18 +1590,8 @@ def _resolve_crawl_document_instrument_filter(
     explicit_symbols = parse_symbols(symbols_arg)
     if explicit_symbols:
         return explicit_symbols, "explicit_symbols"
-    provider_symbols = _qlib_provider_stock_instruments(settings, trade_date=crawl_date)
-    if provider_symbols:
-        return provider_symbols, "qlib_provider"
-    return None, "unfiltered"
-
-
-def _qlib_provider_stock_instruments(
-    settings: QdcSettings,
-    *,
-    trade_date: str | None = None,
-) -> list[str]:
-    return qlib_provider_stock_instruments(settings, trade_date=trade_date)
+    del settings, crawl_date
+    return None, "stock_basic_mapping"
 
 
 def _crawl_exhausted_datasets(
