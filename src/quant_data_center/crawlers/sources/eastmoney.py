@@ -28,6 +28,7 @@ from quant_data_center.utils.instruments import normalize_instrument
 EASTMONEY_ROLL_NEWS_URL_TEMPLATE = "https://roll.eastmoney.com/default_{page_num}.html"
 EASTMONEY_REFERER = "https://roll.eastmoney.com/"
 PARSER_VERSION = "eastmoney_roll_news_v1"
+EASTMONEY_LIST_REQUEST_TIMEOUT_SECONDS = 10.0
 MAX_BODY_PREVIEW_CHARS = 1200
 EASTMONEY_BODY_FETCH_LIMIT = 0
 EASTMONEY_BODY_REQUEST_TIMEOUT_SECONDS = 5.0
@@ -67,7 +68,10 @@ class EastmoneyRollNewsCrawler:
                 headers=_headers(),
                 timeout=request_timeout(
                     deadline=deadline,
-                    default_seconds=request_timeout_seconds,
+                    default_seconds=min(
+                        request_timeout_seconds,
+                        EASTMONEY_LIST_REQUEST_TIMEOUT_SECONDS,
+                    ),
                     source_id=source_id,
                 ),
                 use_environment_proxy=self.settings.use_environment_proxy,
@@ -114,6 +118,10 @@ class EastmoneyRollNewsCrawler:
                     "page_size": page_size,
                     "max_pages": max_pages,
                     "instrument_filter": instrument_filter or [],
+                    "list_request_timeout_seconds": min(
+                        request_timeout_seconds,
+                        EASTMONEY_LIST_REQUEST_TIMEOUT_SECONDS,
+                    ),
                 },
                 "pages": pages,
             },
@@ -280,6 +288,7 @@ def _normalize_news(
     raw_object_id: str,
 ) -> list[dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
+    instrument_index = _build_instrument_index(instrument_hints)
     for row in rows:
         title = _clean_text(row.get("title"))
         publish_time = _clean_text(row.get("publish_time"))
@@ -288,7 +297,7 @@ def _normalize_news(
             continue
         url = _clean_text(row.get("url"))
         source_record_id = _article_id(url) or url or title
-        for instrument in _match_instruments(title=title, url=url, hints=instrument_hints):
+        for instrument in _match_instruments(title=title, url=url, index=instrument_index):
             news_id = f"eastmoney_{_slug(source_record_id)}_{instrument}"
             records[news_id] = {
                 "news_id": news_id,
@@ -305,6 +314,23 @@ def _normalize_news(
                 "parser_version": PARSER_VERSION,
             }
     return list(records.values())
+
+
+def _build_instrument_index(hints: list[dict[str, str]]) -> dict[str, Any]:
+    symbol_to_instruments: dict[str, set[str]] = {}
+    name_pairs: list[tuple[str, str]] = []
+    for hint in hints:
+        instrument = hint["instrument"]
+        symbol = hint["symbol"]
+        name = hint["name"]
+        if symbol:
+            symbol_to_instruments.setdefault(symbol, set()).add(instrument)
+        if name:
+            name_pairs.append((name, instrument))
+    return {
+        "symbol_to_instruments": symbol_to_instruments,
+        "name_pairs": name_pairs,
+    }
 
 
 def _is_parsable_row(row: dict[str, Any]) -> bool:
@@ -527,20 +553,16 @@ def _normalize_body_text(value: str) -> str:
     return "\n".join(lines)
 
 
-def _match_instruments(
-    *, title: str, url: str | None, hints: list[dict[str, str]]
-) -> list[str]:
+def _match_instruments(*, title: str, url: str | None, index: dict[str, Any]) -> list[str]:
     haystack = f"{title} {url or ''}"
-    matched = []
-    for hint in hints:
-        symbol = hint["symbol"]
-        name = hint["name"]
-        if symbol and re.search(rf"(?<!\d){re.escape(symbol)}(?!\d)", haystack):
-            matched.append(hint["instrument"])
-            continue
-        if name and name in haystack:
-            matched.append(hint["instrument"])
-    return sorted(set(matched))
+    matched: set[str] = set()
+    symbol_to_instruments = index["symbol_to_instruments"]
+    for symbol in re.findall(r"(?<!\d)(\d{6})(?!\d)", haystack):
+        matched.update(symbol_to_instruments.get(symbol, ()))
+    for name, instrument in index["name_pairs"]:
+        if name in haystack:
+            matched.add(instrument)
+    return sorted(matched)
 
 
 def _article_id(url: str | None) -> str | None:
