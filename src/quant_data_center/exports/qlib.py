@@ -58,6 +58,15 @@ QLIB_FIELDS = {
     "announcement_regulatory_count": "announcement_regulatory_count",
     "announcement_litigation_count": "announcement_litigation_count",
     "announcement_performance_count": "announcement_performance_count",
+    "research_report_count": "research_report_count",
+    "research_institution_count": "research_institution_count",
+    "research_analyst_count": "research_analyst_count",
+    "research_rating_positive_count": "research_rating_positive_count",
+    "research_rating_neutral_count": "research_rating_neutral_count",
+    "research_rating_negative_count": "research_rating_negative_count",
+    "research_risk_count": "research_risk_count",
+    "research_topic_strength": "research_topic_strength",
+    "research_sentiment_mean": "research_sentiment_mean",
 }
 
 
@@ -216,7 +225,16 @@ class QlibExporter:
                     as announcement_shareholder_change_count,
                   coalesce(af.announcement_regulatory_count, 0) as announcement_regulatory_count,
                   coalesce(af.announcement_litigation_count, 0) as announcement_litigation_count,
-                  coalesce(af.announcement_performance_count, 0) as announcement_performance_count
+                  coalesce(af.announcement_performance_count, 0) as announcement_performance_count,
+                  coalesce(rf.research_report_count, 0) as research_report_count,
+                  coalesce(rf.research_institution_count, 0) as research_institution_count,
+                  coalesce(rf.research_analyst_count, 0) as research_analyst_count,
+                  coalesce(rf.research_rating_positive_count, 0) as research_rating_positive_count,
+                  coalesce(rf.research_rating_neutral_count, 0) as research_rating_neutral_count,
+                  coalesce(rf.research_rating_negative_count, 0) as research_rating_negative_count,
+                  coalesce(rf.research_risk_count, 0) as research_risk_count,
+                  coalesce(rf.research_topic_strength, 0) as research_topic_strength,
+                  coalesce(rf.research_sentiment_mean, 0) as research_sentiment_mean
                 from qdc_silver.daily_bar b
                 left join qdc_silver.adj_factor a
                   on b.trade_date = a.trade_date and b.instrument = a.instrument
@@ -226,6 +244,8 @@ class QlibExporter:
                   on b.trade_date = n.trade_date and b.instrument = n.instrument
                 left join qdc_silver.daily_announcement_factor af
                   on b.trade_date = af.trade_date and b.instrument = af.instrument
+                left join qdc_silver.daily_research_report_factor rf
+                  on b.trade_date = rf.trade_date and b.instrument = rf.instrument
                 {where_clause}
                 order by b.trade_date, b.instrument
                 """,

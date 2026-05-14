@@ -39,6 +39,28 @@ DOCUMENT_OPTIONAL_FIELDS = {
         "raw_object_id",
         "parser_version",
     ],
+    "research_report": [
+        "publish_time",
+        "source_record_id",
+        "source_sec_code",
+        "source_sec_name",
+        "institution",
+        "analyst",
+        "rating",
+        "rating_change",
+        "industry",
+        "report_type",
+        "observed_at",
+        "collect_time",
+        "pdf_url",
+        "pdf_sha256",
+        "pdf_size_bytes",
+        "pdf_object_id",
+        "pdf_download_status",
+        "pdf_error_message",
+        "raw_object_id",
+        "parser_version",
+    ],
 }
 PDF_METADATA_FIELDS = {"pdf_sha256", "pdf_size_bytes", "pdf_object_id"}
 
@@ -327,6 +349,13 @@ class SilverStore:
             records=records,
         )
 
+    def upsert_research_reports(self, records: list[dict[str, Any]]) -> int:
+        return self._upsert_document_table(
+            table="research_report",
+            id_field="research_report_id",
+            records=records,
+        )
+
     def upsert_daily_news_factor(self, records: list[dict[str, Any]]) -> int:
         return self._upsert_factor_table(
             table="daily_news_factor",
@@ -370,6 +399,23 @@ class SilverStore:
                 "announcement_regulatory_count",
                 "announcement_litigation_count",
                 "announcement_performance_count",
+            ],
+            records=records,
+        )
+
+    def upsert_daily_research_report_factor(self, records: list[dict[str, Any]]) -> int:
+        return self._upsert_factor_table(
+            table="daily_research_report_factor",
+            factor_fields=[
+                "research_report_count",
+                "research_institution_count",
+                "research_analyst_count",
+                "research_rating_positive_count",
+                "research_rating_neutral_count",
+                "research_rating_negative_count",
+                "research_risk_count",
+                "research_topic_strength",
+                "research_sentiment_mean",
             ],
             records=records,
         )

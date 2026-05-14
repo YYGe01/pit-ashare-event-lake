@@ -98,6 +98,25 @@ DEFAULT_CRAWLER_SOURCES: dict[str, CrawlerSourceSpec] = {
             "explicit YYYY-MM-DD HH:MM publish time for the crawl date."
         ),
     ),
+    "eastmoney_research_report": CrawlerSourceSpec(
+        source_id="eastmoney_research_report",
+        source_type="research_report",
+        dataset="research_report",
+        base_url="https://data.eastmoney.com/report/stock.jshtml",
+        enabled=True,
+        robots_url="https://data.eastmoney.com/robots.txt",
+        robots_status="manual_review_required",
+        terms_review_status="manual_review_required",
+        copyright_policy="metadata_only",
+        rate_limit_per_minute=60,
+        min_delay_seconds=1.0,
+        max_retry=3,
+        parser_version="eastmoney_research_report_v1",
+        notes=(
+            "Daily Eastmoney stock research-report metadata source; PDF URLs are retained "
+            "but PDF bytes are not downloaded by default."
+        ),
+    ),
     "nbd_company_news": CrawlerSourceSpec(
         source_id="nbd_company_news",
         source_type="news",
@@ -265,6 +284,7 @@ CRAWL_DAILY_SOURCE_IDS = [
     "sse_announcement",
     "sina_finance_news",
     "eastmoney_roll_news",
+    "eastmoney_research_report",
 ]
 
 

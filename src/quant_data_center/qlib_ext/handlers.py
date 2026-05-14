@@ -46,6 +46,15 @@ DEFAULT_EXTERNAL_FIELDS = (
     "announcement_regulatory_count",
     "announcement_litigation_count",
     "announcement_performance_count",
+    "research_report_count",
+    "research_institution_count",
+    "research_analyst_count",
+    "research_rating_positive_count",
+    "research_rating_neutral_count",
+    "research_rating_negative_count",
+    "research_risk_count",
+    "research_topic_strength",
+    "research_sentiment_mean",
 )
 DEFAULT_EXTERNAL_WINDOWS = (0, 3, 5)
 

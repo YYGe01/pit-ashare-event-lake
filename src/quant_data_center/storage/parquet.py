@@ -23,8 +23,10 @@ SILVER_ORDER_BY = {
     "trade_status": "trade_date, instrument",
     "announcement": "publish_date, instrument, announcement_id",
     "news": "publish_date, instrument, news_id",
+    "research_report": "publish_date, instrument, research_report_id",
     "daily_news_factor": "trade_date, instrument",
     "daily_announcement_factor": "trade_date, instrument",
+    "daily_research_report_factor": "trade_date, instrument",
 }
 
 
@@ -125,6 +127,15 @@ class QdcParquetSync:
                   coalesce(af.announcement_regulatory_count, 0) as announcement_regulatory_count,
                   coalesce(af.announcement_litigation_count, 0) as announcement_litigation_count,
                   coalesce(af.announcement_performance_count, 0) as announcement_performance_count,
+                  coalesce(rf.research_report_count, 0) as research_report_count,
+                  coalesce(rf.research_institution_count, 0) as research_institution_count,
+                  coalesce(rf.research_analyst_count, 0) as research_analyst_count,
+                  coalesce(rf.research_rating_positive_count, 0) as research_rating_positive_count,
+                  coalesce(rf.research_rating_neutral_count, 0) as research_rating_neutral_count,
+                  coalesce(rf.research_rating_negative_count, 0) as research_rating_negative_count,
+                  coalesce(rf.research_risk_count, 0) as research_risk_count,
+                  coalesce(rf.research_topic_strength, 0) as research_topic_strength,
+                  coalesce(rf.research_sentiment_mean, 0) as research_sentiment_mean,
                   b.source_id as daily_bar_source_id
                 from qdc_silver.daily_bar b
                 left join qdc_silver.adj_factor a
@@ -137,6 +148,8 @@ class QdcParquetSync:
                   on b.trade_date = n.trade_date and b.instrument = n.instrument
                 left join qdc_silver.daily_announcement_factor af
                   on b.trade_date = af.trade_date and b.instrument = af.instrument
+                left join qdc_silver.daily_research_report_factor rf
+                  on b.trade_date = rf.trade_date and b.instrument = rf.instrument
                 order by b.trade_date, b.instrument
                 """
             ).fetchdf()

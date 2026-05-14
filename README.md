@@ -45,6 +45,7 @@ qdc verify-qlib --provider-uri ~/.qlib/qlib_data/cn_data --start 2026-05-13 --en
 qdc crawl-daily --date 2026-05-13 --source-id cninfo_announcement --page-size 100 --skip-pdf-download
 qdc crawl-daily --date 2026-05-13 --source-id sse_announcement --page-size 100 --skip-pdf-download
 qdc crawl-daily --date 2026-05-13 --source-id eastmoney_roll_news --page-size 100
+qdc crawl-daily --date 2026-05-13 --source-id eastmoney_research_report --page-size 100
 qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
 qdc sync-parquet --layer all
 qdc quality
@@ -119,6 +120,7 @@ QDC external factors 是否能和该日历、instrument 对齐
 | 公告 | `sse_announcement` | 上交所补源，默认可跳过 PDF 下载 |
 | 新闻 | `eastmoney_roll_news` | 当日滚动新闻补位 |
 | 新闻 | `sina_finance_news` | 近实时补位，历史日期可靠性有限 |
+| 研报 | `eastmoney_research_report` | 东方财富个股研报 metadata，默认不下载 PDF |
 | 新闻 | `nbd_company_news` | 手动 smoke 源；已退出默认每日源 |
 
 额外 opt-in 新闻源：
@@ -197,6 +199,9 @@ $news_risk_count
 $announcement_count
 $announcement_financing_count
 $announcement_regulatory_count
+$research_report_count
+$research_institution_count
+$research_rating_positive_count
 ```
 
 当前仓库保留 Qlib handler 示例：

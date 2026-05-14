@@ -61,6 +61,7 @@ DAILY_DOCUMENT_SOURCE_IDS = {
         "cls",
         "yicai",
     ),
+    "research_report": ("eastmoney_research_report",),
 }
 DOCUMENT_SOURCE_PRIORITY = {
     "cninfo_announcement": 0,
@@ -77,6 +78,7 @@ DOCUMENT_SOURCE_PRIORITY = {
     "jinrongjie": 9,
     "cls": 10,
     "yicai": 11,
+    "eastmoney_research_report": 0,
 }
 DOCUMENT_LOCAL_CONTENT_FIELDS = ("body_text", "content", "正文", "summary", "摘要")
 DOCUMENT_OBJECT_FIELDS = (
@@ -102,8 +104,10 @@ DAILY_COLLECTION_DATASETS = (
     "trade_status",
     "announcement",
     "news",
+    "research_report",
     "daily_news_factor",
     "daily_announcement_factor",
+    "daily_research_report_factor",
 )
 DAILY_BATCH_DATASETS = ("daily_bar", "adj_factor", "price_limit", "news")
 DAILY_SOURCE_DIMENSIONS = {
@@ -115,6 +119,7 @@ DAILY_SOURCE_DIMENSIONS = {
 DAILY_DOCUMENT_DIMENSIONS = {
     "announcement": ("publish_time", "title"),
     "news": ("publish_time", "title"),
+    "research_report": ("publish_time", "title", "institution", "analyst", "rating"),
 }
 DAILY_STAGE_DATASETS = ("daily_bar", "adj_factor", "price_limit")
 DAILY_JOB_STAGES = ("build_factors", "sync_parquet", "quality", "export_qlib")
@@ -202,6 +207,17 @@ DAILY_FACTOR_WIDE_TABLES = {
         "announcement_litigation_count",
         "announcement_performance_count",
     ],
+    "daily_research_report_factor": [
+        "research_report_count",
+        "research_institution_count",
+        "research_analyst_count",
+        "research_rating_positive_count",
+        "research_rating_neutral_count",
+        "research_rating_negative_count",
+        "research_risk_count",
+        "research_topic_strength",
+        "research_sentiment_mean",
+    ],
 }
 RAW_PREVIEW_DATASETS = (
     "stock_basic",
@@ -212,6 +228,7 @@ RAW_PREVIEW_DATASETS = (
     "trade_status",
     "announcement",
     "news",
+    "research_report",
 )
 INSTRUMENT_COVERAGE_DATASETS = (
     "stock_basic",
@@ -222,8 +239,10 @@ INSTRUMENT_COVERAGE_DATASETS = (
     "trade_status",
     "announcement",
     "news",
+    "research_report",
     "daily_news_factor",
     "daily_announcement_factor",
+    "daily_research_report_factor",
 )
 OBSERVED_REFERENCE_DATASETS = (
     "daily_bar",
@@ -231,8 +250,10 @@ OBSERVED_REFERENCE_DATASETS = (
     "price_limit",
     "announcement",
     "news",
+    "research_report",
     "daily_news_factor",
     "daily_announcement_factor",
+    "daily_research_report_factor",
 )
 ALL_INSTRUMENT_COVERAGE_DIMENSIONS = (
     "stock_basic",
@@ -243,8 +264,10 @@ ALL_INSTRUMENT_COVERAGE_DIMENSIONS = (
     "trade_status",
     "news",
     "announcement",
+    "research_report",
     "daily_news_factor",
     "daily_announcement_factor",
+    "daily_research_report_factor",
 )
 INSTRUMENT_TIMELINE_TABLES = {
     "daily_bar": [
@@ -295,6 +318,17 @@ INSTRUMENT_TIMELINE_TABLES = {
         "announcement_litigation_count",
         "announcement_performance_count",
     ],
+    "daily_research_report_factor": [
+        "research_report_count",
+        "research_institution_count",
+        "research_analyst_count",
+        "research_rating_positive_count",
+        "research_rating_neutral_count",
+        "research_rating_negative_count",
+        "research_risk_count",
+        "research_topic_strength",
+        "research_sentiment_mean",
+    ],
 }
 RAW_FACTOR_INPUT_PURPOSES = {
     "stock_basic": "标的基础资料，用来识别代码、名称、交易所和行业",
@@ -305,6 +339,7 @@ RAW_FACTOR_INPUT_PURPOSES = {
     "trade_status": "交易状态输入，用来识别正常交易、停牌和异常状态",
     "announcement": "公告文本输入，用来生成公告数量、情绪和事件类型因子",
     "news": "新闻文本输入，用来生成新闻数量、情绪和事件类型因子",
+    "research_report": "研报 metadata 输入，用来生成研报数量、机构覆盖、分析师覆盖和评级方向因子",
 }
 
 
@@ -682,6 +717,13 @@ class QdcConsoleData:
             value = conn.execute(f"select max(trade_date) from {SILVER_SCHEMA}.daily_bar").fetchone()[0]
             if value:
                 return str(value)
+        for table in ("research_report", "announcement", "news"):
+            if table in silver_tables:
+                value = conn.execute(
+                    f"select max(publish_date) from {SILVER_SCHEMA}.{table}"
+                ).fetchone()[0]
+                if value:
+                    return str(value)
         if "job_run" in control_tables:
             value = conn.execute(
                 f"""
@@ -1252,7 +1294,7 @@ class QdcConsoleData:
             select source_id, dataset, uri, created_at
             from {CONTROL_SCHEMA}.source_object
             where layer = 'raw_manifest'
-              and dataset in ('announcement', 'news')
+              and dataset in ('announcement', 'news', 'research_report')
               and (uri like ? or uri like ?)
             order by created_at desc
             limit ?
@@ -1804,6 +1846,13 @@ class QdcConsoleData:
             table="announcement",
             date=date,
         )
+        research_report_groups = self._daily_document_groups(
+            conn,
+            control_tables=control_tables,
+            silver_tables=silver_tables,
+            table="research_report",
+            date=date,
+        )
         rows = []
         for identity in reference_rows[:limit]:
             instrument = str(identity.get("instrument") or "")
@@ -1825,10 +1874,17 @@ class QdcConsoleData:
                     row[f"{table}_updated_at"] = table_row.get("updated_at")
             news = news_groups.get(instrument, {"count": 0, "documents": []})
             announcements = announcement_groups.get(instrument, {"count": 0, "documents": []})
+            research_reports = research_report_groups.get(
+                instrument, {"count": 0, "documents": []}
+            )
             row["raw_news_count" if mode == "factor" else "news_count"] = news["count"]
             row["raw_announcement_count" if mode == "factor" else "announcement_count"] = announcements["count"]
+            row[
+                "raw_research_report_count" if mode == "factor" else "research_report_count"
+            ] = research_reports["count"]
             row["_news_documents"] = news["documents"]
             row["_announcement_documents"] = announcements["documents"]
+            row["_research_report_documents"] = research_reports["documents"]
             rows.append(row)
         return rows
 
@@ -1879,11 +1935,25 @@ class QdcConsoleData:
         source_ids = DAILY_DOCUMENT_SOURCE_IDS.get(table, ())
         if not source_ids:
             return {}
-        id_field = "news_id" if table == "news" else "announcement_id"
+        id_fields = {
+            "announcement": "announcement_id",
+            "news": "news_id",
+            "research_report": "research_report_id",
+        }
+        id_field = id_fields.get(table, f"{table}_id")
         columns = self._columns(conn, SILVER_SCHEMA, table)
         optional_fields = [
             field
-            for field in (*DOCUMENT_LOCAL_CONTENT_FIELDS, *DOCUMENT_OBJECT_FIELDS)
+            for field in (
+                *DOCUMENT_LOCAL_CONTENT_FIELDS,
+                "institution",
+                "analyst",
+                "rating",
+                "rating_change",
+                "industry",
+                "report_type",
+                *DOCUMENT_OBJECT_FIELDS,
+            )
             if field in columns
         ]
         select_fields = [id_field, "publish_date", "instrument", "title", "url", "source_id"]
@@ -2004,7 +2074,10 @@ class QdcConsoleData:
         item = row[0]
         dataset = str(item.get("dataset") or "")
         layer = str(item.get("layer") or "")
-        if dataset not in {"announcement", "news"} or layer not in DOCUMENT_OBJECT_LAYERS:
+        if (
+            dataset not in {"announcement", "news", "research_report"}
+            or layer not in DOCUMENT_OBJECT_LAYERS
+        ):
             raise ValueError(f"source object is not a previewable document object: {object_id}")
         path = _resolve_source_object_path(self.settings, item.get("uri"))
         if not path.is_file():
@@ -2197,7 +2270,12 @@ class QdcConsoleData:
         source_ids = DAILY_DOCUMENT_SOURCE_IDS.get(table, ())
         if not source_ids:
             return []
-        id_field = "news_id" if table == "news" else "announcement_id"
+        id_fields = {
+            "announcement": "announcement_id",
+            "news": "news_id",
+            "research_report": "research_report_id",
+        }
+        id_field = id_fields.get(table, f"{table}_id")
         target_trade_dates = {str(trade_date) for trade_date in trade_dates if trade_date}
         if not target_trade_dates:
             return []
@@ -2351,6 +2429,13 @@ class QdcConsoleData:
                 instrument=instrument,
                 trade_dates=current_trade_dates,
             )
+            research_report_rows = self._document_rows(
+                conn,
+                table="research_report",
+                silver_tables=silver_tables,
+                instrument=instrument,
+                trade_dates=current_trade_dates,
+            )
         return {
             "status": "ok",
             "instrument": instrument,
@@ -2366,10 +2451,12 @@ class QdcConsoleData:
                 timeline_rows=timeline_rows,
                 news_rows=news_rows,
                 announcement_rows=announcement_rows,
+                research_report_rows=research_report_rows,
             ),
             "timeline_rows": timeline_rows,
             "news_rows": news_rows,
             "announcement_rows": announcement_rows,
+            "research_report_rows": research_report_rows,
         }
 
     def _empty_payload(self) -> dict[str, Any]:
@@ -3206,6 +3293,14 @@ class QdcConsoleData:
             min_date=trade_dates[0],
             max_date=trade_dates[-1],
         )
+        research_report_row_counts = self._instrument_record_counts(
+            conn,
+            table="research_report",
+            silver_tables=silver_tables,
+            date_column="publish_date",
+            min_date=trade_dates[0],
+            max_date=trade_dates[-1],
+        )
         news_factor_day_counts = self._instrument_daily_counts(
             conn,
             table="daily_news_factor",
@@ -3216,6 +3311,13 @@ class QdcConsoleData:
         announcement_factor_day_counts = self._instrument_daily_counts(
             conn,
             table="daily_announcement_factor",
+            silver_tables=silver_tables,
+            min_date=trade_dates[0],
+            max_date=trade_dates[-1],
+        )
+        research_report_factor_day_counts = self._instrument_daily_counts(
+            conn,
+            table="daily_research_report_factor",
             silver_tables=silver_tables,
             min_date=trade_dates[0],
             max_date=trade_dates[-1],
@@ -3232,6 +3334,14 @@ class QdcConsoleData:
             conn,
             table="daily_announcement_factor",
             field="announcement_count",
+            silver_tables=silver_tables,
+            min_date=trade_dates[0],
+            max_date=trade_dates[-1],
+        )
+        research_report_factor_sums = self._instrument_numeric_sums(
+            conn,
+            table="daily_research_report_factor",
+            field="research_report_count",
             silver_tables=silver_tables,
             min_date=trade_dates[0],
             max_date=trade_dates[-1],
@@ -3272,11 +3382,19 @@ class QdcConsoleData:
                 int(announcement_factor_day_counts.get(instrument, 0)),
                 expected_date_count,
             )
+            daily_research_report_factor_days = min(
+                int(research_report_factor_day_counts.get(instrument, 0)),
+                expected_date_count,
+            )
             news_rows = int(news_row_counts.get(instrument, 0))
             announcement_rows = int(announcement_row_counts.get(instrument, 0))
+            research_report_rows = int(research_report_row_counts.get(instrument, 0))
             factor_news_count = float(news_factor_sums.get(instrument, 0))
             factor_announcement_count = float(
                 announcement_factor_sums.get(instrument, 0)
+            )
+            factor_research_report_count = float(
+                research_report_factor_sums.get(instrument, 0)
             )
             all_dimension_counts = {
                 "stock_basic": 1 if identity.get("stock_basic_present") else 0,
@@ -3287,8 +3405,10 @@ class QdcConsoleData:
                 "trade_status": trade_status_days,
                 "news": news_rows,
                 "announcement": announcement_rows,
+                "research_report": research_report_rows,
                 "daily_news_factor": daily_news_factor_days,
                 "daily_announcement_factor": daily_announcement_factor_days,
+                "daily_research_report_factor": daily_research_report_factor_days,
             }
             dimension_statuses = {
                 "stock_basic": _dimension_status(
@@ -3334,6 +3454,12 @@ class QdcConsoleData:
                     unit="条",
                     note="事件明细维度，只统计已有记录",
                 ),
+                "research_report": _dimension_status(
+                    observed=research_report_rows,
+                    expected=None,
+                    unit="篇",
+                    note="研报明细维度，只统计已有记录",
+                ),
                 "daily_news_factor": _dimension_status(
                     observed=daily_news_factor_days,
                     expected=None,
@@ -3349,6 +3475,14 @@ class QdcConsoleData:
                     event_count=factor_announcement_count,
                     event_unit="条",
                     note="文本因子维度，只统计已有因子行",
+                ),
+                "daily_research_report_factor": _dimension_status(
+                    observed=daily_research_report_factor_days,
+                    expected=None,
+                    unit="天",
+                    event_count=factor_research_report_count,
+                    event_unit="篇",
+                    note="研报因子维度，只统计已有因子行",
                 ),
             }
             available_dimensions = [
@@ -3388,10 +3522,13 @@ class QdcConsoleData:
                     "trade_status_days": trade_status_days,
                     "news_rows": news_rows,
                     "announcement_rows": announcement_rows,
+                    "research_report_rows": research_report_rows,
                     "daily_news_factor_days": daily_news_factor_days,
                     "daily_announcement_factor_days": daily_announcement_factor_days,
+                    "daily_research_report_factor_days": daily_research_report_factor_days,
                     "factor_news_count": factor_news_count,
                     "factor_announcement_count": factor_announcement_count,
+                    "factor_research_report_count": factor_research_report_count,
                     "expected_trade_dates": expected_date_count,
                 }
             )
@@ -4448,7 +4585,12 @@ def _daily_document_key(row: dict[str, Any]) -> str:
     url = str(row.get("url") or "").strip()
     if url:
         return url
-    return str(row.get("news_id") or row.get("announcement_id") or "")
+    return str(
+        row.get("news_id")
+        or row.get("announcement_id")
+        or row.get("research_report_id")
+        or ""
+    )
 
 
 def _normalize_document_title(value: Any) -> str:
@@ -5284,10 +5426,12 @@ def _empty_instrument_timeline(
             timeline_rows=[],
             news_rows=[],
             announcement_rows=[],
+            research_report_rows=[],
         ),
         "timeline_rows": [],
         "news_rows": [],
         "announcement_rows": [],
+        "research_report_rows": [],
     }
 
 
@@ -5296,6 +5440,7 @@ def _instrument_timeline_summary(
     timeline_rows: list[dict[str, Any]],
     news_rows: list[dict[str, Any]],
     announcement_rows: list[dict[str, Any]],
+    research_report_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     core_complete_days = sum(
         1
@@ -5311,8 +5456,10 @@ def _instrument_timeline_summary(
         "core_complete_days": core_complete_days,
         "news_rows": len(news_rows),
         "announcement_rows": len(announcement_rows),
+        "research_report_rows": len(research_report_rows),
         "factor_news_count": _sum_numeric(timeline_rows, "news_count"),
         "factor_announcement_count": _sum_numeric(timeline_rows, "announcement_count"),
+        "factor_research_report_count": _sum_numeric(timeline_rows, "research_report_count"),
         "min_trade_date": min(trade_dates) if trade_dates else None,
         "max_trade_date": max(trade_dates) if trade_dates else None,
     }
@@ -5714,6 +5861,9 @@ def _daily_stage_rows(
 
     announcement_rows = int(dataset_by_name.get("announcement", {}).get("row_count") or 0)
     news_rows = int(dataset_by_name.get("news", {}).get("row_count") or 0)
+    research_report_rows = int(
+        dataset_by_name.get("research_report", {}).get("row_count") or 0
+    )
     vendor_failures = sum(
         int(row.get("timeout_count") or 0) + int(row.get("error_count") or 0)
         for row in source_summary_rows
@@ -5721,10 +5871,19 @@ def _daily_stage_rows(
     rows.append(
         {
             "stage_id": "documents",
-            "label": "公告新闻 (Documents)",
-            "status": "failed" if vendor_failures else "success" if announcement_rows or news_rows else "pending",
+            "label": "文档源 (Documents)",
+            "status": (
+                "failed"
+                if vendor_failures
+                else "success"
+                if announcement_rows or news_rows or research_report_rows
+                else "pending"
+            ),
             "progress_percent": None,
-            "primary": f"公告 {announcement_rows} 行，新闻 {news_rows} 行",
+            "primary": (
+                f"公告 {announcement_rows} 行，新闻 {news_rows} 行，"
+                f"研报 {research_report_rows} 行"
+            ),
             "secondary": f"供应商错误/超时 {vendor_failures} 次；无事件不算缺失",
         }
     )
@@ -5852,7 +6011,7 @@ def _daily_verdict(
         return {
             "level": "warning",
             "title": "等待每日文档和因子记录",
-            "summary": "当前日期还没有可用于观察的公告、新闻或因子行。",
+            "summary": "当前日期还没有可用于观察的公告、新闻、研报或因子行。",
             "next_action": "运行 crawl-daily，然后运行 build-factors、sync-parquet 和 quality。",
             "readiness_percent": 0,
         }
@@ -5861,7 +6020,7 @@ def _daily_verdict(
             "level": "success",
             "title": "每日文档因子链路可观察",
             "summary": "Qlib provider 文件检查通过，文档采集、因子和质量状态没有阻塞问题。",
-            "next_action": "可以查看公告新闻明细、因子宽表或执行 verify-qlib 抽样读取。",
+            "next_action": "可以查看公告、新闻、研报明细、因子宽表或执行 verify-qlib 抽样读取。",
             "readiness_percent": core_percent,
         }
     return {
@@ -5894,9 +6053,10 @@ def _daily_preview_columns(mode: str) -> list[str]:
             *fields,
             "raw_news_count",
             "raw_announcement_count",
+            "raw_research_report_count",
         ]
     fields = [field for table_fields in DAILY_RAW_WIDE_TABLES.values() for field in table_fields]
-    return [*base, *fields, "news_count", "announcement_count"]
+    return [*base, *fields, "news_count", "announcement_count", "research_report_count"]
 
 
 def _empty_data_coverage() -> dict[str, Any]:
@@ -5969,9 +6129,13 @@ def _public_coverage_reference(reference: dict[str, Any]) -> dict[str, Any]:
 def _coverage_kind(dataset: str) -> str:
     if dataset in REQUIRED_DAILY_COVERAGE_DATASETS:
         return "required_daily"
-    if dataset in {"trade_status", "announcement", "news"}:
+    if dataset in {"trade_status", "announcement", "news", "research_report"}:
         return "sparse_source"
-    if dataset in {"daily_news_factor", "daily_announcement_factor"}:
+    if dataset in {
+        "daily_news_factor",
+        "daily_announcement_factor",
+        "daily_research_report_factor",
+    }:
         return "sparse_factor"
     return "metadata"
 

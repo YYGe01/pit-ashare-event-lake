@@ -23,7 +23,7 @@ from quant_data_center.factor_engine.text_events import (
 )
 from quant_data_center.storage.database import QdcDatabase
 
-DOCUMENT_TABLES = {"announcement", "news"}
+DOCUMENT_TABLES = {"announcement", "news", "research_report"}
 DOCUMENT_LOOKBACK_DAYS = 15
 DOCUMENT_FACTOR_SOURCE_IDS = {
     "announcement": ("cninfo_announcement", "sse_announcement"),
@@ -41,6 +41,7 @@ DOCUMENT_FACTOR_SOURCE_IDS = {
         "cls",
         "yicai",
     ),
+    "research_report": ("eastmoney_research_report",),
 }
 
 NEWS_FACTOR_FIELDS = (
@@ -77,6 +78,17 @@ ANNOUNCEMENT_FACTOR_FIELDS = (
     "announcement_regulatory_count",
     "announcement_litigation_count",
     "announcement_performance_count",
+)
+RESEARCH_REPORT_FACTOR_FIELDS = (
+    "research_report_count",
+    "research_institution_count",
+    "research_analyst_count",
+    "research_rating_positive_count",
+    "research_rating_neutral_count",
+    "research_rating_negative_count",
+    "research_risk_count",
+    "research_topic_strength",
+    "research_sentiment_mean",
 )
 
 
@@ -162,6 +174,57 @@ def build_announcement_factor_rows(
     return rows
 
 
+def build_research_report_factor_rows(
+    database: QdcDatabase,
+    *,
+    start_date: str,
+    end_date: str,
+    source_id: str,
+) -> list[dict[str, Any]]:
+    documents = _load_research_reports(database, start_date=start_date, end_date=end_date)
+    classifier = RuleBasedTextEventClassifier()
+    grouped: dict[tuple[str, str], dict[str, Any]] = defaultdict(_research_report_factor_seed)
+    distinct_institutions: dict[tuple[str, str], set[str]] = defaultdict(set)
+    distinct_analysts: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for document in documents:
+        key = (document["trade_date"], document["instrument"])
+        row = grouped[key]
+        result = classifier.classify(
+            title=document["title"],
+            body=None,
+            document_type="news",
+        )
+        rating_bucket = _rating_bucket(document.get("rating"))
+        row["research_report_count"] += 1.0
+        row["_sentiment_sum"] += result.sentiment_score
+        row["research_topic_strength"] += result.importance_score
+        row["research_risk_count"] += _event_count(result, RISK_EVENTS)
+        if rating_bucket:
+            row[f"research_rating_{rating_bucket}_count"] += 1.0
+        institution = str(document.get("institution") or "").strip()
+        if institution:
+            distinct_institutions[key].add(institution)
+        for analyst in _analyst_names(document.get("analyst")):
+            distinct_analysts[key].add(analyst)
+    rows = []
+    for trade_date, instrument in sorted(grouped):
+        key = (trade_date, instrument)
+        factor_row = grouped[key]
+        factor_row["trade_date"] = trade_date
+        factor_row["instrument"] = instrument
+        factor_row["source_id"] = source_id
+        factor_row["research_institution_count"] = float(len(distinct_institutions[key]))
+        factor_row["research_analyst_count"] = float(len(distinct_analysts[key]))
+        factor_row["research_sentiment_mean"] = (
+            factor_row["_sentiment_sum"] / factor_row["research_report_count"]
+            if factor_row["research_report_count"]
+            else 0.0
+        )
+        del factor_row["_sentiment_sum"]
+        rows.append(factor_row)
+    return rows
+
+
 def _load_documents(
     database: QdcDatabase,
     *,
@@ -225,6 +288,71 @@ def _load_documents(
     return documents
 
 
+def _load_research_reports(
+    database: QdcDatabase,
+    *,
+    start_date: str,
+    end_date: str,
+) -> list[dict[str, str]]:
+    publish_start = date_minus_days(start_date, DOCUMENT_LOOKBACK_DAYS)
+    source_ids = DOCUMENT_FACTOR_SOURCE_IDS["research_report"]
+    placeholders = ", ".join("?" for _ in source_ids)
+    with database.connect() as conn:
+        aligner = TradeDayAligner.from_connection(conn)
+        columns = {
+            str(row[0])
+            for row in conn.execute(
+                """
+                select column_name
+                from information_schema.columns
+                where table_schema = 'qdc_silver' and table_name = 'research_report'
+                """
+            ).fetchall()
+        }
+        if not columns:
+            return []
+        institution_expr = "institution" if "institution" in columns else "null as institution"
+        analyst_expr = "analyst" if "analyst" in columns else "null as analyst"
+        rating_expr = "rating" if "rating" in columns else "null as rating"
+        rows = conn.execute(
+            f"""
+            select publish_date, instrument, title, source_id,
+                   {institution_expr}, {analyst_expr}, {rating_expr}
+            from qdc_silver.research_report
+            where publish_date >= ? and publish_date <= ?
+              and source_id in ({placeholders})
+            order by publish_date, instrument, source_id
+            """,
+            [publish_start, end_date, *source_ids],
+        ).fetchall()
+    documents = []
+    seen_keys = set()
+    for publish_date, instrument, title, source_id_value, institution, analyst, rating in rows:
+        trade_date = aligner.align(publish_date)
+        if start_date <= trade_date <= end_date:
+            key = (
+                str(publish_date),
+                str(instrument),
+                str(institution or ""),
+                _dedupe_title_key(str(title)),
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            documents.append(
+                {
+                    "trade_date": trade_date,
+                    "instrument": str(instrument),
+                    "title": str(title),
+                    "source_id": str(source_id_value),
+                    "institution": str(institution) if institution else "",
+                    "analyst": str(analyst) if analyst else "",
+                    "rating": str(rating) if rating else "",
+                }
+            )
+    return documents
+
+
 def _dedupe_title_key(title: str) -> str:
     return "".join(ch for ch in title.lower() if ch.isalnum())
 
@@ -272,6 +400,21 @@ def _announcement_factor_seed() -> dict[str, float]:
     }
 
 
+def _research_report_factor_seed() -> dict[str, float]:
+    return {
+        "research_report_count": 0.0,
+        "research_institution_count": 0.0,
+        "research_analyst_count": 0.0,
+        "research_rating_positive_count": 0.0,
+        "research_rating_neutral_count": 0.0,
+        "research_rating_negative_count": 0.0,
+        "research_risk_count": 0.0,
+        "research_topic_strength": 0.0,
+        "research_sentiment_mean": 0.0,
+        "_sentiment_sum": 0.0,
+    }
+
+
 def _add_text_event_fields(
     row: dict[str, float],
     result: TextEventResult,
@@ -297,3 +440,25 @@ def _add_text_event_fields(
 
 def _event_count(result: TextEventResult, candidates: set[str]) -> float:
     return 1.0 if event_matches_any(result, candidates) else 0.0
+
+
+def _rating_bucket(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if any(token in text for token in ("买入", "增持", "推荐", "跑赢", "优于", "强烈")):
+        return "positive"
+    if any(token in text for token in ("卖出", "减持", "低于", "弱于", "回避")):
+        return "negative"
+    if any(token in text for token in ("中性", "持有", "无评级", "谨慎")):
+        return "neutral"
+    return "neutral"
+
+
+def _analyst_names(value: Any) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    for separator in ("；", ";", "，", ",", "、", "/", "|"):
+        text = text.replace(separator, " ")
+    return [item.strip() for item in text.split() if item.strip()]

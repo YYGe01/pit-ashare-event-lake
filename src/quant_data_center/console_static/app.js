@@ -69,8 +69,10 @@ const FIELD_LABELS = {
   source_update_time: "状态日期",
   news_count: "新闻数量",
   announcement_count: "公告数量",
+  research_report_count: "研报数量",
   raw_news_count: "来源新闻数量",
   raw_announcement_count: "来源公告数量",
+  raw_research_report_count: "来源研报数量",
   news_sentiment_mean: "新闻情绪均值",
   news_positive_count: "新闻正面数",
   news_negative_count: "新闻负面数",
@@ -100,6 +102,18 @@ const FIELD_LABELS = {
   announcement_regulatory_count: "公告监管类",
   announcement_litigation_count: "公告诉讼类",
   announcement_performance_count: "公告业绩类",
+  research_institution_count: "研报机构数",
+  research_analyst_count: "研报分析师数",
+  research_rating_positive_count: "研报正向评级数",
+  research_rating_neutral_count: "研报中性评级数",
+  research_rating_negative_count: "研报负向评级数",
+  research_risk_count: "研报风险提示数",
+  research_topic_strength: "研报主题强度",
+  research_sentiment_mean: "研报情绪均值",
+  institution: "机构",
+  analyst: "分析师",
+  rating: "评级",
+  rating_change: "评级变化",
 };
 
 const DATASET_LABELS = {
@@ -109,8 +123,10 @@ const DATASET_LABELS = {
   trade_status: "交易状态",
   announcement: "公告明细",
   news: "新闻明细",
+  research_report: "研报明细",
   daily_news_factor: "新闻日频因子",
   daily_announcement_factor: "公告日频因子",
+  daily_research_report_factor: "研报日频因子",
 };
 
 const SOURCE_LABELS = {
@@ -119,6 +135,7 @@ const SOURCE_LABELS = {
   sina_finance_news: "新浪财经滚动新闻",
   eastmoney_roll_news: "东方财富滚动新闻",
   nbd_company_news: "每经公司新闻",
+  eastmoney_research_report: "东方财富研报",
   sina: "新浪财经",
   wallstreetcn: "华尔街见闻",
   "10jqka": "同花顺",
@@ -157,10 +174,12 @@ const DASHBOARD_SOURCE_IDS = [
   "sse_announcement",
   "eastmoney_roll_news",
   "sina_finance_news",
+  "eastmoney_research_report",
   "nbd_company_news",
 ];
 const NEWS_SOURCE_IDS = ["eastmoney_roll_news", "sina_finance_news"];
 const ANNOUNCEMENT_SOURCE_IDS = ["cninfo_announcement", "sse_announcement"];
+const RESEARCH_REPORT_SOURCE_IDS = ["eastmoney_research_report"];
 const FACTOR_TABLE_FIELDS = {
   daily_news_factor: [
     "news_count",
@@ -197,10 +216,22 @@ const FACTOR_TABLE_FIELDS = {
     "announcement_litigation_count",
     "announcement_performance_count",
   ],
+  daily_research_report_factor: [
+    "research_report_count",
+    "research_institution_count",
+    "research_analyst_count",
+    "research_rating_positive_count",
+    "research_rating_neutral_count",
+    "research_rating_negative_count",
+    "research_risk_count",
+    "research_topic_strength",
+    "research_sentiment_mean",
+  ],
 };
 const HANDLER_EXTERNAL_FIELDS = new Set([
   ...FACTOR_TABLE_FIELDS.daily_news_factor,
   ...FACTOR_TABLE_FIELDS.daily_announcement_factor,
+  ...FACTOR_TABLE_FIELDS.daily_research_report_factor,
 ]);
 
 let state = {
@@ -484,6 +515,7 @@ function renderDashboard(payload) {
     summaryCard("质量问题 (Quality)", number(quality.open_issue_count || 0), `失败维度 ${number(quality.failed_dimension_count || 0)}`, quality.open_issue_count ? "danger" : "success"),
     summaryCard("有公告标的", number(documentCoverage.announcement.instruments), `覆盖 ${documentCoverage.announcement.coverageText}`),
     summaryCard("有新闻标的", number(documentCoverage.news.instruments), `覆盖 ${documentCoverage.news.coverageText}`),
+    summaryCard("有研报标的", number(documentCoverage.research_report.instruments), `覆盖 ${documentCoverage.research_report.coverageText}`),
     summaryCard("供应商异常 (Vendor)", number(vendorFailures), "超时 + 错误", vendorFailures ? "danger" : "success"),
     summaryCard("阻塞批次 (Blocked)", number(blockedBatches), `失败 ${number(batches.failed_count)} / 卡住 ${number(batches.stale_running_count)}`, blockedBatches ? "danger" : "success"),
     summaryCard("运行中 (Running)", number(batches.running_count || 0), `待执行 ${number(batches.pending_count || 0)}`),
@@ -545,6 +577,7 @@ function renderStatusStrip(payload) {
     statusStripItem("Qlib provider", qlibStripStatus(qlib), qlib.calendar_latest_date || "-"),
     statusStripItem("公告", sourceGroupStatus(sources, ANNOUNCEMENT_SOURCE_IDS), documentCoverageFoot(documentCoverage, "announcement")),
     statusStripItem("新闻", sourceGroupStatus(sources, NEWS_SOURCE_IDS), documentCoverageFoot(documentCoverage, "news")),
+    statusStripItem("研报", sourceGroupStatus(sources, RESEARCH_REPORT_SOURCE_IDS), documentCoverageFoot(documentCoverage, "research_report")),
     statusStripItem("因子", factorStatus, `${number(factorRows.reduce((sum, row) => sum + Number(row.row_count || 0), 0))} 行`),
     statusStripItem("质量", quality.status === "success" ? "ok" : quality.status || "pending", `${number(quality.open_issue_count || 0)} 个未关闭问题`),
   ];
@@ -594,6 +627,7 @@ function documentCoverageFromDatasetRows(datasetRows, expected) {
   return {
     announcement: documentCoverageItem(byDataset.get("announcement"), expected),
     news: documentCoverageItem(byDataset.get("news"), expected),
+    research_report: documentCoverageItem(byDataset.get("research_report"), expected),
   };
 }
 
@@ -679,7 +713,7 @@ function renderFactorStatus(datasetRows) {
 
 function factorStatusRows(datasetRows, date) {
   const byDataset = new Map((datasetRows || []).map((row) => [row.dataset, row]));
-  return ["daily_announcement_factor", "daily_news_factor"].map((dataset) => {
+  return ["daily_announcement_factor", "daily_news_factor", "daily_research_report_factor"].map((dataset) => {
     const row = byDataset.get(dataset) || {};
     const fields = FACTOR_TABLE_FIELDS[dataset] || [];
     const missing = fields.filter((field) => !HANDLER_EXTERNAL_FIELDS.has(field));
@@ -703,6 +737,7 @@ function renderActionCommands(payload) {
   const commands = [
     `qdc verify-qlib --provider-uri ${providerUri} --start ${date} --end ${date} --instruments "${instruments}" --fields '$close,$volume,$factor'`,
     `qdc crawl-daily --date ${date} --source-id cninfo_announcement --page-size 20 --max-pages 1 --skip-pdf-download`,
+    `qdc crawl-daily --date ${date} --source-id eastmoney_research_report --page-size 50`,
     `qdc build-factors --factor-set all --start ${date} --end ${date}`,
   ];
   target.innerHTML = commands.map((command) => `
@@ -775,7 +810,7 @@ function renderRunProgressBoard() {
   const crawlers = summarizeTaskProgress(status.crawl_task_rows || [], null);
   return `
     <div class="run-progress-grid">
-      ${runProgressItem("公告新闻批次", crawlers)}
+      ${runProgressItem("文档源批次", crawlers)}
       ${runProgressItem("结构化诊断批次", structured)}
     </div>
   `;
@@ -951,8 +986,8 @@ function renderBatchTable(rows, taskRows = [], crawlRows = []) {
       ${renderTaskProgressTable(taskSorted, "batchTask", "当前日期暂无结构化采集批次。")}
     </div>
     <div class="batch-section">
-      <h3>公告新闻爬虫批次</h3>
-      ${renderCrawlProgressTable(crawlSorted, "crawlTask", "当前日期暂无公告新闻爬虫批次。")}
+      <h3>文档源爬虫批次</h3>
+      ${renderCrawlProgressTable(crawlSorted, "crawlTask", "当前日期暂无文档源爬虫批次。")}
     </div>
   `;
 }
@@ -1177,6 +1212,7 @@ function renderPreview(payload) {
     summaryCard("匹配标的", number(filteredRows.length), `总返回 ${number(payload.row_count || 0)}，隐藏 ${number(payload.hidden_count || 0)}`),
     summaryCard("有公告标的", number(documentCoverage.announcement), `当前列表中 ${number(filteredRows.length - documentCoverage.announcement)} 个为 0`),
     summaryCard("有新闻标的", number(documentCoverage.news), `当前列表中 ${number(filteredRows.length - documentCoverage.news)} 个为 0`),
+    summaryCard("有研报标的", number(documentCoverage.research_report), `当前列表中 ${number(filteredRows.length - documentCoverage.research_report)} 个为 0`),
     summaryCard("标的来源", payload.reference_source || "-", "每行一个 instrument"),
     summaryCard("刷新", new Date().toLocaleTimeString("zh-CN", { hour12: false }), "15 秒自动更新当前页"),
   ].join("");
@@ -1197,20 +1233,27 @@ function renderPreview(payload) {
 function documentCoverageFromPreviewRows(rows, mode) {
   const newsKey = mode === "factor" ? "raw_news_count" : "news_count";
   const announcementKey = mode === "factor" ? "raw_announcement_count" : "announcement_count";
+  const researchReportKey = mode === "factor" ? "raw_research_report_count" : "research_report_count";
   return {
     news: rows.filter((row) => Number(row[newsKey] || 0) > 0).length,
     announcement: rows.filter((row) => Number(row[announcementKey] || 0) > 0).length,
+    research_report: rows.filter((row) => Number(row[researchReportKey] || 0) > 0).length,
   };
 }
 
 function documentCountRenderer(key) {
   const newsKeys = new Set(["news_count", "raw_news_count"]);
   const announcementKeys = new Set(["announcement_count", "raw_announcement_count"]);
-  if (!newsKeys.has(key) && !announcementKeys.has(key)) return null;
+  const researchReportKeys = new Set(["research_report_count", "raw_research_report_count"]);
+  if (!newsKeys.has(key) && !announcementKeys.has(key) && !researchReportKeys.has(key)) return null;
   return (row) => {
     const count = Number(row[key] || 0);
     if (!count) return "0";
-    const kind = newsKeys.has(key) ? "news" : "announcement";
+    const kind = newsKeys.has(key)
+      ? "news"
+      : researchReportKeys.has(key)
+        ? "research_report"
+        : "announcement";
     return `<button class="link-button document-count" data-kind="${kind}" data-instrument="${escapeHtml(row.instrument)}" type="button">${number(count)} 条</button>`;
   };
 }
@@ -1218,8 +1261,16 @@ function documentCountRenderer(key) {
 function openDocuments(kind, instrument) {
   const row = (state.previewPayload?.rows || []).find((item) => item.instrument === instrument);
   if (!row) return;
-  const docs = kind === "news" ? row._news_documents || [] : row._announcement_documents || [];
-  const title = kind === "news" ? "新闻来源明细" : "公告来源明细";
+  const docs = kind === "news"
+    ? row._news_documents || []
+    : kind === "research_report"
+      ? row._research_report_documents || []
+      : row._announcement_documents || [];
+  const title = kind === "news"
+    ? "新闻来源明细"
+    : kind === "research_report"
+      ? "研报来源明细"
+      : "公告来源明细";
   $("document-modal-title").textContent = `${instrument} ${title}`;
   $("document-modal-summary").textContent = `${state.previewPayload.date || "-"} · ${docs.length} 条已加载明细`;
   $("document-modal-body").innerHTML = docs.length
@@ -1250,6 +1301,12 @@ function renderDocumentItem(document) {
   const bodyText = document.body_text
     ? `<pre class="document-body-text">${escapeHtml(document.body_text)}</pre>`
     : "";
+  const detailFields = ["institution", "analyst", "rating", "rating_change", "industry"]
+    .filter((key) => document[key] !== null && document[key] !== undefined && document[key] !== "")
+    .map((key) => `<span>${escapeHtml(fieldLabel(key))}: ${escapeHtml(compact(document[key], 80))}</span>`);
+  const details = detailFields.length
+    ? `<p class="document-meta document-extra-meta">${detailFields.join(" · ")}</p>`
+    : "";
   const preview = localUrl
     ? `<iframe class="document-local-preview hidden" data-document-preview title="本地数据预览"></iframe>`
     : "";
@@ -1257,6 +1314,7 @@ function renderDocumentItem(document) {
     <article class="document-item">
       <h3>${titleControl}</h3>
       <p class="document-meta">${escapeHtml(document.publish_date || "-")} · ${escapeHtml(sourceText)}</p>
+      ${details}
       <p class="document-content-status document-content-${escapeHtml(contentStatus)}">${escapeHtml(contentLabel)}</p>
       ${bodyText}
       <div class="document-actions">${localAction}${externalAction}</div>

@@ -3128,6 +3128,89 @@ def test_qdc_crawl_daily_bootstraps_stock_basic_for_news_mapping(
     assert database.silver_table_counts()["news"] == 1
 
 
+def test_qdc_crawl_daily_collects_eastmoney_research_reports(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    database.init_schema()
+
+    class ResearchReportResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "hits": 1,
+                "size": 10,
+                "data": [
+                    {
+                        "title": "盈利增长，首次覆盖",
+                        "stockName": "浦发银行",
+                        "stockCode": "600000",
+                        "orgName": "单元证券股份有限公司",
+                        "orgSName": "单元证券",
+                        "publishDate": "2026-05-11 00:00:00.000",
+                        "infoCode": "AP202605110001",
+                        "emRatingName": "买入",
+                        "ratingChange": "3",
+                        "indvInduName": "银行",
+                        "researcher": "测试员",
+                        "encodeUrl": "unit-test",
+                    }
+                ],
+            }
+
+    request_params = []
+
+    def fake_get(url, **kwargs):
+        request_params.append(kwargs.get("params") or {})
+        return ResearchReportResponse()
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-daily",
+                "--date",
+                "2026-05-11",
+                "--source-id",
+                "eastmoney_research_report",
+                "--page-size",
+                "10",
+            ]
+        )
+        == 0
+    )
+
+    assert request_params[0]["beginTime"] == "2026-05-11"
+    assert request_params[0]["endTime"] == "2026-05-11"
+    assert database.silver_table_counts()["research_report"] == 1
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            select publish_date, instrument, title, institution, analyst, rating, pdf_url
+            from qdc_silver.research_report
+            """
+        ).fetchone()
+    assert (str(row[0]), row[1], row[2], row[3], row[4], row[5]) == (
+        "2026-05-11",
+        "SH600000",
+        "盈利增长，首次覆盖",
+        "单元证券",
+        "测试员",
+        "买入",
+    )
+    assert row[6] == "https://pdf.dfcfw.com/pdf/H3_AP202605110001_1.pdf"
+
+
 def test_qdc_crawl_exhausted_dataset_tolerates_one_failed_source() -> None:
     assert (
         _crawl_exhausted_datasets(
@@ -3242,12 +3325,13 @@ def test_qdc_crawl_daily_control_only_plans_and_runs_default_sources(tmp_path: P
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 4
+    assert len(tasks) == 5
     assert {task["source_id"] for task in tasks} == {
         "cninfo_announcement",
         "sse_announcement",
         "sina_finance_news",
         "eastmoney_roll_news",
+        "eastmoney_research_report",
     }
     assert {task["status"] for task in tasks} == {"success"}
     assert database.table_counts()["crawl_run"] == 1
@@ -3945,12 +4029,13 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 4
+    assert len(tasks) == 5
     assert {task["source_id"] for task in tasks} == {
         "cninfo_announcement",
         "sse_announcement",
         "sina_finance_news",
         "eastmoney_roll_news",
+        "eastmoney_research_report",
     }
     assert {task["status"] for task in tasks} == {"success"}
     with database.connect() as conn:
@@ -3968,7 +4053,7 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
             """
         ).fetchone()
     assert crawl_run is not None
-    assert crawl_run[0:3] == ("success", 4, 4)
+    assert crawl_run[0:3] == ("success", 5, 5)
     crawl_parameters = json.loads(crawl_run[3])
     assert crawl_parameters["command"] == "daily-pipeline"
     assert crawl_parameters["instrument_filter"] == []
@@ -3978,8 +4063,8 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
     parameters = json.loads(pipeline_job[0])
     assert parameters["crawl_documents"] is True
     assert parameters["crawl_status"] == "ok"
-    assert parameters["crawl_planned_count"] == 4
-    assert parameters["crawl_ran_count"] == 4
+    assert parameters["crawl_planned_count"] == 5
+    assert parameters["crawl_ran_count"] == 5
 
 
 def test_qdc_plan_backfill_rejects_unsupported_source(tmp_path: Path) -> None:
@@ -4428,8 +4513,10 @@ def test_qdc_run_backfill_announcement_news_and_build_factors_with_fake_akshare(
     counts = database.silver_table_counts()
     assert counts["announcement"] == 1
     assert counts["news"] == 1
+    assert counts["research_report"] == 0
     assert counts["daily_news_factor"] == 0
     assert counts["daily_announcement_factor"] == 0
+    assert counts["daily_research_report_factor"] == 0
     with database.connect() as conn:
         row = conn.execute(
             """
@@ -4603,6 +4690,30 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
             },
         ]
     )
+    silver.upsert_research_reports(
+        [
+            {
+                "research_report_id": "r1",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "盈利增长但提示退市风险",
+                "source_id": "eastmoney_research_report",
+                "institution": "单元证券",
+                "analyst": "测试员",
+                "rating": "买入",
+            },
+            {
+                "research_report_id": "r1_backup",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "盈利增长但提示退市风险",
+                "source_id": "eastmoney_research_report",
+                "institution": "单元证券",
+                "analyst": "测试员",
+                "rating": "买入",
+            },
+        ]
+    )
 
     assert (
         main(
@@ -4653,6 +4764,19 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
             where instrument = 'SH600000'
             """
         ).fetchone()
+        research_report_row = conn.execute(
+            """
+            select
+              research_report_count,
+              research_institution_count,
+              research_analyst_count,
+              research_rating_positive_count,
+              research_risk_count,
+              research_topic_strength
+            from qdc_silver.daily_research_report_factor
+            where instrument = 'SH600000'
+            """
+        ).fetchone()
 
     assert (
         news_row[0],
@@ -4687,6 +4811,8 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
         announcement_row[4],
         round(float(announcement_row[5]), 2),
     ) == (2.0, 0.0, 0.0, 1.0, 1.0, 0.15)
+    assert research_report_row[:5] == (1.0, 1.0, 1.0, 1.0, 1.0)
+    assert float(research_report_row[5]) > 0
 
 
 def test_qdc_classify_text_event_rule_and_mock_litellm(
@@ -4938,8 +5064,10 @@ def test_silver_store_upserts_core_research_tables(tmp_path: Path) -> None:
         "trade_status": 1,
         "announcement": 0,
         "news": 0,
+        "research_report": 0,
         "daily_news_factor": 0,
         "daily_announcement_factor": 0,
+        "daily_research_report_factor": 0,
     }
 
     silver.upsert_daily_bar(
@@ -5206,7 +5334,7 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> No
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["object_id_count"] == 44
+    assert payload["object_id_count"] == 53
     assert len(payload["object_id_sample"]) == 5
     assert "object_ids" not in payload
 
@@ -5228,7 +5356,7 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> No
     ).read_bytes()
     assert struct.unpack("<fff", sentiment_bin) == (0.0, 0.5, 0.0)
     qlib_objects = database.list_source_objects(dataset="qlib_export", layer="qlib")
-    assert len(qlib_objects) == 44
+    assert len(qlib_objects) == 53
 
 
 def test_qdc_external_factor_fields_match_qlib_handler() -> None:

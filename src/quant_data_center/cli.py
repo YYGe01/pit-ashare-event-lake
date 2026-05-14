@@ -23,6 +23,7 @@ from quant_data_center.crawlers.registry import crawler_source_spec, enabled_dai
 from quant_data_center.crawlers.sources.cninfo import CninfoAnnouncementCrawler
 from quant_data_center.crawlers.sources.eastmoney import EastmoneyRollNewsCrawler
 from quant_data_center.crawlers.sources.nbd import NbdCompanyNewsCrawler
+from quant_data_center.crawlers.sources.research_report import EastmoneyResearchReportCrawler
 from quant_data_center.crawlers.sources.sina import SinaFinanceNewsCrawler
 from quant_data_center.crawlers.sources.sse import SseAnnouncementCrawler
 from quant_data_center.crawlers.sources.vendor_news import (
@@ -979,6 +980,18 @@ def _run_real_crawl_task(
     if source_id == "eastmoney_roll_news":
         spec = crawler_source_spec(source_id)
         return EastmoneyRollNewsCrawler(settings).crawl_date(
+            source_id=source_id,
+            crawl_date=str(task["crawl_date"]),
+            page_size=page_size,
+            max_pages=max_pages,
+            min_delay_seconds=spec.min_delay_seconds,
+            instrument_filter=instrument_filter,
+            request_timeout_seconds=request_timeout_seconds,
+            source_timeout_seconds=source_timeout_seconds,
+        )
+    if source_id == "eastmoney_research_report":
+        spec = crawler_source_spec(source_id)
+        return EastmoneyResearchReportCrawler(settings).crawl_date(
             source_id=source_id,
             crawl_date=str(task["crawl_date"]),
             page_size=page_size,

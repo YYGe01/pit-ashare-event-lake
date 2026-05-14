@@ -272,6 +272,36 @@ create table if not exists qdc_silver.news (
   updated_at timestamp not null
 );
 
+create table if not exists qdc_silver.research_report (
+  research_report_id varchar primary key,
+  publish_date date not null,
+  publish_time timestamp,
+  instrument varchar not null,
+  title varchar not null,
+  url varchar,
+  source_id varchar not null,
+  source_record_id varchar,
+  source_sec_code varchar,
+  source_sec_name varchar,
+  institution varchar,
+  analyst varchar,
+  rating varchar,
+  rating_change varchar,
+  industry varchar,
+  report_type varchar,
+  observed_at timestamp,
+  collect_time timestamp,
+  pdf_url varchar,
+  pdf_sha256 varchar,
+  pdf_size_bytes bigint,
+  pdf_object_id varchar,
+  pdf_download_status varchar,
+  pdf_error_message varchar,
+  raw_object_id varchar,
+  parser_version varchar,
+  updated_at timestamp not null
+);
+
 create table if not exists qdc_silver.daily_news_factor (
   trade_date date not null,
   instrument varchar not null,
@@ -318,6 +348,23 @@ create table if not exists qdc_silver.daily_announcement_factor (
   updated_at timestamp not null,
   primary key (trade_date, instrument)
 );
+
+create table if not exists qdc_silver.daily_research_report_factor (
+  trade_date date not null,
+  instrument varchar not null,
+  research_report_count double not null,
+  research_institution_count double not null,
+  research_analyst_count double not null,
+  research_rating_positive_count double not null,
+  research_rating_neutral_count double not null,
+  research_rating_negative_count double not null,
+  research_risk_count double not null,
+  research_topic_strength double not null,
+  research_sentiment_mean double not null,
+  source_id varchar not null,
+  updated_at timestamp not null,
+  primary key (trade_date, instrument)
+);
 """
 
 SILVER_TABLES = [
@@ -330,8 +377,10 @@ SILVER_TABLES = [
     "trade_status",
     "announcement",
     "news",
+    "research_report",
     "daily_news_factor",
     "daily_announcement_factor",
+    "daily_research_report_factor",
 ]
 
 SILVER_SCHEMA_MIGRATIONS = {
@@ -361,6 +410,28 @@ SILVER_SCHEMA_MIGRATIONS = {
         "body_download_status": "varchar",
         "body_error_message": "varchar",
         "body_size_bytes": "bigint",
+        "raw_object_id": "varchar",
+        "parser_version": "varchar",
+    },
+    "research_report": {
+        "publish_time": "timestamp",
+        "source_record_id": "varchar",
+        "source_sec_code": "varchar",
+        "source_sec_name": "varchar",
+        "institution": "varchar",
+        "analyst": "varchar",
+        "rating": "varchar",
+        "rating_change": "varchar",
+        "industry": "varchar",
+        "report_type": "varchar",
+        "observed_at": "timestamp",
+        "collect_time": "timestamp",
+        "pdf_url": "varchar",
+        "pdf_sha256": "varchar",
+        "pdf_size_bytes": "bigint",
+        "pdf_object_id": "varchar",
+        "pdf_download_status": "varchar",
+        "pdf_error_message": "varchar",
         "raw_object_id": "varchar",
         "parser_version": "varchar",
     },
@@ -396,5 +467,15 @@ SILVER_SCHEMA_MIGRATIONS = {
         "announcement_regulatory_count": "double default 0",
         "announcement_litigation_count": "double default 0",
         "announcement_performance_count": "double default 0",
+    },
+    "daily_research_report_factor": {
+        "research_institution_count": "double default 0",
+        "research_analyst_count": "double default 0",
+        "research_rating_positive_count": "double default 0",
+        "research_rating_neutral_count": "double default 0",
+        "research_rating_negative_count": "double default 0",
+        "research_risk_count": "double default 0",
+        "research_topic_strength": "double default 0",
+        "research_sentiment_mean": "double default 0",
     },
 }

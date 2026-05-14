@@ -21,8 +21,10 @@ SUPPORTED_QUALITY_DATASETS = {
     "trade_status",
     "announcement",
     "news",
+    "research_report",
     "daily_news_factor",
     "daily_announcement_factor",
+    "daily_research_report_factor",
 }
 DOCUMENT_PUBLISH_TIME_REQUIRED_SOURCES = {
     "cninfo_announcement",
@@ -39,6 +41,7 @@ DOCUMENT_PUBLISH_TIME_REQUIRED_SOURCES = {
     "jinrongjie",
     "cls",
     "yicai",
+    "eastmoney_research_report",
 }
 
 
@@ -103,7 +106,11 @@ class QualityChecker:
     ) -> pd.DataFrame:
         filters = []
         params: list[Any] = []
-        date_field = "publish_date" if dataset in {"announcement", "news"} else "trade_date"
+        date_field = (
+            "publish_date"
+            if dataset in {"announcement", "news", "research_report"}
+            else "trade_date"
+        )
         if dataset not in {"stock_basic", "universe_constituent"}:
             if start_date:
                 filters.append(f"{date_field} >= ?")
@@ -117,7 +124,7 @@ class QualityChecker:
             order_by = "snapshot_date, universe, instrument"
         if dataset == "trade_calendar":
             order_by = "trade_date, calendar_id"
-        if dataset in {"announcement", "news"}:
+        if dataset in {"announcement", "news", "research_report"}:
             order_by = "publish_date, instrument"
         with self.database.connect() as conn:
             return conn.execute(
@@ -136,8 +143,10 @@ class QualityChecker:
             "trade_status": _check_trade_status,
             "announcement": _check_document_table,
             "news": _check_document_table,
+            "research_report": _check_document_table,
             "daily_news_factor": _check_count_factor,
             "daily_announcement_factor": _check_count_factor,
+            "daily_research_report_factor": _check_count_factor,
         }
         return checks[dataset](frame)
 
@@ -352,7 +361,12 @@ def _check_document_table(frame: pd.DataFrame) -> list[dict[str, Any]]:
 
 def _check_count_factor(frame: pd.DataFrame) -> list[dict[str, Any]]:
     issues = []
-    dataset = "daily_news_factor" if "news_count" in frame.columns else "daily_announcement_factor"
+    if "news_count" in frame.columns:
+        dataset = "daily_news_factor"
+    elif "research_report_count" in frame.columns:
+        dataset = "daily_research_report_factor"
+    else:
+        dataset = "daily_announcement_factor"
     count_fields = [column for column in frame.columns if column.endswith("_count")]
     sentiment_fields = [column for column in frame.columns if column.endswith("_sentiment_mean")]
     for row in frame.to_dict("records"):

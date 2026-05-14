@@ -314,6 +314,21 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
             }
         ]
     )
+    silver.upsert_research_reports(
+        [
+            {
+                "research_report_id": "rr-1",
+                "publish_date": "2026-05-13",
+                "publish_time": "2026-05-13 09:00:00",
+                "instrument": "SH600000",
+                "title": "浦发银行首次覆盖研报",
+                "source_id": "eastmoney_research_report",
+                "institution": "单元证券",
+                "analyst": "测试员",
+                "rating": "买入",
+            }
+        ]
+    )
 
     payload = QdcConsoleData(settings).daily_wide_preview(
         date="2026-05-13",
@@ -327,8 +342,12 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
     assert set(rows) == {"SH600000", "SZ000001"}
     assert rows["SH600000"]["announcement_count"] == 1
     assert rows["SH600000"]["news_count"] == 0
+    assert rows["SH600000"]["research_report_count"] == 1
+    assert rows["SH600000"]["_research_report_documents"][0]["institution"] == "单元证券"
+    assert rows["SH600000"]["_research_report_documents"][0]["rating"] == "买入"
     assert rows["SZ000001"]["announcement_count"] == 0
     assert rows["SZ000001"]["news_count"] == 0
+    assert rows["SZ000001"]["research_report_count"] == 0
 
 
 def test_qdc_console_can_stop_running_daily_pipeline_process(tmp_path: Path) -> None:
