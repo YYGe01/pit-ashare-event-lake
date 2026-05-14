@@ -453,6 +453,7 @@ function renderDashboard(payload) {
   const qlib = payload.qlib_provider_status || {};
   const sources = payload.source_summary_rows || [];
   const expected = Number(reference.expected_instrument_count || 0);
+  const documentCoverage = documentCoverageFromDatasetRows(payload.dataset_rows || [], expected);
   const coreComplete = Number(collection.core_complete_instrument_count || 0);
   const problemCount = Number(collection.problem_instrument_count || 0);
   const readiness = Number(verdict.readiness_percent ?? collection.core_complete_percent ?? 0);
@@ -481,6 +482,8 @@ function renderDashboard(payload) {
     summaryCard("结构化诊断 (Legacy)", `${number(coreComplete)} / ${number(expected)}`, `完整率 ${percent(collection.core_complete_percent)}`, readiness >= 100 ? "success" : "warning"),
     summaryCard("问题标的 (Diagnostics)", number(problemCount), "仅用于历史结构化链路排查", problemCount ? "warning" : "success"),
     summaryCard("质量问题 (Quality)", number(quality.open_issue_count || 0), `失败维度 ${number(quality.failed_dimension_count || 0)}`, quality.open_issue_count ? "danger" : "success"),
+    summaryCard("有公告标的", number(documentCoverage.announcement.instruments), `覆盖 ${documentCoverage.announcement.coverageText}`),
+    summaryCard("有新闻标的", number(documentCoverage.news.instruments), `覆盖 ${documentCoverage.news.coverageText}`),
     summaryCard("供应商异常 (Vendor)", number(vendorFailures), "超时 + 错误", vendorFailures ? "danger" : "success"),
     summaryCard("阻塞批次 (Blocked)", number(blockedBatches), `失败 ${number(batches.failed_count)} / 卡住 ${number(batches.stale_running_count)}`, blockedBatches ? "danger" : "success"),
     summaryCard("运行中 (Running)", number(batches.running_count || 0), `待执行 ${number(batches.pending_count || 0)}`),
@@ -534,12 +537,14 @@ function renderStatusStrip(payload) {
   const qlib = payload.qlib_provider_status || {};
   const sources = payload.source_summary_rows || [];
   const quality = payload.quality_summary || {};
+  const expected = Number(payload.reference?.expected_instrument_count || 0);
+  const documentCoverage = documentCoverageFromDatasetRows(payload.dataset_rows || [], expected);
   const factorRows = factorStatusRows(payload.dataset_rows || [], payload.date);
   const factorStatus = factorRows.some((row) => Number(row.row_count || 0) > 0) ? "ok" : "warning";
   const items = [
     statusStripItem("Qlib provider", qlibStripStatus(qlib), qlib.calendar_latest_date || "-"),
-    statusStripItem("公告", sourceGroupStatus(sources, ANNOUNCEMENT_SOURCE_IDS), sourceGroupFoot(sources, ANNOUNCEMENT_SOURCE_IDS)),
-    statusStripItem("新闻", sourceGroupStatus(sources, NEWS_SOURCE_IDS), sourceGroupFoot(sources, NEWS_SOURCE_IDS)),
+    statusStripItem("公告", sourceGroupStatus(sources, ANNOUNCEMENT_SOURCE_IDS), documentCoverageFoot(documentCoverage, "announcement")),
+    statusStripItem("新闻", sourceGroupStatus(sources, NEWS_SOURCE_IDS), documentCoverageFoot(documentCoverage, "news")),
     statusStripItem("因子", factorStatus, `${number(factorRows.reduce((sum, row) => sum + Number(row.row_count || 0), 0))} 行`),
     statusStripItem("质量", quality.status === "success" ? "ok" : quality.status || "pending", `${number(quality.open_issue_count || 0)} 个未关闭问题`),
   ];
@@ -582,6 +587,29 @@ function sourceGroupFoot(rows, sourceIds) {
   const silverRows = selected.reduce((sum, row) => sum + Number(row.silver_row_count || 0), 0);
   const errors = selected.reduce((sum, row) => sum + Number(row.timeout_count || 0) + Number(row.error_count || 0), 0);
   return `入库 ${number(silverRows)} · 异常 ${number(errors)}`;
+}
+
+function documentCoverageFromDatasetRows(datasetRows, expected) {
+  const byDataset = new Map((datasetRows || []).map((row) => [row.dataset, row]));
+  return {
+    announcement: documentCoverageItem(byDataset.get("announcement"), expected),
+    news: documentCoverageItem(byDataset.get("news"), expected),
+  };
+}
+
+function documentCoverageItem(row, expected) {
+  const instruments = Number(row?.instrument_count || 0);
+  const rows = Number(row?.row_count || 0);
+  return {
+    instruments,
+    rows,
+    coverageText: expected > 0 ? `${number(instruments)} / ${number(expected)} 标的` : `${number(instruments)} 标的`,
+  };
+}
+
+function documentCoverageFoot(coverage, kind) {
+  const item = coverage[kind] || { instruments: 0, rows: 0, coverageText: "0 标的" };
+  return `标的 ${item.coverageText} · 入库 ${number(item.rows)}`;
 }
 
 function renderSourceHealth(rows) {
@@ -1143,9 +1171,12 @@ function renderPreview(payload) {
   const pageInfo = paginateRows(sorted, state.widePage);
   state.widePage = pageInfo.page;
   const modeText = payload.mode === "factor" ? "处理后因子宽表" : "原始输入宽表";
+  const documentCoverage = documentCoverageFromPreviewRows(filteredRows, payload.mode);
   $("preview-summary").innerHTML = [
     summaryCard("基准日期", payload.date || "-", modeText),
     summaryCard("匹配标的", number(filteredRows.length), `总返回 ${number(payload.row_count || 0)}，隐藏 ${number(payload.hidden_count || 0)}`),
+    summaryCard("有公告标的", number(documentCoverage.announcement), `当前列表中 ${number(filteredRows.length - documentCoverage.announcement)} 个为 0`),
+    summaryCard("有新闻标的", number(documentCoverage.news), `当前列表中 ${number(filteredRows.length - documentCoverage.news)} 个为 0`),
     summaryCard("标的来源", payload.reference_source || "-", "每行一个 instrument"),
     summaryCard("刷新", new Date().toLocaleTimeString("zh-CN", { hour12: false }), "15 秒自动更新当前页"),
   ].join("");
@@ -1161,6 +1192,15 @@ function renderPreview(payload) {
     "当前日期没有宽表数据。",
     { sortKind: "wide", sort: state.sort.wide || {} },
   );
+}
+
+function documentCoverageFromPreviewRows(rows, mode) {
+  const newsKey = mode === "factor" ? "raw_news_count" : "news_count";
+  const announcementKey = mode === "factor" ? "raw_announcement_count" : "announcement_count";
+  return {
+    news: rows.filter((row) => Number(row[newsKey] || 0) > 0).length,
+    announcement: rows.filter((row) => Number(row[announcementKey] || 0) > 0).length,
+  };
 }
 
 function documentCountRenderer(key) {

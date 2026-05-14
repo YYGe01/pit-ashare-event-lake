@@ -22,7 +22,7 @@ from uuid import uuid4
 import duckdb
 
 from quant_data_center.crawlers.registry import CRAWL_DAILY_SOURCE_IDS
-from quant_data_center.exports.qlib import inspect_qlib_provider
+from quant_data_center.exports.qlib import inspect_qlib_provider, qlib_provider_stock_instruments
 from quant_data_center.factor_engine.calendar_align import TradeDayAligner, date_minus_days
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.schema import (
@@ -701,6 +701,14 @@ class QdcConsoleData:
         silver_tables: set[str],
         date: str,
     ) -> tuple[list[dict[str, Any]], str]:
+        provider_instruments = qlib_provider_stock_instruments(self.settings, trade_date=date)
+        if provider_instruments:
+            identity = self._instrument_identity_by_instrument(
+                conn,
+                silver_tables=silver_tables,
+                instruments=provider_instruments,
+            )
+            return [identity[instrument] for instrument in provider_instruments], "qlib_provider"
         if "stock_basic" in silver_tables:
             rows = _query_dicts(
                 conn,

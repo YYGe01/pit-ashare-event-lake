@@ -444,6 +444,37 @@ def inspect_qlib_provider(
     }
 
 
+def qlib_provider_stock_instruments(
+    settings: QdcSettings,
+    *,
+    provider_uri: str | Path | None = None,
+    trade_date: str | None = None,
+) -> list[str]:
+    """Return stock instruments from the configured Qlib provider instruments file."""
+
+    root = _resolve_base_provider_root(settings, provider_uri=provider_uri)
+    instruments_path = root / "instruments" / "all.txt"
+    if not instruments_path.exists():
+        return []
+    instruments: list[str] = []
+    for line in instruments_path.read_text(encoding="utf-8").splitlines():
+        parts = line.split("\t")
+        if not parts:
+            continue
+        instrument = parts[0].strip().upper()
+        if not _is_stock_instrument(instrument):
+            continue
+        if trade_date and len(parts) >= 3:
+            start_date = parts[1].strip()
+            end_date = parts[2].strip()
+            if start_date and trade_date < start_date:
+                continue
+            if end_date and trade_date > end_date:
+                continue
+        instruments.append(instrument)
+    return sorted(set(instruments))
+
+
 def latest_complete_trading_date(timezone: str, now: datetime | None = None) -> str:
     """Return a conservative latest complete trading day using weekdays and a post-close cutoff."""
 
@@ -548,6 +579,22 @@ def _qlib_instrument_name(value: Any) -> str:
         if suffix in {"sh", "sz"} and symbol:
             return f"{suffix}{symbol}"
     return text
+
+
+def _is_stock_instrument(instrument: str) -> bool:
+    if len(instrument) != 8:
+        return False
+    exchange = instrument[:2]
+    code = instrument[2:]
+    if not code.isdigit():
+        return False
+    if exchange == "BJ":
+        return True
+    if exchange == "SH":
+        return code.startswith(("60", "68", "90"))
+    if exchange == "SZ":
+        return code.startswith(("00", "20", "30"))
+    return False
 
 
 def _provider_status_from_issues(issues: list[dict[str, Any]]) -> str:

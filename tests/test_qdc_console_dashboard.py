@@ -64,6 +64,25 @@ universes:
     return config_path
 
 
+def _write_qlib_instruments(settings: QdcSettings) -> None:
+    instruments_path = settings.qlib_root / "cn_data" / "instruments" / "all.txt"
+    instruments_path.parent.mkdir(parents=True)
+    instruments_path.write_text(
+        "\n".join(
+            [
+                "SH000300\t2005-01-04\t2026-05-13",
+                "SH600000\t2000-01-04\t2026-05-13",
+                "SZ000001\t2000-01-04\t2026-05-13",
+                "SZ399300\t2005-01-04\t2026-05-13",
+                "BJ430017\t2023-05-31\t2025-09-30",
+                "SH600001\t2000-01-04\t2009-12-15",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_qdc_daily_status_returns_beginner_dashboard_sections(tmp_path: Path) -> None:
     settings = QdcSettings.from_yaml(_write_config(tmp_path))
     database = QdcDatabase(settings)
@@ -264,22 +283,7 @@ def test_qdc_console_builds_crawl_daily_command(tmp_path: Path) -> None:
 
 def test_qdc_crawl_defaults_to_serial_provider_stock_universe(tmp_path: Path) -> None:
     settings = QdcSettings.from_yaml(_write_config(tmp_path))
-    instruments_path = settings.qlib_root / "cn_data" / "instruments" / "all.txt"
-    instruments_path.parent.mkdir(parents=True)
-    instruments_path.write_text(
-        "\n".join(
-            [
-                "SH000300\t2005-01-04\t2026-05-13",
-                "SH600000\t2000-01-04\t2026-05-13",
-                "SZ000001\t2000-01-04\t2026-05-13",
-                "SZ399300\t2005-01-04\t2026-05-13",
-                "BJ430017\t2023-05-31\t2025-09-30",
-                "SH600001\t2000-01-04\t2009-12-15",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    _write_qlib_instruments(settings)
 
     assert DEFAULT_CRAWL_SOURCE_PARALLELISM == 1
     assert _qlib_provider_stock_instruments(settings, trade_date="2026-05-13") == [
@@ -297,6 +301,39 @@ def test_qdc_crawl_defaults_to_serial_provider_stock_universe(tmp_path: Path) ->
 
     assert mode == "qlib_provider"
     assert instrument_filter == ["SH600000", "SZ000001"]
+
+
+def test_qdc_daily_preview_keeps_qlib_provider_symbols_without_documents(tmp_path: Path) -> None:
+    settings = QdcSettings.from_yaml(_write_config(tmp_path))
+    database = QdcDatabase(settings)
+    database.init_schema()
+    _write_qlib_instruments(settings)
+    SilverStore(settings).upsert_announcements(
+        [
+            {
+                "announcement_id": "ann-1",
+                "publish_date": "2026-05-13",
+                "instrument": "SH600000",
+                "title": "浦发银行公告",
+                "source_id": "cninfo_announcement",
+            }
+        ]
+    )
+
+    payload = QdcConsoleData(settings).daily_wide_preview(
+        date="2026-05-13",
+        mode="raw",
+        limit=20,
+    )
+
+    rows = {row["instrument"]: row for row in payload["rows"]}
+    assert payload["reference_source"] == "qlib_provider"
+    assert payload["row_count"] == 2
+    assert set(rows) == {"SH600000", "SZ000001"}
+    assert rows["SH600000"]["announcement_count"] == 1
+    assert rows["SH600000"]["news_count"] == 0
+    assert rows["SZ000001"]["announcement_count"] == 0
+    assert rows["SZ000001"]["news_count"] == 0
 
 
 def test_qdc_console_can_stop_running_daily_pipeline_process(tmp_path: Path) -> None:

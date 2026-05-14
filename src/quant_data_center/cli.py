@@ -29,7 +29,11 @@ from quant_data_center.crawlers.sources.vendor_news import (
     VENDOR_NEWS_SOURCE_IDS,
     VendorNewsCrawler,
 )
-from quant_data_center.exports.qlib import QlibExporter, QlibProviderVerifier
+from quant_data_center.exports.qlib import (
+    QlibExporter,
+    QlibProviderVerifier,
+    qlib_provider_stock_instruments,
+)
 from quant_data_center.factor_engine import build_text_event_classifier
 from quant_data_center.factors import FactorBuilder
 from quant_data_center.jobs.backfill import parse_date, parse_symbols, plan_backfill_tasks
@@ -1600,51 +1604,7 @@ def _qlib_provider_stock_instruments(
     *,
     trade_date: str | None = None,
 ) -> list[str]:
-    root = _qlib_provider_root(settings)
-    instruments_path = root / "instruments" / "all.txt"
-    if not instruments_path.exists():
-        return []
-    result: list[str] = []
-    for line in instruments_path.read_text(encoding="utf-8").splitlines():
-        parts = line.split("\t")
-        if not parts:
-            continue
-        instrument = parts[0].strip().upper()
-        if not _is_stock_instrument(instrument):
-            continue
-        if trade_date and len(parts) >= 3:
-            start_date = parts[1].strip()
-            end_date = parts[2].strip()
-            if start_date and trade_date < start_date:
-                continue
-            if end_date and trade_date > end_date:
-                continue
-        result.append(instrument)
-    return sorted(set(result))
-
-
-def _qlib_provider_root(settings: QdcSettings) -> Path:
-    value = settings.qlib_provider.provider_uri or str(settings.qlib_root / "cn_data")
-    path = Path(value).expanduser()
-    if path.is_absolute():
-        return path
-    return (settings.project_root / path).resolve()
-
-
-def _is_stock_instrument(instrument: str) -> bool:
-    if len(instrument) != 8:
-        return False
-    exchange = instrument[:2]
-    code = instrument[2:]
-    if not code.isdigit():
-        return False
-    if exchange == "BJ":
-        return True
-    if exchange == "SH":
-        return code.startswith(("60", "68", "90"))
-    if exchange == "SZ":
-        return code.startswith(("00", "20", "30"))
-    return False
+    return qlib_provider_stock_instruments(settings, trade_date=trade_date)
 
 
 def _crawl_exhausted_datasets(
