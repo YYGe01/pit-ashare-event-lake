@@ -73,6 +73,13 @@ QLIB_FIELDS = {
     "risk_topic_count": "risk_topic_count",
     "new_business_topic_count": "new_business_topic_count",
     "sentiment_mean": "sentiment_mean",
+    "public_sentiment_count": "public_sentiment_count",
+    "public_sentiment_heat_mean": "public_sentiment_heat_mean",
+    "public_sentiment_rank_best": "public_sentiment_rank_best",
+    "public_sentiment_keyword_count": "public_sentiment_keyword_count",
+    "public_sentiment_risk_topic_count": "public_sentiment_risk_topic_count",
+    "public_sentiment_new_business_topic_count": "public_sentiment_new_business_topic_count",
+    "public_sentiment_sentiment_mean": "public_sentiment_sentiment_mean",
 }
 
 
@@ -246,7 +253,17 @@ class QlibExporter:
                   coalesce(ii.reply_delay_hours_mean, 0) as reply_delay_hours_mean,
                   coalesce(ii.risk_topic_count, 0) as risk_topic_count,
                   coalesce(ii.new_business_topic_count, 0) as new_business_topic_count,
-                  coalesce(ii.sentiment_mean, 0) as sentiment_mean
+                  coalesce(ii.sentiment_mean, 0) as sentiment_mean,
+                  coalesce(ps.public_sentiment_count, 0) as public_sentiment_count,
+                  coalesce(ps.public_sentiment_heat_mean, 0) as public_sentiment_heat_mean,
+                  coalesce(ps.public_sentiment_rank_best, 0) as public_sentiment_rank_best,
+                  coalesce(ps.public_sentiment_keyword_count, 0) as public_sentiment_keyword_count,
+                  coalesce(ps.public_sentiment_risk_topic_count, 0)
+                    as public_sentiment_risk_topic_count,
+                  coalesce(ps.public_sentiment_new_business_topic_count, 0)
+                    as public_sentiment_new_business_topic_count,
+                  coalesce(ps.public_sentiment_sentiment_mean, 0)
+                    as public_sentiment_sentiment_mean
                 from qdc_silver.daily_bar b
                 left join qdc_silver.adj_factor a
                   on b.trade_date = a.trade_date and b.instrument = a.instrument
@@ -260,6 +277,8 @@ class QlibExporter:
                   on b.trade_date = rf.trade_date and b.instrument = rf.instrument
                 left join qdc_silver.daily_investor_interaction_factor ii
                   on b.trade_date = ii.trade_date and b.instrument = ii.instrument
+                left join qdc_silver.daily_public_sentiment_factor ps
+                  on b.trade_date = ps.trade_date and b.instrument = ps.instrument
                 {where_clause}
                 order by b.trade_date, b.instrument
                 """,

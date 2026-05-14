@@ -8,6 +8,7 @@ from quant_data_center.factor_engine import (
     build_announcement_factor_rows,
     build_investor_interaction_factor_rows,
     build_news_factor_rows,
+    build_public_sentiment_factor_rows,
     build_research_report_factor_rows,
 )
 from quant_data_center.settings import QdcSettings
@@ -21,6 +22,7 @@ SUPPORTED_FACTOR_SETS = {
     "announcement_v1",
     "research_report_v1",
     "investor_interaction_v1",
+    "public_sentiment_v1",
 }
 
 
@@ -90,6 +92,21 @@ class FactorBuilder:
                     "factor_set": "investor_interaction_v1",
                     "row_count": self.silver.upsert_daily_investor_interaction_factor(
                         investor_interaction_rows
+                    ),
+                }
+            )
+        if factor_set in {"all", "public_sentiment_v1"}:
+            public_sentiment_rows = build_public_sentiment_factor_rows(
+                self.database,
+                start_date=start_date,
+                end_date=end_date,
+                source_id="qdc_public_sentiment_v1",
+            )
+            results.append(
+                {
+                    "factor_set": "public_sentiment_v1",
+                    "row_count": self.silver.upsert_daily_public_sentiment_factor(
+                        public_sentiment_rows
                     ),
                 }
             )

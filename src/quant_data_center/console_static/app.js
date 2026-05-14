@@ -71,10 +71,12 @@ const FIELD_LABELS = {
   announcement_count: "公告数量",
   research_report_count: "研报数量",
   investor_interaction_count: "互动问答数量",
+  public_sentiment_count: "公开舆情数量",
   raw_news_count: "来源新闻数量",
   raw_announcement_count: "来源公告数量",
   raw_research_report_count: "来源研报数量",
   raw_investor_interaction_count: "来源互动问答数量",
+  raw_public_sentiment_count: "来源公开舆情数量",
   news_sentiment_mean: "新闻情绪均值",
   news_positive_count: "新闻正面数",
   news_negative_count: "新闻负面数",
@@ -118,6 +120,12 @@ const FIELD_LABELS = {
   risk_topic_count: "互动风险主题数",
   new_business_topic_count: "互动新业务主题数",
   sentiment_mean: "互动情绪均值",
+  public_sentiment_heat_mean: "舆情热度均值",
+  public_sentiment_rank_best: "舆情最佳排名",
+  public_sentiment_keyword_count: "舆情关键词数",
+  public_sentiment_risk_topic_count: "舆情风险主题数",
+  public_sentiment_new_business_topic_count: "舆情新业务主题数",
+  public_sentiment_sentiment_mean: "舆情情绪均值",
   institution: "机构",
   analyst: "分析师",
   rating: "评级",
@@ -132,6 +140,13 @@ const FIELD_LABELS = {
   channel: "渠道",
   topic_tags: "主题",
   sentiment_score: "情绪分",
+  platform: "平台",
+  sentiment_type: "舆情类型",
+  hot_rank: "热度排名",
+  hot_score: "热度分",
+  rank_change: "排名变化",
+  keyword_text: "热门关键词",
+  keyword_count: "关键词数",
 };
 
 const DATASET_LABELS = {
@@ -143,10 +158,12 @@ const DATASET_LABELS = {
   news: "新闻明细",
   research_report: "研报明细",
   investor_interaction: "互动问答明细",
+  public_sentiment: "公开舆情明细",
   daily_news_factor: "新闻日频因子",
   daily_announcement_factor: "公告日频因子",
   daily_research_report_factor: "研报日频因子",
   daily_investor_interaction_factor: "互动问答日频因子",
+  daily_public_sentiment_factor: "公开舆情日频因子",
 };
 
 const SOURCE_LABELS = {
@@ -157,6 +174,7 @@ const SOURCE_LABELS = {
   nbd_company_news: "每经公司新闻",
   eastmoney_research_report: "东方财富研报",
   cninfo_investor_interaction: "互动易问答",
+  eastmoney_public_sentiment: "东方财富公开舆情",
   sina: "新浪财经",
   wallstreetcn: "华尔街见闻",
   "10jqka": "同花顺",
@@ -197,12 +215,14 @@ const DASHBOARD_SOURCE_IDS = [
   "sina_finance_news",
   "eastmoney_research_report",
   "cninfo_investor_interaction",
+  "eastmoney_public_sentiment",
   "nbd_company_news",
 ];
 const NEWS_SOURCE_IDS = ["eastmoney_roll_news", "sina_finance_news"];
 const ANNOUNCEMENT_SOURCE_IDS = ["cninfo_announcement", "sse_announcement"];
 const RESEARCH_REPORT_SOURCE_IDS = ["eastmoney_research_report"];
 const INVESTOR_INTERACTION_SOURCE_IDS = ["cninfo_investor_interaction"];
+const PUBLIC_SENTIMENT_SOURCE_IDS = ["eastmoney_public_sentiment"];
 const FACTOR_TABLE_FIELDS = {
   daily_news_factor: [
     "news_count",
@@ -258,12 +278,22 @@ const FACTOR_TABLE_FIELDS = {
     "new_business_topic_count",
     "sentiment_mean",
   ],
+  daily_public_sentiment_factor: [
+    "public_sentiment_count",
+    "public_sentiment_heat_mean",
+    "public_sentiment_rank_best",
+    "public_sentiment_keyword_count",
+    "public_sentiment_risk_topic_count",
+    "public_sentiment_new_business_topic_count",
+    "public_sentiment_sentiment_mean",
+  ],
 };
 const HANDLER_EXTERNAL_FIELDS = new Set([
   ...FACTOR_TABLE_FIELDS.daily_news_factor,
   ...FACTOR_TABLE_FIELDS.daily_announcement_factor,
   ...FACTOR_TABLE_FIELDS.daily_research_report_factor,
   ...FACTOR_TABLE_FIELDS.daily_investor_interaction_factor,
+  ...FACTOR_TABLE_FIELDS.daily_public_sentiment_factor,
 ]);
 
 let state = {
@@ -612,6 +642,7 @@ function renderStatusStrip(payload) {
     statusStripItem("新闻", sourceGroupStatus(sources, NEWS_SOURCE_IDS), documentCoverageFoot(documentCoverage, "news")),
     statusStripItem("研报", sourceGroupStatus(sources, RESEARCH_REPORT_SOURCE_IDS), documentCoverageFoot(documentCoverage, "research_report")),
     statusStripItem("互动", sourceGroupStatus(sources, INVESTOR_INTERACTION_SOURCE_IDS), documentCoverageFoot(documentCoverage, "investor_interaction")),
+    statusStripItem("舆情", sourceGroupStatus(sources, PUBLIC_SENTIMENT_SOURCE_IDS), documentCoverageFoot(documentCoverage, "public_sentiment")),
     statusStripItem("因子", factorStatus, `${number(factorRows.reduce((sum, row) => sum + Number(row.row_count || 0), 0))} 行`),
     statusStripItem("质量", quality.status === "success" ? "ok" : quality.status || "pending", `${number(quality.open_issue_count || 0)} 个未关闭问题`),
   ];
@@ -663,6 +694,7 @@ function documentCoverageFromDatasetRows(datasetRows, expected) {
     news: documentCoverageItem(byDataset.get("news"), expected),
     research_report: documentCoverageItem(byDataset.get("research_report"), expected),
     investor_interaction: documentCoverageItem(byDataset.get("investor_interaction"), expected),
+    public_sentiment: documentCoverageItem(byDataset.get("public_sentiment"), expected),
   };
 }
 
@@ -753,6 +785,7 @@ function factorStatusRows(datasetRows, date) {
     "daily_news_factor",
     "daily_research_report_factor",
     "daily_investor_interaction_factor",
+    "daily_public_sentiment_factor",
   ].map((dataset) => {
     const row = byDataset.get(dataset) || {};
     const fields = FACTOR_TABLE_FIELDS[dataset] || [];
@@ -779,6 +812,7 @@ function renderActionCommands(payload) {
     `qdc crawl-daily --date ${date} --source-id cninfo_announcement --page-size 20 --max-pages 1 --skip-pdf-download`,
     `qdc crawl-daily --date ${date} --source-id eastmoney_research_report --page-size 50`,
     `qdc crawl-daily --date ${date} --source-id cninfo_investor_interaction --symbols SZ002594 --page-size 20 --max-pages 1`,
+    `qdc crawl-daily --date ${date} --source-id eastmoney_public_sentiment --page-size 20 --max-pages 1`,
     `qdc build-factors --factor-set all --start ${date} --end ${date}`,
   ];
   target.innerHTML = commands.map((command) => `
@@ -1255,6 +1289,7 @@ function renderPreview(payload) {
     summaryCard("有新闻标的", number(documentCoverage.news), `当前列表中 ${number(filteredRows.length - documentCoverage.news)} 个为 0`),
     summaryCard("有研报标的", number(documentCoverage.research_report), `当前列表中 ${number(filteredRows.length - documentCoverage.research_report)} 个为 0`),
     summaryCard("有互动标的", number(documentCoverage.investor_interaction), `当前列表中 ${number(filteredRows.length - documentCoverage.investor_interaction)} 个为 0`),
+    summaryCard("有舆情标的", number(documentCoverage.public_sentiment), `当前列表中 ${number(filteredRows.length - documentCoverage.public_sentiment)} 个为 0`),
     summaryCard("标的来源", payload.reference_source || "-", "每行一个 instrument"),
     summaryCard("刷新", new Date().toLocaleTimeString("zh-CN", { hour12: false }), "15 秒自动更新当前页"),
   ].join("");
@@ -1277,11 +1312,13 @@ function documentCoverageFromPreviewRows(rows, mode) {
   const announcementKey = mode === "factor" ? "raw_announcement_count" : "announcement_count";
   const researchReportKey = mode === "factor" ? "raw_research_report_count" : "research_report_count";
   const investorInteractionKey = mode === "factor" ? "raw_investor_interaction_count" : "investor_interaction_count";
+  const publicSentimentKey = mode === "factor" ? "raw_public_sentiment_count" : "public_sentiment_count";
   return {
     news: rows.filter((row) => Number(row[newsKey] || 0) > 0).length,
     announcement: rows.filter((row) => Number(row[announcementKey] || 0) > 0).length,
     research_report: rows.filter((row) => Number(row[researchReportKey] || 0) > 0).length,
     investor_interaction: rows.filter((row) => Number(row[investorInteractionKey] || 0) > 0).length,
+    public_sentiment: rows.filter((row) => Number(row[publicSentimentKey] || 0) > 0).length,
   };
 }
 
@@ -1290,11 +1327,13 @@ function documentCountRenderer(key) {
   const announcementKeys = new Set(["announcement_count", "raw_announcement_count"]);
   const researchReportKeys = new Set(["research_report_count", "raw_research_report_count"]);
   const investorInteractionKeys = new Set(["investor_interaction_count", "raw_investor_interaction_count"]);
+  const publicSentimentKeys = new Set(["public_sentiment_count", "raw_public_sentiment_count"]);
   if (
     !newsKeys.has(key)
     && !announcementKeys.has(key)
     && !researchReportKeys.has(key)
     && !investorInteractionKeys.has(key)
+    && !publicSentimentKeys.has(key)
   ) return null;
   return (row) => {
     const count = Number(row[key] || 0);
@@ -1305,7 +1344,9 @@ function documentCountRenderer(key) {
         ? "research_report"
         : investorInteractionKeys.has(key)
           ? "investor_interaction"
-          : "announcement";
+          : publicSentimentKeys.has(key)
+            ? "public_sentiment"
+            : "announcement";
     return `<button class="link-button document-count" data-kind="${kind}" data-instrument="${escapeHtml(row.instrument)}" type="button">${number(count)} 条</button>`;
   };
 }
@@ -1319,14 +1360,18 @@ function openDocuments(kind, instrument) {
       ? row._research_report_documents || []
       : kind === "investor_interaction"
         ? row._investor_interaction_documents || []
-        : row._announcement_documents || [];
+        : kind === "public_sentiment"
+          ? row._public_sentiment_documents || []
+          : row._announcement_documents || [];
   const title = kind === "news"
     ? "新闻来源明细"
     : kind === "research_report"
       ? "研报来源明细"
       : kind === "investor_interaction"
         ? "互动问答明细"
-        : "公告来源明细";
+        : kind === "public_sentiment"
+          ? "公开舆情明细"
+          : "公告来源明细";
   $("document-modal-title").textContent = `${instrument} ${title}`;
   $("document-modal-summary").textContent = `${state.previewPayload.date || "-"} · ${docs.length} 条已加载明细`;
   $("document-modal-body").innerHTML = docs.length
@@ -1371,6 +1416,15 @@ function renderDocumentItem(document) {
     "channel",
     "topic_tags",
     "sentiment_score",
+    "platform",
+    "sentiment_type",
+    "hot_rank",
+    "hot_score",
+    "rank_change",
+    "keyword_text",
+    "keyword_count",
+    "risk_topic_count",
+    "new_business_topic_count",
   ]
     .filter((key) => document[key] !== null && document[key] !== undefined && document[key] !== "")
     .map((key) => `<span>${escapeHtml(fieldLabel(key))}: ${escapeHtml(compact(document[key], 80))}</span>`);

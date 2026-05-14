@@ -345,6 +345,22 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
             }
         ]
     )
+    silver.upsert_public_sentiment(
+        [
+            {
+                "public_sentiment_id": "ps-1",
+                "publish_date": "2026-05-13",
+                "instrument": "SH600000",
+                "title": "浦发银行 东方财富公开舆情，人气排名 12，热门关键词 AI",
+                "source_id": "eastmoney_public_sentiment",
+                "platform": "eastmoney_guba",
+                "hot_rank": 12,
+                "hot_score": 88.8,
+                "keyword_text": "AI",
+                "keyword_count": 1,
+            }
+        ]
+    )
 
     payload = QdcConsoleData(settings).daily_wide_preview(
         date="2026-05-13",
@@ -354,7 +370,7 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
 
     rows = {row["instrument"]: row for row in payload["rows"]}
     assert payload["reference_source"] == "stock_basic_active"
-    assert payload["columns"][:9] == [
+    assert payload["columns"][:10] == [
         "instrument",
         "symbol",
         "exchange",
@@ -364,6 +380,7 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
         "announcement_count",
         "research_report_count",
         "investor_interaction_count",
+        "public_sentiment_count",
     ]
     assert payload["row_count"] == 2
     assert set(rows) == {"SH600000", "SZ000001"}
@@ -371,13 +388,16 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
     assert rows["SH600000"]["news_count"] == 0
     assert rows["SH600000"]["research_report_count"] == 1
     assert rows["SH600000"]["investor_interaction_count"] == 1
+    assert rows["SH600000"]["public_sentiment_count"] == 1
     assert rows["SH600000"]["_research_report_documents"][0]["institution"] == "单元证券"
     assert rows["SH600000"]["_research_report_documents"][0]["rating"] == "买入"
     assert rows["SH600000"]["_investor_interaction_documents"][0]["reply_status"] == "replied"
+    assert rows["SH600000"]["_public_sentiment_documents"][0]["hot_rank"] == 12
     assert rows["SZ000001"]["announcement_count"] == 0
     assert rows["SZ000001"]["news_count"] == 0
     assert rows["SZ000001"]["research_report_count"] == 0
     assert rows["SZ000001"]["investor_interaction_count"] == 0
+    assert rows["SZ000001"]["public_sentiment_count"] == 0
 
     factor_payload = QdcConsoleData(settings).daily_wide_preview(
         date="2026-05-13",
@@ -385,7 +405,7 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
         limit=20,
     )
 
-    assert factor_payload["columns"][:13] == [
+    assert factor_payload["columns"][:15] == [
         "instrument",
         "symbol",
         "exchange",
@@ -395,10 +415,12 @@ def test_qdc_daily_preview_uses_stock_basic_as_reference(tmp_path: Path) -> None
         "announcement_count",
         "research_report_count",
         "investor_interaction_count",
+        "public_sentiment_count",
         "raw_news_count",
         "raw_announcement_count",
         "raw_research_report_count",
         "raw_investor_interaction_count",
+        "raw_public_sentiment_count",
     ]
 
 

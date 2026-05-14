@@ -23,7 +23,13 @@ from quant_data_center.factor_engine.text_events import (
 )
 from quant_data_center.storage.database import QdcDatabase
 
-DOCUMENT_TABLES = {"announcement", "news", "research_report", "investor_interaction"}
+DOCUMENT_TABLES = {
+    "announcement",
+    "news",
+    "research_report",
+    "investor_interaction",
+    "public_sentiment",
+}
 DOCUMENT_LOOKBACK_DAYS = 15
 DOCUMENT_FACTOR_SOURCE_IDS = {
     "announcement": ("cninfo_announcement", "sse_announcement"),
@@ -43,6 +49,7 @@ DOCUMENT_FACTOR_SOURCE_IDS = {
     ),
     "research_report": ("eastmoney_research_report",),
     "investor_interaction": ("cninfo_investor_interaction",),
+    "public_sentiment": ("eastmoney_public_sentiment",),
 }
 
 NEWS_FACTOR_FIELDS = (
@@ -98,6 +105,15 @@ INVESTOR_INTERACTION_FACTOR_FIELDS = (
     "risk_topic_count",
     "new_business_topic_count",
     "sentiment_mean",
+)
+PUBLIC_SENTIMENT_FACTOR_FIELDS = (
+    "public_sentiment_count",
+    "public_sentiment_heat_mean",
+    "public_sentiment_rank_best",
+    "public_sentiment_keyword_count",
+    "public_sentiment_risk_topic_count",
+    "public_sentiment_new_business_topic_count",
+    "public_sentiment_sentiment_mean",
 )
 NEW_BUSINESS_KEYWORDS = (
     "AI",
@@ -310,6 +326,64 @@ def build_investor_interaction_factor_rows(
     return rows
 
 
+def build_public_sentiment_factor_rows(
+    database: QdcDatabase,
+    *,
+    start_date: str,
+    end_date: str,
+    source_id: str,
+) -> list[dict[str, Any]]:
+    documents = _load_public_sentiment(database, start_date=start_date, end_date=end_date)
+    grouped: dict[tuple[str, str], dict[str, Any]] = defaultdict(
+        _public_sentiment_factor_seed
+    )
+    heat_sums: dict[tuple[str, str], float] = defaultdict(float)
+    heat_counts: dict[tuple[str, str], int] = defaultdict(int)
+    sentiment_sums: dict[tuple[str, str], float] = defaultdict(float)
+    sentiment_counts: dict[tuple[str, str], int] = defaultdict(int)
+    rank_best: dict[tuple[str, str], float] = {}
+    for document in documents:
+        key = (document["trade_date"], document["instrument"])
+        row = grouped[key]
+        row["public_sentiment_count"] += 1.0
+        heat_score = _float_or_none(document.get("hot_score"))
+        if heat_score is not None:
+            heat_sums[key] += heat_score
+            heat_counts[key] += 1
+        hot_rank = _float_or_none(document.get("hot_rank"))
+        if hot_rank is not None and hot_rank > 0:
+            rank_best[key] = min(rank_best.get(key, hot_rank), hot_rank)
+        row["public_sentiment_keyword_count"] += float(
+            document.get("keyword_count") or 0
+        )
+        row["public_sentiment_risk_topic_count"] += float(
+            document.get("risk_topic_count") or 0
+        )
+        row["public_sentiment_new_business_topic_count"] += float(
+            document.get("new_business_topic_count") or 0
+        )
+        sentiment_score = _float_or_none(document.get("sentiment_score"))
+        if sentiment_score is not None:
+            sentiment_sums[key] += sentiment_score
+            sentiment_counts[key] += 1
+    rows = []
+    for trade_date, instrument in sorted(grouped):
+        key = (trade_date, instrument)
+        factor_row = grouped[key]
+        factor_row["trade_date"] = trade_date
+        factor_row["instrument"] = instrument
+        factor_row["source_id"] = source_id
+        factor_row["public_sentiment_heat_mean"] = (
+            heat_sums[key] / heat_counts[key] if heat_counts[key] else 0.0
+        )
+        factor_row["public_sentiment_rank_best"] = rank_best.get(key, 0.0)
+        factor_row["public_sentiment_sentiment_mean"] = (
+            sentiment_sums[key] / sentiment_counts[key] if sentiment_counts[key] else 0.0
+        )
+        rows.append(factor_row)
+    return rows
+
+
 def _load_documents(
     database: QdcDatabase,
     *,
@@ -504,6 +578,97 @@ def _load_investor_interactions(
     return documents
 
 
+def _load_public_sentiment(
+    database: QdcDatabase,
+    *,
+    start_date: str,
+    end_date: str,
+) -> list[dict[str, Any]]:
+    publish_start = date_minus_days(start_date, DOCUMENT_LOOKBACK_DAYS)
+    source_ids = DOCUMENT_FACTOR_SOURCE_IDS["public_sentiment"]
+    placeholders = ", ".join("?" for _ in source_ids)
+    with database.connect() as conn:
+        aligner = TradeDayAligner.from_connection(conn)
+        columns = {
+            str(row[0])
+            for row in conn.execute(
+                """
+                select column_name
+                from information_schema.columns
+                where table_schema = 'qdc_silver' and table_name = 'public_sentiment'
+                """
+            ).fetchall()
+        }
+        if not columns:
+            return []
+        optional_exprs = [
+            _optional_select_expr(columns, field)
+            for field in (
+                "hot_score",
+                "hot_rank",
+                "keyword_count",
+                "risk_topic_count",
+                "new_business_topic_count",
+                "sentiment_score",
+            )
+        ]
+        rows = conn.execute(
+            f"""
+            select publish_date, instrument, title, source_id, {", ".join(optional_exprs)}
+            from qdc_silver.public_sentiment
+            where publish_date >= ? and publish_date <= ?
+              and source_id in ({placeholders})
+            order by publish_date, instrument, source_id
+            """,
+            [publish_start, end_date, *source_ids],
+        ).fetchall()
+    documents = []
+    seen_keys = set()
+    for (
+        publish_date,
+        instrument,
+        title,
+        source_id_value,
+        hot_score,
+        hot_rank,
+        keyword_count,
+        risk_topic_count,
+        new_business_topic_count,
+        sentiment_score,
+    ) in rows:
+        trade_date = aligner.align(publish_date)
+        if start_date <= trade_date <= end_date:
+            key = (
+                str(publish_date),
+                str(instrument),
+                _dedupe_title_key(str(title)),
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            documents.append(
+                {
+                    "trade_date": trade_date,
+                    "instrument": str(instrument),
+                    "title": str(title),
+                    "source_id": str(source_id_value),
+                    "hot_score": hot_score,
+                    "hot_rank": hot_rank,
+                    "keyword_count": keyword_count,
+                    "risk_topic_count": risk_topic_count,
+                    "new_business_topic_count": new_business_topic_count,
+                    "sentiment_score": sentiment_score,
+                }
+            )
+    return documents
+
+
+def _optional_select_expr(columns: set[str], field: str) -> str:
+    if field in columns:
+        return field
+    return f"null as {field}"
+
+
 def _dedupe_title_key(title: str) -> str:
     return "".join(ch for ch in title.lower() if ch.isalnum())
 
@@ -575,6 +740,18 @@ def _investor_interaction_factor_seed() -> dict[str, float]:
         "new_business_topic_count": 0.0,
         "sentiment_mean": 0.0,
         "_sentiment_sum": 0.0,
+    }
+
+
+def _public_sentiment_factor_seed() -> dict[str, float]:
+    return {
+        "public_sentiment_count": 0.0,
+        "public_sentiment_heat_mean": 0.0,
+        "public_sentiment_rank_best": 0.0,
+        "public_sentiment_keyword_count": 0.0,
+        "public_sentiment_risk_topic_count": 0.0,
+        "public_sentiment_new_business_topic_count": 0.0,
+        "public_sentiment_sentiment_mean": 0.0,
     }
 
 

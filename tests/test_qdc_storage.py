@@ -750,6 +750,22 @@ def test_qdc_console_overview_reports_data_coverage(tmp_path: Path) -> None:
             }
         ]
     )
+    silver.upsert_daily_public_sentiment_factor(
+        [
+            {
+                "trade_date": "2026-05-11",
+                "instrument": "SH600000",
+                "public_sentiment_count": 1,
+                "public_sentiment_heat_mean": 88.8,
+                "public_sentiment_rank_best": 12,
+                "public_sentiment_keyword_count": 1,
+                "public_sentiment_risk_topic_count": 0,
+                "public_sentiment_new_business_topic_count": 1,
+                "public_sentiment_sentiment_mean": 0,
+                "source_id": "unit_test",
+            }
+        ]
+    )
 
     coverage = QdcConsoleData(settings).overview()["data_coverage"]
 
@@ -3446,7 +3462,7 @@ def test_qdc_crawl_daily_control_only_plans_and_runs_default_sources(tmp_path: P
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 6
+    assert len(tasks) == 7
     assert {task["source_id"] for task in tasks} == {
         "cninfo_announcement",
         "sse_announcement",
@@ -3454,6 +3470,7 @@ def test_qdc_crawl_daily_control_only_plans_and_runs_default_sources(tmp_path: P
         "eastmoney_roll_news",
         "eastmoney_research_report",
         "cninfo_investor_interaction",
+        "eastmoney_public_sentiment",
     }
     assert {task["status"] for task in tasks} == {"success"}
     assert database.table_counts()["crawl_run"] == 1
@@ -4151,7 +4168,7 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 6
+    assert len(tasks) == 7
     assert {task["source_id"] for task in tasks} == {
         "cninfo_announcement",
         "sse_announcement",
@@ -4159,6 +4176,7 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
         "eastmoney_roll_news",
         "eastmoney_research_report",
         "cninfo_investor_interaction",
+        "eastmoney_public_sentiment",
     }
     assert {task["status"] for task in tasks} == {"success"}
     with database.connect() as conn:
@@ -4176,7 +4194,7 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
             """
         ).fetchone()
     assert crawl_run is not None
-    assert crawl_run[0:3] == ("success", 6, 6)
+    assert crawl_run[0:3] == ("success", 7, 7)
     crawl_parameters = json.loads(crawl_run[3])
     assert crawl_parameters["command"] == "daily-pipeline"
     assert crawl_parameters["instrument_filter"] == []
@@ -4186,8 +4204,8 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
     parameters = json.loads(pipeline_job[0])
     assert parameters["crawl_documents"] is True
     assert parameters["crawl_status"] == "ok"
-    assert parameters["crawl_planned_count"] == 6
-    assert parameters["crawl_ran_count"] == 6
+    assert parameters["crawl_planned_count"] == 7
+    assert parameters["crawl_ran_count"] == 7
 
 
 def test_qdc_plan_backfill_rejects_unsupported_source(tmp_path: Path) -> None:
@@ -4735,6 +4753,174 @@ def test_qdc_news_falls_back_to_global_stream_and_maps_instrument(
     )
 
 
+def test_qdc_crawl_public_sentiment_builds_factor_and_preview(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    silver = SilverStore(settings)
+    silver.upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+            {
+                "instrument": "SZ000001",
+                "symbol": "000001",
+                "exchange": "SZ",
+                "name": "平安银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+        ]
+    )
+
+    def stock_comment_em():
+        return pd.DataFrame(
+            [
+                {
+                    "代码": "600000",
+                    "名称": "浦发银行",
+                    "最新价": 10.0,
+                    "涨跌幅": 1.2,
+                    "换手率": 0.5,
+                    "机构参与度": 0.4,
+                    "综合得分": 77.0,
+                    "上升": 3,
+                    "目前排名": 12,
+                    "关注指数": 88.8,
+                    "交易日": "2026-05-14",
+                },
+                {
+                    "代码": "000001",
+                    "名称": "平安银行",
+                    "最新价": 11.0,
+                    "涨跌幅": -0.5,
+                    "换手率": 0.6,
+                    "机构参与度": 0.3,
+                    "综合得分": 66.0,
+                    "上升": -2,
+                    "目前排名": 30,
+                    "关注指数": 70.0,
+                    "交易日": "2026-05-14",
+                },
+            ]
+        )
+
+    def stock_hot_rank_em():
+        return pd.DataFrame(
+            [
+                {"当前排名": 8, "代码": "SH600000", "股票名称": "浦发银行"},
+                {"当前排名": 9, "代码": "SZ000001", "股票名称": "平安银行"},
+            ]
+        )
+
+    def stock_hot_keyword_em(symbol: str):
+        if symbol == "SH600000":
+            return pd.DataFrame(
+                [
+                    {
+                        "时间": "2026-05-14 10:00:00",
+                        "股票代码": "SH600000",
+                        "概念名称": "AI机器人",
+                        "概念代码": "BKTEST",
+                        "热度": 10,
+                    }
+                ]
+            )
+        return pd.DataFrame(
+            [
+                {
+                    "时间": "2026-05-14 10:00:00",
+                    "股票代码": "SZ000001",
+                    "概念名称": "退市风险",
+                    "概念代码": "BKNEG",
+                    "热度": 5,
+                }
+            ]
+        )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "akshare",
+        SimpleNamespace(
+            stock_comment_em=stock_comment_em,
+            stock_hot_rank_em=stock_hot_rank_em,
+            stock_hot_keyword_em=stock_hot_keyword_em,
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-daily",
+                "--date",
+                "2026-05-14",
+                "--source-id",
+                "eastmoney_public_sentiment",
+                "--page-size",
+                "2",
+                "--max-pages",
+                "1",
+                "--force",
+            ]
+        )
+        == 0
+    )
+    assert database.silver_table_counts()["public_sentiment"] == 2
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "build-factors",
+                "--factor-set",
+                "public_sentiment_v1",
+                "--start",
+                "2026-05-14",
+                "--end",
+                "2026-05-14",
+            ]
+        )
+        == 0
+    )
+
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            select
+              public_sentiment_count,
+              public_sentiment_heat_mean,
+              public_sentiment_rank_best,
+              public_sentiment_keyword_count,
+              public_sentiment_new_business_topic_count
+            from qdc_silver.daily_public_sentiment_factor
+            where instrument = 'SH600000'
+            """
+        ).fetchone()
+    assert row == (1.0, 88.8, 12.0, 1.0, 1.0)
+
+    payload = QdcConsoleData(settings).daily_wide_preview(
+        date="2026-05-14",
+        mode="factor",
+        limit=20,
+    )
+    rows = {item["instrument"]: item for item in payload["rows"]}
+    assert rows["SH600000"]["raw_public_sentiment_count"] == 1
+    assert rows["SH600000"]["public_sentiment_count"] == 1.0
+    assert rows["SH600000"]["_public_sentiment_documents"][0]["keyword_text"] == "AI机器人"
+
+
 def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) -> None:
     config_path = _write_config(tmp_path)
     settings = QdcSettings.from_yaml(config_path)
@@ -4853,6 +5039,24 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
             }
         ]
     )
+    silver.upsert_public_sentiment(
+        [
+            {
+                "public_sentiment_id": "ps1",
+                "publish_date": "2026-05-11",
+                "instrument": "SH600000",
+                "title": "浦发银行 东方财富公开舆情，人气排名 12，热门关键词 AI机器人",
+                "source_id": "eastmoney_public_sentiment",
+                "hot_rank": 12,
+                "hot_score": 88.8,
+                "keyword_text": "AI机器人",
+                "keyword_count": 1,
+                "risk_topic_count": 0,
+                "new_business_topic_count": 1,
+                "sentiment_score": 0.0,
+            }
+        ]
+    )
 
     assert (
         main(
@@ -4929,6 +5133,18 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
             where instrument = 'SH600000'
             """
         ).fetchone()
+        public_sentiment_row = conn.execute(
+            """
+            select
+              public_sentiment_count,
+              public_sentiment_heat_mean,
+              public_sentiment_rank_best,
+              public_sentiment_keyword_count,
+              public_sentiment_new_business_topic_count
+            from qdc_silver.daily_public_sentiment_factor
+            where instrument = 'SH600000'
+            """
+        ).fetchone()
 
     assert (
         news_row[0],
@@ -4967,6 +5183,7 @@ def test_qdc_build_factors_aligns_text_titles_and_labels_events(tmp_path: Path) 
     assert float(research_report_row[5]) > 0
     assert investor_interaction_row[:5] == (1.0, 1.0, 1.0, 1.0, 1.0)
     assert float(investor_interaction_row[5]) < 0
+    assert public_sentiment_row == (1.0, 88.8, 12.0, 1.0, 1.0)
 
 
 def test_qdc_classify_text_event_rule_and_mock_litellm(
@@ -5220,10 +5437,12 @@ def test_silver_store_upserts_core_research_tables(tmp_path: Path) -> None:
         "news": 0,
         "research_report": 0,
         "investor_interaction": 0,
+        "public_sentiment": 0,
         "daily_news_factor": 0,
         "daily_announcement_factor": 0,
         "daily_research_report_factor": 0,
         "daily_investor_interaction_factor": 0,
+        "daily_public_sentiment_factor": 0,
     }
 
     silver.upsert_daily_bar(
@@ -5490,7 +5709,7 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> No
         == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["object_id_count"] == 59
+    assert payload["object_id_count"] == 66
     assert len(payload["object_id_sample"]) == 5
     assert "object_ids" not in payload
 
@@ -5512,7 +5731,7 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> No
     ).read_bytes()
     assert struct.unpack("<fff", sentiment_bin) == (0.0, 0.5, 0.0)
     qlib_objects = database.list_source_objects(dataset="qlib_export", layer="qlib")
-    assert len(qlib_objects) == 59
+    assert len(qlib_objects) == 66
 
 
 def test_qdc_external_factor_fields_match_qlib_handler() -> None:

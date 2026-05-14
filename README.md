@@ -47,6 +47,7 @@ qdc crawl-daily --date 2026-05-13 --source-id sse_announcement --page-size 100 -
 qdc crawl-daily --date 2026-05-13 --source-id eastmoney_roll_news --page-size 100
 qdc crawl-daily --date 2026-05-13 --source-id eastmoney_research_report --page-size 100
 qdc crawl-daily --date 2026-05-14 --source-id cninfo_investor_interaction --symbols SZ002594 --page-size 20 --max-pages 1
+qdc crawl-daily --date 2026-05-14 --source-id eastmoney_public_sentiment --symbols "SH600000,SZ000001" --page-size 5 --max-pages 1
 qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
 qdc sync-parquet --layer all
 qdc quality
@@ -124,6 +125,7 @@ QDC external factors 是否能和该日历、instrument 对齐
 | 新闻 | `sina_finance_news` | 近实时补位，历史日期可靠性有限 |
 | 研报 | `eastmoney_research_report` | 东方财富个股研报 metadata，默认不下载 PDF |
 | 互动问答 | `cninfo_investor_interaction` | 互动易公开问答 metadata，按标的采集 |
+| 公开舆情 | `eastmoney_public_sentiment` | 东方财富公开关注度、排名和热门关键词 metadata |
 | 新闻 | `nbd_company_news` | 手动 smoke 源；已退出默认每日源 |
 
 额外 opt-in 新闻源：
@@ -146,7 +148,6 @@ yicai
 
 ```text
 研报全文 / 研报评论
-股吧 / 雪球 / 公开舆情
 交易所监管问询和处罚
 法律诉讼和执行信息
 招投标 / 政府采购
@@ -210,6 +211,13 @@ $reply_delay_hours_mean
 $risk_topic_count
 $new_business_topic_count
 $sentiment_mean
+$public_sentiment_count
+$public_sentiment_heat_mean
+$public_sentiment_rank_best
+$public_sentiment_keyword_count
+$public_sentiment_risk_topic_count
+$public_sentiment_new_business_topic_count
+$public_sentiment_sentiment_mean
 ```
 
 当前仓库保留 Qlib handler 示例：

@@ -25,10 +25,12 @@ SILVER_ORDER_BY = {
     "news": "publish_date, instrument, news_id",
     "research_report": "publish_date, instrument, research_report_id",
     "investor_interaction": "publish_date, instrument, investor_interaction_id",
+    "public_sentiment": "publish_date, instrument, public_sentiment_id",
     "daily_news_factor": "trade_date, instrument",
     "daily_announcement_factor": "trade_date, instrument",
     "daily_research_report_factor": "trade_date, instrument",
     "daily_investor_interaction_factor": "trade_date, instrument",
+    "daily_public_sentiment_factor": "trade_date, instrument",
 }
 
 
@@ -144,6 +146,16 @@ class QdcParquetSync:
                   coalesce(ii.risk_topic_count, 0) as risk_topic_count,
                   coalesce(ii.new_business_topic_count, 0) as new_business_topic_count,
                   coalesce(ii.sentiment_mean, 0) as sentiment_mean,
+                  coalesce(ps.public_sentiment_count, 0) as public_sentiment_count,
+                  coalesce(ps.public_sentiment_heat_mean, 0) as public_sentiment_heat_mean,
+                  coalesce(ps.public_sentiment_rank_best, 0) as public_sentiment_rank_best,
+                  coalesce(ps.public_sentiment_keyword_count, 0) as public_sentiment_keyword_count,
+                  coalesce(ps.public_sentiment_risk_topic_count, 0)
+                    as public_sentiment_risk_topic_count,
+                  coalesce(ps.public_sentiment_new_business_topic_count, 0)
+                    as public_sentiment_new_business_topic_count,
+                  coalesce(ps.public_sentiment_sentiment_mean, 0)
+                    as public_sentiment_sentiment_mean,
                   b.source_id as daily_bar_source_id
                 from qdc_silver.daily_bar b
                 left join qdc_silver.adj_factor a
@@ -160,6 +172,8 @@ class QdcParquetSync:
                   on b.trade_date = rf.trade_date and b.instrument = rf.instrument
                 left join qdc_silver.daily_investor_interaction_factor ii
                   on b.trade_date = ii.trade_date and b.instrument = ii.instrument
+                left join qdc_silver.daily_public_sentiment_factor ps
+                  on b.trade_date = ps.trade_date and b.instrument = ps.instrument
                 order by b.trade_date, b.instrument
                 """
             ).fetchdf()

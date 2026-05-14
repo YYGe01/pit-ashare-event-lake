@@ -136,6 +136,25 @@ DEFAULT_CRAWLER_SOURCES: dict[str, CrawlerSourceSpec] = {
             "text is retained for factor explainability."
         ),
     ),
+    "eastmoney_public_sentiment": CrawlerSourceSpec(
+        source_id="eastmoney_public_sentiment",
+        source_type="public_sentiment",
+        dataset="public_sentiment",
+        base_url="https://guba.eastmoney.com/rank/",
+        enabled=True,
+        robots_url="https://guba.eastmoney.com/robots.txt",
+        robots_status="manual_review_required",
+        terms_review_status="manual_review_required",
+        copyright_policy="metadata_only",
+        rate_limit_per_minute=60,
+        min_delay_seconds=1.0,
+        max_retry=3,
+        parser_version="eastmoney_public_sentiment_v1",
+        notes=(
+            "Daily Eastmoney public attention metadata source; stores rank, "
+            "focus index, score and hot keyword metadata without post bodies."
+        ),
+    ),
     "nbd_company_news": CrawlerSourceSpec(
         source_id="nbd_company_news",
         source_type="news",
@@ -305,6 +324,7 @@ CRAWL_DAILY_SOURCE_IDS = [
     "eastmoney_roll_news",
     "eastmoney_research_report",
     "cninfo_investor_interaction",
+    "eastmoney_public_sentiment",
 ]
 
 

@@ -61,6 +61,13 @@ DEFAULT_EXTERNAL_FIELDS = (
     "risk_topic_count",
     "new_business_topic_count",
     "sentiment_mean",
+    "public_sentiment_count",
+    "public_sentiment_heat_mean",
+    "public_sentiment_rank_best",
+    "public_sentiment_keyword_count",
+    "public_sentiment_risk_topic_count",
+    "public_sentiment_new_business_topic_count",
+    "public_sentiment_sentiment_mean",
 )
 DEFAULT_EXTERNAL_WINDOWS = (0, 3, 5)
 

@@ -331,6 +331,34 @@ create table if not exists qdc_silver.investor_interaction (
   updated_at timestamp not null
 );
 
+create table if not exists qdc_silver.public_sentiment (
+  public_sentiment_id varchar primary key,
+  publish_date date not null,
+  publish_time timestamp,
+  instrument varchar not null,
+  title varchar not null,
+  url varchar,
+  source_id varchar not null,
+  source_record_id varchar,
+  source_sec_code varchar,
+  source_sec_name varchar,
+  platform varchar,
+  sentiment_type varchar,
+  hot_rank double,
+  hot_score double,
+  rank_change double,
+  keyword_text varchar,
+  keyword_count double,
+  risk_topic_count double,
+  new_business_topic_count double,
+  sentiment_score double,
+  observed_at timestamp,
+  collect_time timestamp,
+  raw_object_id varchar,
+  parser_version varchar,
+  updated_at timestamp not null
+);
+
 create table if not exists qdc_silver.daily_news_factor (
   trade_date date not null,
   instrument varchar not null,
@@ -408,6 +436,21 @@ create table if not exists qdc_silver.daily_research_report_factor (
   updated_at timestamp not null,
   primary key (trade_date, instrument)
 );
+
+create table if not exists qdc_silver.daily_public_sentiment_factor (
+  trade_date date not null,
+  instrument varchar not null,
+  public_sentiment_count double not null,
+  public_sentiment_heat_mean double not null,
+  public_sentiment_rank_best double not null,
+  public_sentiment_keyword_count double not null,
+  public_sentiment_risk_topic_count double not null,
+  public_sentiment_new_business_topic_count double not null,
+  public_sentiment_sentiment_mean double not null,
+  source_id varchar not null,
+  updated_at timestamp not null,
+  primary key (trade_date, instrument)
+);
 """
 
 SILVER_TABLES = [
@@ -422,10 +465,12 @@ SILVER_TABLES = [
     "news",
     "research_report",
     "investor_interaction",
+    "public_sentiment",
     "daily_news_factor",
     "daily_announcement_factor",
     "daily_investor_interaction_factor",
     "daily_research_report_factor",
+    "daily_public_sentiment_factor",
 ]
 
 SILVER_SCHEMA_MIGRATIONS = {
@@ -501,6 +546,26 @@ SILVER_SCHEMA_MIGRATIONS = {
         "raw_object_id": "varchar",
         "parser_version": "varchar",
     },
+    "public_sentiment": {
+        "publish_time": "timestamp",
+        "source_record_id": "varchar",
+        "source_sec_code": "varchar",
+        "source_sec_name": "varchar",
+        "platform": "varchar",
+        "sentiment_type": "varchar",
+        "hot_rank": "double",
+        "hot_score": "double",
+        "rank_change": "double",
+        "keyword_text": "varchar",
+        "keyword_count": "double",
+        "risk_topic_count": "double",
+        "new_business_topic_count": "double",
+        "sentiment_score": "double",
+        "observed_at": "timestamp",
+        "collect_time": "timestamp",
+        "raw_object_id": "varchar",
+        "parser_version": "varchar",
+    },
     "daily_news_factor": {
         "news_sentiment_mean": "double default 0",
         "news_positive_count": "double default 0",
@@ -551,5 +616,14 @@ SILVER_SCHEMA_MIGRATIONS = {
         "risk_topic_count": "double default 0",
         "new_business_topic_count": "double default 0",
         "sentiment_mean": "double default 0",
+    },
+    "daily_public_sentiment_factor": {
+        "public_sentiment_count": "double default 0",
+        "public_sentiment_heat_mean": "double default 0",
+        "public_sentiment_rank_best": "double default 0",
+        "public_sentiment_keyword_count": "double default 0",
+        "public_sentiment_risk_topic_count": "double default 0",
+        "public_sentiment_new_business_topic_count": "double default 0",
+        "public_sentiment_sentiment_mean": "double default 0",
     },
 }

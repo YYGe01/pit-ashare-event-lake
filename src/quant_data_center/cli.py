@@ -26,6 +26,7 @@ from quant_data_center.crawlers.sources.investor_interaction import (
     CninfoInvestorInteractionCrawler,
 )
 from quant_data_center.crawlers.sources.nbd import NbdCompanyNewsCrawler
+from quant_data_center.crawlers.sources.public_sentiment import EastmoneyPublicSentimentCrawler
 from quant_data_center.crawlers.sources.research_report import EastmoneyResearchReportCrawler
 from quant_data_center.crawlers.sources.sina import SinaFinanceNewsCrawler
 from quant_data_center.crawlers.sources.sse import SseAnnouncementCrawler
@@ -1007,6 +1008,18 @@ def _run_real_crawl_task(
     if source_id == "cninfo_investor_interaction":
         spec = crawler_source_spec(source_id)
         return CninfoInvestorInteractionCrawler(settings).crawl_date(
+            source_id=source_id,
+            crawl_date=str(task["crawl_date"]),
+            page_size=page_size,
+            max_pages=max_pages,
+            min_delay_seconds=spec.min_delay_seconds,
+            instrument_filter=instrument_filter,
+            request_timeout_seconds=request_timeout_seconds,
+            source_timeout_seconds=source_timeout_seconds,
+        )
+    if source_id == "eastmoney_public_sentiment":
+        spec = crawler_source_spec(source_id)
+        return EastmoneyPublicSentimentCrawler(settings).crawl_date(
             source_id=source_id,
             crawl_date=str(task["crawl_date"]),
             page_size=page_size,
@@ -2134,8 +2147,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Optional crawler source filter, for example cninfo_announcement, "
             "sse_announcement, eastmoney_roll_news, nbd_company_news, "
-            "sina, wallstreetcn, 10jqka, eastmoney, yuncaijing, fenghuang, "
-            "jinrongjie, cls, or yicai"
+            "eastmoney_public_sentiment, sina, wallstreetcn, 10jqka, eastmoney, "
+            "yuncaijing, fenghuang, jinrongjie, cls, or yicai"
         ),
     )
     daily_pipeline_parser.add_argument("--crawl-limit-tasks", type=int)

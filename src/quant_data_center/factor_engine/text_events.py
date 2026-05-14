@@ -12,7 +12,7 @@ from typing import Any, Protocol
 from quant_data_center.settings import TextEventClassifierSettings
 
 
-VALID_DOCUMENT_TYPES = {"news", "announcement", "investor_interaction"}
+VALID_DOCUMENT_TYPES = {"news", "announcement", "investor_interaction", "public_sentiment"}
 VALID_EVENT_TYPES = {
     "growth",
     "risk",

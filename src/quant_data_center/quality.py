@@ -23,10 +23,12 @@ SUPPORTED_QUALITY_DATASETS = {
     "news",
     "research_report",
     "investor_interaction",
+    "public_sentiment",
     "daily_news_factor",
     "daily_announcement_factor",
     "daily_investor_interaction_factor",
     "daily_research_report_factor",
+    "daily_public_sentiment_factor",
 }
 DOCUMENT_PUBLISH_TIME_REQUIRED_SOURCES = {
     "cninfo_announcement",
@@ -111,7 +113,14 @@ class QualityChecker:
         params: list[Any] = []
         date_field = (
             "publish_date"
-            if dataset in {"announcement", "news", "research_report", "investor_interaction"}
+            if dataset
+            in {
+                "announcement",
+                "news",
+                "research_report",
+                "investor_interaction",
+                "public_sentiment",
+            }
             else "trade_date"
         )
         if dataset not in {"stock_basic", "universe_constituent"}:
@@ -127,7 +136,13 @@ class QualityChecker:
             order_by = "snapshot_date, universe, instrument"
         if dataset == "trade_calendar":
             order_by = "trade_date, calendar_id"
-        if dataset in {"announcement", "news", "research_report", "investor_interaction"}:
+        if dataset in {
+            "announcement",
+            "news",
+            "research_report",
+            "investor_interaction",
+            "public_sentiment",
+        }:
             order_by = "publish_date, instrument"
         with self.database.connect() as conn:
             return conn.execute(
@@ -148,10 +163,12 @@ class QualityChecker:
             "news": _check_document_table,
             "research_report": _check_document_table,
             "investor_interaction": _check_document_table,
+            "public_sentiment": _check_document_table,
             "daily_news_factor": _check_count_factor,
             "daily_announcement_factor": _check_count_factor,
             "daily_investor_interaction_factor": _check_count_factor,
             "daily_research_report_factor": _check_count_factor,
+            "daily_public_sentiment_factor": _check_count_factor,
         }
         return checks[dataset](frame)
 
@@ -331,7 +348,7 @@ def _check_trade_status(frame: pd.DataFrame) -> list[dict[str, Any]]:
 
 def _check_document_table(frame: pd.DataFrame) -> list[dict[str, Any]]:
     issues = []
-    dataset = "announcement" if "announcement_id" in frame.columns else "news"
+    dataset = _document_dataset_from_columns(frame)
     for row in frame.to_dict("records"):
         entity_key = str(row.get("instrument") or "<unknown>")
         if not row.get("instrument") or not row.get("title"):
@@ -372,6 +389,8 @@ def _check_count_factor(frame: pd.DataFrame) -> list[dict[str, Any]]:
         dataset = "daily_research_report_factor"
     elif "question_count" in frame.columns:
         dataset = "daily_investor_interaction_factor"
+    elif "public_sentiment_count" in frame.columns:
+        dataset = "daily_public_sentiment_factor"
     else:
         dataset = "daily_announcement_factor"
     count_fields = [column for column in frame.columns if column.endswith("_count")]
@@ -402,6 +421,18 @@ def _check_count_factor(frame: pd.DataFrame) -> list[dict[str, Any]]:
                     )
                 )
     return issues
+
+
+def _document_dataset_from_columns(frame: pd.DataFrame) -> str:
+    if "announcement_id" in frame.columns:
+        return "announcement"
+    if "research_report_id" in frame.columns:
+        return "research_report"
+    if "investor_interaction_id" in frame.columns:
+        return "investor_interaction"
+    if "public_sentiment_id" in frame.columns:
+        return "public_sentiment"
+    return "news"
 
 
 def _issue(

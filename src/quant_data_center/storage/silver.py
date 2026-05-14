@@ -82,6 +82,26 @@ DOCUMENT_OPTIONAL_FIELDS = {
         "raw_object_id",
         "parser_version",
     ],
+    "public_sentiment": [
+        "publish_time",
+        "source_record_id",
+        "source_sec_code",
+        "source_sec_name",
+        "platform",
+        "sentiment_type",
+        "hot_rank",
+        "hot_score",
+        "rank_change",
+        "keyword_text",
+        "keyword_count",
+        "risk_topic_count",
+        "new_business_topic_count",
+        "sentiment_score",
+        "observed_at",
+        "collect_time",
+        "raw_object_id",
+        "parser_version",
+    ],
 }
 PDF_METADATA_FIELDS = {"pdf_sha256", "pdf_size_bytes", "pdf_object_id"}
 
@@ -384,6 +404,13 @@ class SilverStore:
             records=records,
         )
 
+    def upsert_public_sentiment(self, records: list[dict[str, Any]]) -> int:
+        return self._upsert_document_table(
+            table="public_sentiment",
+            id_field="public_sentiment_id",
+            records=records,
+        )
+
     def upsert_daily_news_factor(self, records: list[dict[str, Any]]) -> int:
         return self._upsert_factor_table(
             table="daily_news_factor",
@@ -458,6 +485,21 @@ class SilverStore:
                 "risk_topic_count",
                 "new_business_topic_count",
                 "sentiment_mean",
+            ],
+            records=records,
+        )
+
+    def upsert_daily_public_sentiment_factor(self, records: list[dict[str, Any]]) -> int:
+        return self._upsert_factor_table(
+            table="daily_public_sentiment_factor",
+            factor_fields=[
+                "public_sentiment_count",
+                "public_sentiment_heat_mean",
+                "public_sentiment_rank_best",
+                "public_sentiment_keyword_count",
+                "public_sentiment_risk_topic_count",
+                "public_sentiment_new_business_topic_count",
+                "public_sentiment_sentiment_mean",
             ],
             records=records,
         )

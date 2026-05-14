@@ -63,6 +63,7 @@ DAILY_DOCUMENT_SOURCE_IDS = {
     ),
     "research_report": ("eastmoney_research_report",),
     "investor_interaction": ("cninfo_investor_interaction",),
+    "public_sentiment": ("eastmoney_public_sentiment",),
 }
 DOCUMENT_SOURCE_PRIORITY = {
     "cninfo_announcement": 0,
@@ -81,6 +82,7 @@ DOCUMENT_SOURCE_PRIORITY = {
     "yicai": 11,
     "eastmoney_research_report": 0,
     "cninfo_investor_interaction": 0,
+    "eastmoney_public_sentiment": 0,
 }
 DOCUMENT_LOCAL_CONTENT_FIELDS = (
     "body_text",
@@ -115,10 +117,12 @@ DAILY_COLLECTION_DATASETS = (
     "news",
     "research_report",
     "investor_interaction",
+    "public_sentiment",
     "daily_news_factor",
     "daily_announcement_factor",
     "daily_research_report_factor",
     "daily_investor_interaction_factor",
+    "daily_public_sentiment_factor",
 )
 DAILY_BATCH_DATASETS = ("daily_bar", "adj_factor", "price_limit", "news")
 DAILY_SOURCE_DIMENSIONS = {
@@ -132,6 +136,7 @@ DAILY_DOCUMENT_DIMENSIONS = {
     "news": ("publish_time", "title"),
     "research_report": ("publish_time", "title", "institution", "analyst", "rating"),
     "investor_interaction": ("publish_time", "title", "answer_time", "reply_status"),
+    "public_sentiment": ("publish_time", "title", "hot_rank", "hot_score", "keyword_text"),
 }
 DAILY_STAGE_DATASETS = ("daily_bar", "adj_factor", "price_limit")
 DAILY_JOB_STAGES = ("build_factors", "sync_parquet", "quality", "export_qlib")
@@ -238,6 +243,15 @@ DAILY_FACTOR_WIDE_TABLES = {
         "new_business_topic_count",
         "sentiment_mean",
     ],
+    "daily_public_sentiment_factor": [
+        "public_sentiment_count",
+        "public_sentiment_heat_mean",
+        "public_sentiment_rank_best",
+        "public_sentiment_keyword_count",
+        "public_sentiment_risk_topic_count",
+        "public_sentiment_new_business_topic_count",
+        "public_sentiment_sentiment_mean",
+    ],
 }
 RAW_PREVIEW_DATASETS = (
     "stock_basic",
@@ -250,6 +264,7 @@ RAW_PREVIEW_DATASETS = (
     "news",
     "research_report",
     "investor_interaction",
+    "public_sentiment",
 )
 INSTRUMENT_COVERAGE_DATASETS = (
     "stock_basic",
@@ -262,10 +277,12 @@ INSTRUMENT_COVERAGE_DATASETS = (
     "news",
     "research_report",
     "investor_interaction",
+    "public_sentiment",
     "daily_news_factor",
     "daily_announcement_factor",
     "daily_research_report_factor",
     "daily_investor_interaction_factor",
+    "daily_public_sentiment_factor",
 )
 OBSERVED_REFERENCE_DATASETS = (
     "daily_bar",
@@ -275,10 +292,12 @@ OBSERVED_REFERENCE_DATASETS = (
     "news",
     "research_report",
     "investor_interaction",
+    "public_sentiment",
     "daily_news_factor",
     "daily_announcement_factor",
     "daily_research_report_factor",
     "daily_investor_interaction_factor",
+    "daily_public_sentiment_factor",
 )
 ALL_INSTRUMENT_COVERAGE_DIMENSIONS = (
     "stock_basic",
@@ -291,10 +310,12 @@ ALL_INSTRUMENT_COVERAGE_DIMENSIONS = (
     "announcement",
     "research_report",
     "investor_interaction",
+    "public_sentiment",
     "daily_news_factor",
     "daily_announcement_factor",
     "daily_research_report_factor",
     "daily_investor_interaction_factor",
+    "daily_public_sentiment_factor",
 )
 INSTRUMENT_TIMELINE_TABLES = {
     "daily_bar": [
@@ -364,6 +385,15 @@ INSTRUMENT_TIMELINE_TABLES = {
         "new_business_topic_count",
         "sentiment_mean",
     ],
+    "daily_public_sentiment_factor": [
+        "public_sentiment_count",
+        "public_sentiment_heat_mean",
+        "public_sentiment_rank_best",
+        "public_sentiment_keyword_count",
+        "public_sentiment_risk_topic_count",
+        "public_sentiment_new_business_topic_count",
+        "public_sentiment_sentiment_mean",
+    ],
 }
 RAW_FACTOR_INPUT_PURPOSES = {
     "stock_basic": "标的基础资料，用来识别代码、名称、交易所和行业",
@@ -376,6 +406,7 @@ RAW_FACTOR_INPUT_PURPOSES = {
     "news": "新闻文本输入，用来生成新闻数量、情绪和事件类型因子",
     "research_report": "研报 metadata 输入，用来生成研报数量、机构覆盖、分析师覆盖和评级方向因子",
     "investor_interaction": "互动问答输入，用来生成投资者关注度、回复延迟、风险和新业务主题因子",
+    "public_sentiment": "公开舆情 metadata 输入，用来生成关注度、热度、主题和情绪方向因子",
 }
 
 
@@ -1912,6 +1943,13 @@ class QdcConsoleData:
             table="investor_interaction",
             date=date,
         )
+        public_sentiment_groups = self._daily_document_groups(
+            conn,
+            control_tables=control_tables,
+            silver_tables=silver_tables,
+            table="public_sentiment",
+            date=date,
+        )
         rows = []
         for identity in reference_rows[:limit]:
             instrument = str(identity.get("instrument") or "")
@@ -1939,6 +1977,9 @@ class QdcConsoleData:
             investor_interactions = investor_interaction_groups.get(
                 instrument, {"count": 0, "documents": []}
             )
+            public_sentiment = public_sentiment_groups.get(
+                instrument, {"count": 0, "documents": []}
+            )
             row["raw_news_count" if mode == "factor" else "news_count"] = news["count"]
             row["raw_announcement_count" if mode == "factor" else "announcement_count"] = announcements["count"]
             row[
@@ -1951,10 +1992,14 @@ class QdcConsoleData:
                     else "investor_interaction_count"
                 )
             ] = investor_interactions["count"]
+            row[
+                "raw_public_sentiment_count" if mode == "factor" else "public_sentiment_count"
+            ] = public_sentiment["count"]
             row["_news_documents"] = news["documents"]
             row["_announcement_documents"] = announcements["documents"]
             row["_research_report_documents"] = research_reports["documents"]
             row["_investor_interaction_documents"] = investor_interactions["documents"]
+            row["_public_sentiment_documents"] = public_sentiment["documents"]
             rows.append(row)
         return rows
 
@@ -2010,6 +2055,7 @@ class QdcConsoleData:
             "news": "news_id",
             "research_report": "research_report_id",
             "investor_interaction": "investor_interaction_id",
+            "public_sentiment": "public_sentiment_id",
         }
         id_field = id_fields.get(table, f"{table}_id")
         columns = self._columns(conn, SILVER_SCHEMA, table)
@@ -2033,6 +2079,15 @@ class QdcConsoleData:
                 "channel",
                 "topic_tags",
                 "sentiment_score",
+                "platform",
+                "sentiment_type",
+                "hot_rank",
+                "hot_score",
+                "rank_change",
+                "keyword_text",
+                "keyword_count",
+                "risk_topic_count",
+                "new_business_topic_count",
                 *DOCUMENT_OBJECT_FIELDS,
             )
             if field in columns
@@ -4672,6 +4727,7 @@ def _daily_document_key(row: dict[str, Any]) -> str:
         or row.get("announcement_id")
         or row.get("research_report_id")
         or row.get("investor_interaction_id")
+        or row.get("public_sentiment_id")
         or ""
     )
 
@@ -6149,10 +6205,12 @@ def _daily_preview_columns(mode: str) -> list[str]:
             "announcement_count",
             "research_report_count",
             "investor_interaction_count",
+            "public_sentiment_count",
             "raw_news_count",
             "raw_announcement_count",
             "raw_research_report_count",
             "raw_investor_interaction_count",
+            "raw_public_sentiment_count",
             *fields,
         ])
     fields = [field for table_fields in DAILY_RAW_WIDE_TABLES.values() for field in table_fields]
@@ -6162,6 +6220,7 @@ def _daily_preview_columns(mode: str) -> list[str]:
         "announcement_count",
         "research_report_count",
         "investor_interaction_count",
+        "public_sentiment_count",
         *fields,
     ]
 
@@ -6247,12 +6306,21 @@ def _public_coverage_reference(reference: dict[str, Any]) -> dict[str, Any]:
 def _coverage_kind(dataset: str) -> str:
     if dataset in REQUIRED_DAILY_COVERAGE_DATASETS:
         return "required_daily"
-    if dataset in {"trade_status", "announcement", "news", "research_report"}:
+    if dataset in {
+        "trade_status",
+        "announcement",
+        "news",
+        "research_report",
+        "investor_interaction",
+        "public_sentiment",
+    }:
         return "sparse_source"
     if dataset in {
         "daily_news_factor",
         "daily_announcement_factor",
         "daily_research_report_factor",
+        "daily_investor_interaction_factor",
+        "daily_public_sentiment_factor",
     }:
         return "sparse_factor"
     return "metadata"
