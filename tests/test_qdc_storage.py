@@ -2310,8 +2310,8 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
             datetime(2026, 5, 11, 18, 20),
             "浦发银行签订重大合同",
             "eastmoney_roll_news",
-            "浦发银行签订重大合同正文第一段。\n第二段包含合同金额和业务影响。",
-            "success",
+            None,
+            "skipped_metadata_only",
         ),
     ]
     manifest_uri = next(item["uri"] for item in source_objects if item["layer"] == "raw_manifest")
@@ -2322,6 +2322,138 @@ def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
     assert manifest["provider_record_count"] == 2
     assert manifest["newer_skipped_count"] == 1
     assert manifest["older_seen_count"] == 2
+
+
+def test_qdc_eastmoney_news_limits_body_fetches_for_fast_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    SilverStore(settings).upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-plan",
+                "--source-id",
+                "eastmoney_roll_news",
+                "--date",
+                "2026-05-11",
+            ]
+        )
+        == 0
+    )
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.encoding = "utf-8"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    body_calls = []
+
+    def fake_get(url, headers, timeout):
+        if "/a/" in url:
+            body_calls.append({"url": url, "timeout": timeout})
+            return FakeResponse(
+                """
+                <html><body>
+                  <div id="ContentBody"><p>浦发银行正文预览。</p></div>
+                </body></html>
+                """
+            )
+        if "default_1.html" in url:
+            return FakeResponse(
+                """
+                <li><span>2026-05-11 18:20</span>[<a href="stock.html">股票</a>]
+                <a href="http://stock.eastmoney.com/a/202605111111.html"
+                title="浦发银行新闻一" target="_blank">浦发银行新闻一</a></li>
+                <li><span>2026-05-11 18:21</span>[<a href="stock.html">股票</a>]
+                <a href="http://stock.eastmoney.com/a/202605111112.html"
+                title="浦发银行新闻二" target="_blank">浦发银行新闻二</a></li>
+                <li><span>2026-05-11 18:22</span>[<a href="stock.html">股票</a>]
+                <a href="http://stock.eastmoney.com/a/202605111113.html"
+                title="浦发银行新闻三" target="_blank">浦发银行新闻三</a></li>
+                """
+            )
+        return FakeResponse(
+            """
+            <li><span>2026-05-10 18:21</span>[<a href="stock.html">股票</a>]
+            <a href="http://stock.eastmoney.com/a/202605101111.html"
+            title="浦发银行历史新闻" target="_blank">浦发银行历史新闻</a></li>
+            """
+        )
+
+    import requests
+    import quant_data_center.crawlers.sources.eastmoney as eastmoney_module
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(eastmoney_module, "sleep_with_deadline", lambda *args, **kwargs: None)
+    monkeypatch.setattr(eastmoney_module, "EASTMONEY_BODY_FETCH_LIMIT", 1)
+    monkeypatch.setattr(eastmoney_module, "EASTMONEY_BODY_REQUEST_TIMEOUT_SECONDS", 2.0)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-run",
+                "--source-id",
+                "eastmoney_roll_news",
+                "--page-size",
+                "5",
+                "--max-pages",
+                "3",
+                "--request-timeout-seconds",
+                "30",
+            ]
+        )
+        == 0
+    )
+
+    assert len(body_calls) == 1
+    assert body_calls[0]["timeout"] == 2.0
+    with database.connect() as conn:
+        rows = conn.execute(
+            """
+            select title, body_download_status
+            from qdc_silver.news
+            order by title
+            """
+        ).fetchall()
+    assert rows == [
+        ("浦发银行新闻一", "success"),
+        ("浦发银行新闻三", "skipped_body_limit"),
+        ("浦发银行新闻二", "skipped_body_limit"),
+    ]
+    manifest_uri = next(
+        item["uri"]
+        for item in database.list_source_objects(dataset="news", source_id="eastmoney_roll_news")
+        if item["layer"] == "raw_manifest"
+    )
+    manifest = json.loads(Path(manifest_uri).read_text(encoding="utf-8"))
+    assert manifest["body_fetch_limit"] == 1
+    assert manifest["body_request_timeout_seconds"] == 2.0
+    assert manifest["body_downloaded_count"] == 1
+    assert manifest["body_skipped_count"] == 2
 
 
 def test_qdc_crawl_run_real_nbd_news_with_fake_response(

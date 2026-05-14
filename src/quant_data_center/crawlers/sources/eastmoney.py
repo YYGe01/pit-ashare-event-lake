@@ -10,6 +10,7 @@ from typing import Any
 
 from quant_data_center.crawlers.date_scan import scan_rolling_date_window
 from quant_data_center.crawlers.runtime import (
+    CrawlSourceTimeoutError,
     call_with_proxy_policy,
     make_deadline,
     raise_if_deadline_exceeded,
@@ -28,6 +29,8 @@ EASTMONEY_ROLL_NEWS_URL_TEMPLATE = "https://roll.eastmoney.com/default_{page_num
 EASTMONEY_REFERER = "https://roll.eastmoney.com/"
 PARSER_VERSION = "eastmoney_roll_news_v1"
 MAX_BODY_PREVIEW_CHARS = 1200
+EASTMONEY_BODY_FETCH_LIMIT = 0
+EASTMONEY_BODY_REQUEST_TIMEOUT_SECONDS = 5.0
 
 
 class EastmoneyRollNewsCrawler:
@@ -168,8 +171,10 @@ class EastmoneyRollNewsCrawler:
                 "instrument_dictionary_count": len(instrument_hints),
                 "mapping_failure_reason": mapping_failure_reason,
                 "body_policy": (
-                    "copyright-aware preview: extracted article body text is truncated "
-                    f"to {MAX_BODY_PREVIEW_CHARS} characters; full article HTML is not persisted"
+                    "metadata-only by default; title, publish_time, url and instrument mapping "
+                    "are persisted in the daily path. Article body preview is a later enrichment "
+                    f"step; if enabled, text is truncated to {MAX_BODY_PREVIEW_CHARS} characters "
+                    "and full article HTML is not persisted"
                 ),
                 **scan_fields,
                 **source_metrics,
@@ -326,8 +331,22 @@ def _attach_article_bodies(
     deadline: float | None,
     source_id: str,
     use_environment_proxy: bool,
-) -> dict[str, int]:
-    stats = {"body_downloaded_count": 0, "body_failed_count": 0, "body_skipped_count": 0}
+    body_fetch_limit: int | None = None,
+    body_request_timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    limit = EASTMONEY_BODY_FETCH_LIMIT if body_fetch_limit is None else max(0, int(body_fetch_limit))
+    body_timeout = (
+        EASTMONEY_BODY_REQUEST_TIMEOUT_SECONDS
+        if body_request_timeout_seconds is None
+        else float(body_request_timeout_seconds)
+    )
+    stats: dict[str, Any] = {
+        "body_downloaded_count": 0,
+        "body_failed_count": 0,
+        "body_skipped_count": 0,
+        "body_fetch_limit": limit,
+        "body_request_timeout_seconds": body_timeout,
+    }
     by_url: dict[str, dict[str, Any]] = {}
     for record in records:
         url = _clean_text(record.get("url"))
@@ -335,11 +354,33 @@ def _attach_article_bodies(
             record["body_download_status"] = "missing_url"
             stats["body_skipped_count"] += 1
             continue
+        if limit <= 0:
+            _mark_body_skipped(
+                record,
+                status="skipped_metadata_only",
+                message="article body fetch is disabled for daily metadata collection",
+            )
+            stats["body_skipped_count"] += 1
+            continue
         if url not in by_url:
+            try:
+                raise_if_deadline_exceeded(deadline, source_id=source_id)
+            except CrawlSourceTimeoutError as exc:
+                _mark_body_skipped(record, status="skipped_source_timeout", message=str(exc))
+                stats["body_skipped_count"] += 1
+                continue
+            if len(by_url) >= limit:
+                _mark_body_skipped(
+                    record,
+                    status="skipped_body_limit",
+                    message=f"body fetch skipped after {limit} unique article urls",
+                )
+                stats["body_skipped_count"] += 1
+                continue
             by_url[url] = _fetch_article_body(
                 requests_module=requests_module,
                 url=url,
-                request_timeout_seconds=request_timeout_seconds,
+                request_timeout_seconds=min(request_timeout_seconds, body_timeout),
                 deadline=deadline,
                 source_id=source_id,
                 use_environment_proxy=use_environment_proxy,
@@ -352,6 +393,13 @@ def _attach_article_bodies(
         else:
             stats["body_failed_count"] += 1
     return stats
+
+
+def _mark_body_skipped(record: dict[str, Any], *, status: str, message: str) -> None:
+    record["body_text"] = None
+    record["body_download_status"] = status
+    record["body_error_message"] = message[:500]
+    record["body_size_bytes"] = None
 
 
 def _fetch_article_body(
