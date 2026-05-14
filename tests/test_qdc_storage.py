@@ -1918,8 +1918,16 @@ def test_qdc_crawl_run_real_sse_announcement_with_fake_response(
 
     calls = []
 
-    def fake_get(url, headers, params=None, timeout=30):
-        calls.append({"url": url, "headers": headers, "params": params, "timeout": timeout})
+    def fake_get(url, headers, params=None, timeout=30, verify=True):
+        calls.append(
+            {
+                "url": url,
+                "headers": headers,
+                "params": params,
+                "timeout": timeout,
+                "verify": verify,
+            }
+        )
         return FakeResponse()
 
     import requests
@@ -1946,6 +1954,7 @@ def test_qdc_crawl_run_real_sse_announcement_with_fake_response(
     assert task["status"] == "success"
     assert calls[0]["params"]["beginDate"] == "2026-05-11"
     assert calls[0]["params"]["endDate"] == "2026-05-11"
+    assert calls[0]["verify"] is False
     assert database.silver_table_counts()["announcement"] == 1
     source_objects = database.list_source_objects(
         dataset="announcement",
@@ -2970,6 +2979,152 @@ def test_qdc_parallel_crawl_keeps_successful_source_when_peer_times_out(
     assert "timeout" in str(
         next(task["last_error"] for task in tasks if task["source_id"] == "sina_finance_news")
     )
+    assert database.silver_table_counts()["news"] == 1
+
+
+def test_qdc_crawl_daily_retries_failed_same_day_task(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    SilverStore(settings).upsert_stock_basic(
+        [
+            {
+                "instrument": "SH600000",
+                "symbol": "600000",
+                "exchange": "SH",
+                "name": "浦发银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+
+    class EastmoneyResponse:
+        status_code = 200
+        text = """
+        <li><span>2026-05-11 18:20</span>[<a href="stock.html">股票</a>]
+        <a href="http://stock.eastmoney.com/a/202605111111.html"
+        title="浦发银行签订重大合同" target="_blank">浦发银行签订重大合同</a></li>
+        """
+
+        def raise_for_status(self) -> None:
+            return None
+
+    should_fail = {"value": True}
+    request_calls = []
+
+    def fake_get(url, **kwargs):
+        request_calls.append(url)
+        if should_fail["value"]:
+            raise TimeoutError("source timeout exceeded for eastmoney_roll_news")
+        return EastmoneyResponse()
+
+    import requests
+    import quant_data_center.crawlers.sources.eastmoney as eastmoney_module
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(eastmoney_module, "sleep_with_deadline", lambda *args, **kwargs: None)
+
+    command = [
+        "--config",
+        str(config_path),
+        "crawl-daily",
+        "--date",
+        "2026-05-11",
+        "--source-id",
+        "eastmoney_roll_news",
+        "--page-size",
+        "5",
+        "--max-pages",
+        "1",
+    ]
+    assert main(command) == 1
+    assert database.list_crawl_tasks(source_id="eastmoney_roll_news")[0]["status"] == "failed"
+
+    should_fail["value"] = False
+
+    assert main(command) == 0
+    assert database.list_crawl_tasks(source_id="eastmoney_roll_news")[0]["status"] == "success"
+    assert database.silver_table_counts()["news"] == 1
+    assert len(request_calls) == 2
+
+    assert main(command) == 0
+    assert len(request_calls) == 2
+
+    assert main([*command, "--force"]) == 0
+    assert len(request_calls) == 3
+    assert database.silver_table_counts()["news"] == 1
+
+
+def test_qdc_crawl_daily_bootstraps_stock_basic_for_news_mapping(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+
+    class EastmoneyResponse:
+        status_code = 200
+        text = """
+        <li><span>2026-05-11 18:20</span>[<a href="stock.html">股票</a>]
+        <a href="http://stock.eastmoney.com/a/202605111111.html"
+        title="浦发银行签订重大合同" target="_blank">浦发银行签订重大合同</a></li>
+        """
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_collect_stock_basic(self, source_id: str) -> int:
+        return SilverStore(self.settings).upsert_stock_basic(
+            [
+                {
+                    "instrument": "SH600000",
+                    "symbol": "600000",
+                    "exchange": "SH",
+                    "name": "浦发银行",
+                    "is_active": True,
+                    "source_id": source_id,
+                }
+            ]
+        )
+
+    def fake_get(url, **kwargs):
+        return EastmoneyResponse()
+
+    import requests
+    import quant_data_center.crawlers.sources.eastmoney as eastmoney_module
+
+    monkeypatch.setattr(
+        cli_module.AkshareSilverCollector,
+        "collect_stock_basic",
+        fake_collect_stock_basic,
+    )
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(eastmoney_module, "sleep_with_deadline", lambda *args, **kwargs: None)
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-daily",
+                "--date",
+                "2026-05-11",
+                "--source-id",
+                "eastmoney_roll_news",
+                "--page-size",
+                "5",
+                "--max-pages",
+                "1",
+            ]
+        )
+        == 0
+    )
+    assert len(database.stock_basic_instruments(active_only=True)) == 1
     assert database.silver_table_counts()["news"] == 1
 
 

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import re
+import warnings
 from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin
+
+from urllib3.exceptions import InsecureRequestWarning
 
 from quant_data_center.crawlers.date_scan import exact_date_query_scan_fields
 from quant_data_center.crawlers.runtime import (
@@ -25,6 +28,9 @@ SSE_ANNOUNCEMENT_URL = "https://query.sse.com.cn/security/stock/queryCompanyBull
 SSE_REFERER = "https://www.sse.com.cn/disclosure/listedinfo/announcement/"
 SSE_ROOT = "https://www.sse.com.cn/"
 PARSER_VERSION = "sse_announcement_v1"
+# The public list endpoint intermittently stalls in requests' verified TLS path
+# in the local runner; curl and requests with verify=False return immediately.
+SSE_LIST_VERIFY_TLS = False
 
 
 class SseAnnouncementCrawler:
@@ -63,18 +69,21 @@ class SseAnnouncementCrawler:
                 page_num=page_num,
                 page_size=page_size,
             )
-            response = call_with_proxy_policy(
-                requests.get,
-                SSE_ANNOUNCEMENT_URL,
-                headers=_headers(),
-                params=params,
-                timeout=request_timeout(
-                    deadline=deadline,
-                    default_seconds=request_timeout_seconds,
-                    source_id=source_id,
-                ),
-                use_environment_proxy=self.settings.use_environment_proxy,
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", InsecureRequestWarning)
+                response = call_with_proxy_policy(
+                    requests.get,
+                    SSE_ANNOUNCEMENT_URL,
+                    headers=_headers(),
+                    params=params,
+                    timeout=request_timeout(
+                        deadline=deadline,
+                        default_seconds=request_timeout_seconds,
+                        source_id=source_id,
+                    ),
+                    verify=SSE_LIST_VERIFY_TLS,
+                    use_environment_proxy=self.settings.use_environment_proxy,
+                )
             response.raise_for_status()
             body = response.json()
             page_rows = _extract_rows(body)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from quant_data_center.crawlers.date_scan import scan_rolling_date_window
+from quant_data_center.crawlers.registry import crawler_source_spec
 from quant_data_center.crawlers.runtime import call_with_proxy_policy
 
 
@@ -50,6 +51,14 @@ def test_rolling_date_scan_fast_seeks_to_target_window() -> None:
     assert result.manifest_fields["date_scan_probe_pages"] == [1, 2, 4, 8]
     assert result.manifest_fields["date_scan_first_target_page"] == 14
     assert result.manifest_fields["date_scan_last_target_page"] == 16
+
+
+def test_eastmoney_roll_news_uses_fast_metadata_delay() -> None:
+    spec = crawler_source_spec("eastmoney_roll_news")
+
+    assert spec.copyright_policy == "metadata_only"
+    assert spec.rate_limit_per_minute == 120
+    assert spec.min_delay_seconds == 0.5
 
 
 def test_call_with_proxy_policy_temporarily_removes_proxy_environment(monkeypatch) -> None:

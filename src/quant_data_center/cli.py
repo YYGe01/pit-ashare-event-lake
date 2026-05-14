@@ -558,6 +558,13 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
         symbols_arg=args.symbols,
         crawl_date=next(iter(task_dates)) if len(task_dates) == 1 else None,
     )
+    stock_basic_mapping = _ensure_stock_basic_for_document_mapping(
+        settings=settings,
+        database=database,
+        selected_tasks=tasks,
+        instrument_filter_mode=instrument_filter_mode,
+        control_only=bool(args.control_only),
+    )
     results, has_failures = _run_crawl_tasks(
         settings=settings,
         database=database,
@@ -593,6 +600,7 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
             "instrument_filter_mode": instrument_filter_mode,
             "instrument_filter_count": len(instrument_filter or []),
             "instrument_filter_preview": (instrument_filter or [])[:10],
+            "stock_basic_mapping": stock_basic_mapping,
             "parallel_sources": args.parallel_sources,
             "request_timeout_seconds": args.request_timeout_seconds,
             "source_timeout_seconds": args.source_timeout_seconds,
@@ -635,16 +643,24 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
             }
         )
         return 0
+    retryable_statuses = {"pending", "failed"} | ({"success"} if args.force else set())
     tasks = [
         task
-        for task in database.list_crawl_tasks(status="pending", source_id=args.source_id)
-        if task["crawl_date"] == crawl_date
+        for task in database.list_crawl_tasks(source_id=args.source_id)
+        if task["crawl_date"] == crawl_date and task["status"] in retryable_statuses
     ]
     selected_tasks = tasks[: args.limit_tasks] if args.limit_tasks else tasks
     instrument_filter, instrument_filter_mode = _resolve_crawl_document_instrument_filter(
         settings=settings,
         symbols_arg=args.symbols,
         crawl_date=crawl_date,
+    )
+    stock_basic_mapping = _ensure_stock_basic_for_document_mapping(
+        settings=settings,
+        database=database,
+        selected_tasks=selected_tasks,
+        instrument_filter_mode=instrument_filter_mode,
+        control_only=bool(args.control_only),
     )
     results, has_failures = _run_crawl_tasks(
         settings=settings,
@@ -673,8 +689,10 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         raw_object_count=sum(int(item.get("raw_object_count", 0)) for item in results),
         parameters={
             "control_only": bool(args.control_only),
+            "force": bool(args.force),
             "ran_count": len(results),
             "remaining_task_count": len(tasks) - len(selected_tasks),
+            "selected_task_statuses": sorted(retryable_statuses),
             "page_size": args.page_size,
             "max_pages": args.max_pages,
             "download_pdfs": not bool(args.skip_pdf_download),
@@ -682,6 +700,7 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
             "instrument_filter_mode": instrument_filter_mode,
             "instrument_filter_count": len(instrument_filter or []),
             "instrument_filter_preview": (instrument_filter or [])[:10],
+            "stock_basic_mapping": stock_basic_mapping,
             "parallel_sources": args.parallel_sources,
             "request_timeout_seconds": args.request_timeout_seconds,
             "source_timeout_seconds": args.source_timeout_seconds,
@@ -1594,6 +1613,33 @@ def _resolve_crawl_document_instrument_filter(
     return None, "stock_basic_mapping"
 
 
+def _ensure_stock_basic_for_document_mapping(
+    *,
+    settings: QdcSettings,
+    database: QdcDatabase,
+    selected_tasks: list[dict[str, Any]],
+    instrument_filter_mode: str,
+    control_only: bool,
+) -> dict[str, Any]:
+    if control_only or instrument_filter_mode != "stock_basic_mapping":
+        return {"required": False, "refreshed": False}
+    if not any(str(task["dataset"]) == "news" for task in selected_tasks):
+        return {"required": False, "refreshed": False}
+
+    active_count = len(database.stock_basic_instruments(active_only=True))
+    if active_count:
+        return {"required": True, "refreshed": False, "active_count": active_count}
+
+    row_count = AkshareSilverCollector(settings).collect_stock_basic(source_id="akshare")
+    active_count = len(database.stock_basic_instruments(active_only=True))
+    return {
+        "required": True,
+        "refreshed": True,
+        "row_count": row_count,
+        "active_count": active_count,
+    }
+
+
 def _crawl_exhausted_datasets(
     *,
     selected_tasks: list[dict[str, Any]],
@@ -2198,6 +2244,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="skip_pdf_download",
         action="store_false",
         help="Download public announcement PDF files for this run",
+    )
+    crawl_daily_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Rerun existing crawl tasks for this date, including successful tasks",
     )
     crawl_daily_parser.add_argument("--plan-only", action="store_true")
     crawl_daily_parser.add_argument("--control-only", action="store_true")
