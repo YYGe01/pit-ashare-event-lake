@@ -36,6 +36,7 @@ python -m pip install -e ".[market,dev]"
 qdc validate-config
 qdc init
 qdc db-info
+qdc verify-qlib --provider-uri ~/.qlib/qlib_data/cn_data --start 2026-05-13 --end 2026-05-13 --instruments "SH600000,SZ000001" --fields '$close,$volume,$factor'
 ```
 
 当前默认工作流是非结构化采集和外部因子加工：
@@ -49,6 +50,8 @@ qdc sync-parquet --layer all
 qdc quality
 qdc console --host 127.0.0.1 --port 8765
 ```
+
+`crawl-run` / `crawl-daily` 默认只采公告 metadata，不下载 PDF；需要留存公开 PDF 时显式加 `--download-pdfs`，可再配合 `--pdf-limit` 控制 smoke 下载量。
 
 单条文本事件分类可用于规则或 LLM 冒烟验证；全量因子默认仍走规则引擎：
 
@@ -110,7 +113,7 @@ QDC external factors 是否能和该日历、instrument 对齐
 | 公告 | `sse_announcement` | 上交所补源，默认可跳过 PDF 下载 |
 | 新闻 | `eastmoney_roll_news` | 当日滚动新闻补位 |
 | 新闻 | `sina_finance_news` | 近实时补位，历史日期可靠性有限 |
-| 新闻 | `nbd_company_news` | 历史日期 metadata 样本源，但稳定性一般 |
+| 新闻 | `nbd_company_news` | 手动 smoke 源；已退出默认每日源 |
 
 额外 opt-in 新闻源：
 
@@ -231,6 +234,7 @@ ruff check .
 
 ```powershell
 qdc crawl-daily --date 2026-05-13 --source-id cninfo_announcement --page-size 10 --max-pages 1 --skip-pdf-download
+qdc verify-qlib --provider-uri ~/.qlib/qlib_data/cn_data --start 2026-05-13 --end 2026-05-13 --instruments "SH600000,SZ000001" --fields '$close,$volume,$factor'
 qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
 qdc sync-parquet --layer all
 qdc quality

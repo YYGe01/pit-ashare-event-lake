@@ -219,7 +219,7 @@ function statusClass(value) {
   const key = String(value || "default").toLowerCase();
   if (["complete", "success", "ok"].includes(key)) return "success";
   if (["running"].includes(key)) return "running";
-  if (["failed", "blocked", "missing", "stale"].includes(key)) return "danger";
+  if (["failed", "fail", "blocked", "missing", "stale"].includes(key)) return "danger";
   if (["pending", "empty", "partial", "warning", "stopped"].includes(key)) return "warning";
   return "default";
 }
@@ -392,6 +392,7 @@ function renderDashboard(payload) {
   const reference = payload.reference || {};
   const verdict = payload.verdict || {};
   const quality = payload.quality_summary || {};
+  const qlib = payload.qlib_provider_status || {};
   const sources = payload.source_summary_rows || [];
   const expected = Number(reference.expected_instrument_count || 0);
   const coreComplete = Number(collection.core_complete_instrument_count || 0);
@@ -410,9 +411,15 @@ function renderDashboard(payload) {
   $("hero-meter-foot").textContent = `15 秒自动刷新 · ${payload.updated_at || "-"}`;
 
   $("kpi-grid").innerHTML = [
+    summaryCard(
+      "Qlib Provider",
+      compact(qlib.calendar_latest_date || "-"),
+      `预期 ${compact(qlib.expected_latest_date || "-")} · ${compact(qlib.provider_uri || "-", 48)}`,
+      statusClass(qlib.status) === "success" ? "success" : statusClass(qlib.status) === "danger" ? "danger" : "warning",
+    ),
     summaryCard("应采标的 (Expected)", number(expected), reference.source || "标的基准"),
-    summaryCard("核心完整 (Core)", `${number(coreComplete)} / ${number(expected)}`, `完整率 ${percent(collection.core_complete_percent)}`, readiness >= 100 ? "success" : "danger"),
-    summaryCard("问题标的 (Problems)", number(problemCount), "缺日线 / 复权 / 涨跌停", problemCount ? "danger" : "success"),
+    summaryCard("结构化诊断 (Legacy)", `${number(coreComplete)} / ${number(expected)}`, `完整率 ${percent(collection.core_complete_percent)}`, readiness >= 100 ? "success" : "warning"),
+    summaryCard("问题标的 (Diagnostics)", number(problemCount), "仅用于历史结构化链路排查", problemCount ? "warning" : "success"),
     summaryCard("质量问题 (Quality)", number(quality.open_issue_count || 0), `失败维度 ${number(quality.failed_dimension_count || 0)}`, quality.open_issue_count ? "danger" : "success"),
     summaryCard("供应商异常 (Vendor)", number(vendorFailures), "超时 + 错误", vendorFailures ? "danger" : "success"),
     summaryCard("阻塞批次 (Blocked)", number(blockedBatches), `失败 ${number(batches.failed_count)} / 卡住 ${number(batches.stale_running_count)}`, blockedBatches ? "danger" : "success"),

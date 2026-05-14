@@ -19,7 +19,9 @@ from quant_data_center.cli import (
     main,
 )
 from quant_data_center.console import QdcConsoleData, _locked_api_payload
+from quant_data_center.exports.qlib import QLIB_FIELDS, inspect_qlib_provider
 from quant_data_center.jobs.backfill import parse_date, plan_backfill_tasks
+from quant_data_center.qlib_ext.handlers import DEFAULT_EXTERNAL_FIELDS
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage import database as database_module
 from quant_data_center.storage.database import QdcDatabase
@@ -1695,6 +1697,7 @@ def test_qdc_crawl_run_real_cninfo_with_fake_response(
                 "2",
                 "--pdf-limit",
                 "1",
+                "--download-pdfs",
             ]
         )
         == 0
@@ -1843,6 +1846,7 @@ def test_qdc_crawl_run_filters_cninfo_announcements_by_symbols(
                 "cninfo_announcement",
                 "--symbols",
                 "SH600000",
+                "--download-pdfs",
             ]
         )
         == 0
@@ -1927,7 +1931,6 @@ def test_qdc_crawl_run_real_sse_announcement_with_fake_response(
                 "sse_announcement",
                 "--page-size",
                 "2",
-                "--skip-pdf-download",
             ]
         )
         == 0
@@ -2887,13 +2890,12 @@ def test_qdc_crawl_daily_control_only_plans_and_runs_default_sources(tmp_path: P
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 5
+    assert len(tasks) == 4
     assert {task["source_id"] for task in tasks} == {
         "cninfo_announcement",
         "sse_announcement",
         "sina_finance_news",
         "eastmoney_roll_news",
-        "nbd_company_news",
     }
     assert {task["status"] for task in tasks} == {"success"}
     assert database.table_counts()["crawl_run"] == 1
@@ -3591,13 +3593,12 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
 
     database = QdcDatabase(QdcSettings.from_yaml(config_path))
     tasks = database.list_crawl_tasks()
-    assert len(tasks) == 5
+    assert len(tasks) == 4
     assert {task["source_id"] for task in tasks} == {
         "cninfo_announcement",
         "sse_announcement",
         "sina_finance_news",
         "eastmoney_roll_news",
-        "nbd_company_news",
     }
     assert {task["status"] for task in tasks} == {"success"}
     with database.connect() as conn:
@@ -3615,7 +3616,7 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
             """
         ).fetchone()
     assert crawl_run is not None
-    assert crawl_run[0:3] == ("success", 5, 5)
+    assert crawl_run[0:3] == ("success", 4, 4)
     crawl_parameters = json.loads(crawl_run[3])
     assert crawl_parameters["command"] == "daily-pipeline"
     assert crawl_parameters["instrument_filter"] == []
@@ -3625,8 +3626,8 @@ def test_qdc_daily_pipeline_crawl_documents_control_only_runs_crawlers(
     parameters = json.loads(pipeline_job[0])
     assert parameters["crawl_documents"] is True
     assert parameters["crawl_status"] == "ok"
-    assert parameters["crawl_planned_count"] == 5
-    assert parameters["crawl_ran_count"] == 5
+    assert parameters["crawl_planned_count"] == 4
+    assert parameters["crawl_ran_count"] == 4
 
 
 def test_qdc_plan_backfill_rejects_unsupported_source(tmp_path: Path) -> None:
@@ -4878,13 +4879,50 @@ def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> No
     assert len(qlib_objects) == 44
 
 
+def test_qdc_external_factor_fields_match_qlib_handler() -> None:
+    assert set(DEFAULT_EXTERNAL_FIELDS).issubset(set(QLIB_FIELDS))
+
+
+def test_qdc_inspect_qlib_provider_checks_calendar_and_base_fields(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    provider_uri = tmp_path / "qlib_provider"
+    (provider_uri / "calendars").mkdir(parents=True)
+    (provider_uri / "calendars" / "day.txt").write_text("2026-05-11\n", encoding="utf-8")
+    feature_dir = provider_uri / "features" / "sh600000"
+    feature_dir.mkdir(parents=True)
+    (feature_dir / "close.day.bin").write_bytes(b"close")
+    (feature_dir / "volume.day.bin").write_bytes(b"volume")
+
+    payload = inspect_qlib_provider(
+        settings,
+        provider_uri=provider_uri,
+        instruments=["SH600000"],
+        expected_latest_date="2026-05-12",
+    )
+
+    assert payload["status"] == "fail"
+    assert payload["calendar_latest_date"] == "2026-05-11"
+    assert [item["field"] for item in payload["feature_files"]] == [
+        "$close",
+        "$volume",
+        "$factor",
+    ]
+    assert {issue["issue_type"] for issue in payload["issues"]} == {
+        "stale_calendar",
+        "missing_feature_file",
+    }
+
+
 def test_qdc_verify_qlib_reports_missing_instrument_without_db_side_effect(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
     config_path = _write_config(tmp_path)
     provider_uri = tmp_path / "qlib_provider"
-    (provider_uri / "features" / "sh600000").mkdir(parents=True)
-    (provider_uri / "features" / "sh600000" / "close.day.bin").write_bytes(b"")
+    (provider_uri / "calendars").mkdir(parents=True)
+    (provider_uri / "calendars" / "day.txt").write_text("2026-05-11\n", encoding="utf-8")
+    (provider_uri / "features" / "sz000001").mkdir(parents=True)
+    (provider_uri / "features" / "sz000001" / "close.day.bin").write_bytes(b"")
 
     class FakeD:
         @staticmethod

@@ -265,7 +265,6 @@ CRAWL_DAILY_SOURCE_IDS = [
     "sse_announcement",
     "sina_finance_news",
     "eastmoney_roll_news",
-    "nbd_company_news",
 ]
 
 

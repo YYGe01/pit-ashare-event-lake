@@ -11,6 +11,13 @@ paths:
   qlib_root: data/quant_data_center_daily_only/qlib
   logs_dir: data/quant_data_center_daily_only/logs
 
+qlib_provider:
+  provider_uri: ~/.qlib/qlib_data/cn_data
+  required_fields:
+    - $close
+    - $volume
+    - $factor
+
 runtime:
   database_backend: duckdb
   file_format: parquet
@@ -37,7 +44,7 @@ daily_pipeline:
   crawl_request_timeout_seconds: 30
   crawl_source_timeout_seconds: 180
   skip_stock_basic_refresh: false
-  skip_crawl_pdf_download: false
+  skip_crawl_pdf_download: true
   skip_factors: false
   skip_sync: false
   skip_quality: false

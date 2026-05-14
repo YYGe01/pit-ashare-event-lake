@@ -246,6 +246,7 @@ def cmd_verify_qlib(args: argparse.Namespace) -> int:
         end_date=args.end,
         instruments=instruments,
         fields=parse_symbols(args.fields),
+        expected_latest_date=args.expected_latest_date,
     )
     _print_json(result)
     return 0 if result["status"] == "ok" else 1
@@ -1198,7 +1199,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     if crawl_source_timeout_seconds is not None:
         crawl_source_timeout_seconds = float(crawl_source_timeout_seconds)
     skip_crawl_pdf_download = bool(
-        _daily_pipeline_option(args, settings, "skip_crawl_pdf_download", False)
+        _daily_pipeline_option(args, settings, "skip_crawl_pdf_download", True)
     )
     skip_factors = bool(_daily_pipeline_option(args, settings, "skip_factors", False))
     skip_sync = bool(_daily_pipeline_option(args, settings, "skip_sync", False))
@@ -1884,16 +1885,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify_qlib_parser = subparsers.add_parser(
         "verify-qlib",
-        help="Verify that Qlib can read a QDC exported provider",
+        help="Verify that Qlib can read the configured base provider",
     )
     verify_qlib_parser.add_argument("--provider-uri")
     verify_qlib_parser.add_argument("--start", required=True, help="YYYY-MM-DD")
     verify_qlib_parser.add_argument("--end", required=True, help="YYYY-MM-DD")
+    verify_qlib_parser.add_argument(
+        "--expected-latest-date",
+        help="Expected latest calendars/day.txt date; defaults to --end",
+    )
     verify_qlib_parser.add_argument("--instruments", help="Comma-separated instruments")
     verify_qlib_parser.add_argument("--universe", default="csi300")
     verify_qlib_parser.add_argument(
         "--fields",
-        default="$close,$vwap,$volume,$announcement_count,$news_count",
+        default="$close,$volume,$factor",
         help="Comma-separated Qlib fields",
     )
     verify_qlib_parser.set_defaults(func=cmd_verify_qlib)
@@ -2094,8 +2099,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     crawl_run_parser.add_argument(
         "--skip-pdf-download",
+        dest="skip_pdf_download",
         action="store_true",
+        default=True,
         help="Only collect announcement metadata; do not download public PDF files",
+    )
+    crawl_run_parser.add_argument(
+        "--download-pdfs",
+        dest="skip_pdf_download",
+        action="store_false",
+        help="Download public announcement PDF files for this run",
     )
     crawl_run_parser.add_argument("--retry-failed", action="store_true")
     crawl_run_parser.add_argument(
@@ -2139,8 +2152,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     crawl_daily_parser.add_argument(
         "--skip-pdf-download",
+        dest="skip_pdf_download",
         action="store_true",
+        default=True,
         help="Only collect announcement metadata; do not download public PDF files",
+    )
+    crawl_daily_parser.add_argument(
+        "--download-pdfs",
+        dest="skip_pdf_download",
+        action="store_false",
+        help="Download public announcement PDF files for this run",
     )
     crawl_daily_parser.add_argument("--plan-only", action="store_true")
     crawl_daily_parser.add_argument("--control-only", action="store_true")

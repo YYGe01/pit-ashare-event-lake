@@ -12,6 +12,7 @@ from quant_data_center.crawlers.runtime import (
     request_timeout,
     sleep_with_deadline,
 )
+from quant_data_center.crawlers.metrics import build_document_source_metrics
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.database import QdcDatabase
 from quant_data_center.storage.objects import QdcObjectStore
@@ -115,6 +116,14 @@ class SinaFinanceNewsCrawler:
             observed_at=observed_at,
             raw_object_id=raw_object_id,
         )
+        source_metrics = build_document_source_metrics(
+            provider_record_count=len(provider_rows),
+            provider_record_keys=(_provider_key(row) for row in provider_rows),
+            parsed_record_keys=(
+                _provider_key(row) for row in provider_rows if _is_parsable_row(row)
+            ),
+            mapped_source_record_ids=(record.get("source_record_id") for record in records),
+        )
         document_bundle = self.objects.put_document_bundle(
             dataset="news",
             source_id=source_id,
@@ -128,6 +137,7 @@ class SinaFinanceNewsCrawler:
                 "instrument_filter": instrument_filter or [],
                 "raw_object_id": raw_object_id,
                 "provider_record_count": len(provider_rows),
+                **source_metrics,
             },
             records=records,
         )
@@ -144,6 +154,7 @@ class SinaFinanceNewsCrawler:
             **document_bundle,
             "provider_record_count": len(provider_rows),
             "mapped_record_count": row_count,
+            **source_metrics,
             "observed_at": observed_at,
         }
 
@@ -270,6 +281,18 @@ def _publish_time(row: dict[str, Any]) -> str | None:
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}$", text):
         return f"{text} 00:00:00"
     return text.replace("T", " ")[:19]
+
+
+def _is_parsable_row(row: dict[str, Any]) -> bool:
+    title = _clean_text(row.get("title") or row.get("stitle") or row.get("name"))
+    return bool(title and _publish_time(row))
+
+
+def _provider_key(row: dict[str, Any]) -> str:
+    return (
+        _clean_text(row.get("id") or row.get("docid") or row.get("url") or row.get("wapurl"))
+        or f"{_clean_text(row.get('title') or row.get('stitle') or row.get('name'))}|{_publish_time(row)}"
+    )
 
 
 def _clean_text(value: Any) -> str | None:

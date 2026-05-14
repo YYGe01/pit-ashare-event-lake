@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import duckdb
 
+from quant_data_center.exports.qlib import inspect_qlib_provider
 from quant_data_center.factor_engine.calendar_align import TradeDayAligner, date_minus_days
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.schema import (
@@ -350,6 +351,7 @@ class QdcConsoleData:
                 "backfill_progress": self._backfill_progress(conn, control_tables),
                 "watermarks": self._watermarks(conn, control_tables),
                 "latest_qlib_exports": self._qlib_exports(conn, control_tables, limit=5),
+                "qlib_provider_status": self.qlib_provider_status(),
                 "data_coverage": self._data_coverage(conn, silver_tables),
             }
 
@@ -433,6 +435,9 @@ class QdcConsoleData:
             )
         return {"status": "ok", "object_count": len(objects), "objects": objects}
 
+    def qlib_provider_status(self) -> dict[str, Any]:
+        return inspect_qlib_provider(self.settings)
+
     def instruments(
         self,
         *,
@@ -455,12 +460,24 @@ class QdcConsoleData:
         return {"status": "ok", "instrument_count": len(rows), "instruments": rows}
 
     def daily_collection_status(self, *, date: str | None = None) -> dict[str, Any]:
+        qlib_provider_status = self.qlib_provider_status()
         if not self.settings.database_path.exists():
             resolved_date = date or datetime.now().date().isoformat()
-            return _empty_daily_collection_status(
+            payload = _empty_daily_collection_status(
                 date=resolved_date,
                 database_path=str(self.settings.database_path),
             )
+            payload["qlib_provider_status"] = qlib_provider_status
+            payload["verdict"] = _daily_verdict(
+                database_exists=False,
+                expected_count=0,
+                collection=payload["collection"],
+                batches=payload["batches"],
+                quality_summary=payload["quality_summary"],
+                source_summary_rows=[],
+                qlib_provider_status=qlib_provider_status,
+            )
+            return payload
 
         with self._connect() as conn:
             control_tables = self._existing_tables(conn, CONTROL_SCHEMA)
@@ -557,6 +574,7 @@ class QdcConsoleData:
             source_summary_rows=source_summary_rows,
             quality_summary=quality_summary,
             job_stage_rows=job_stage_rows,
+            qlib_provider_status=qlib_provider_status,
         )
         verdict = _daily_verdict(
             database_exists=True,
@@ -565,6 +583,7 @@ class QdcConsoleData:
             batches=batch_summary,
             quality_summary=quality_summary,
             source_summary_rows=source_summary_rows,
+            qlib_provider_status=qlib_provider_status,
         )
         return {
             "status": "ok",
@@ -581,6 +600,7 @@ class QdcConsoleData:
             "batches": batch_summary,
             "stage_rows": stage_rows,
             "quality_summary": quality_summary,
+            "qlib_provider_status": qlib_provider_status,
             "source_summary_rows": source_summary_rows,
             "batch_rows": batch_rows,
             "batch_task_rows": batch_task_rows,
@@ -2240,6 +2260,7 @@ class QdcConsoleData:
             "backfill_progress": [],
             "watermarks": [],
             "latest_qlib_exports": [],
+            "qlib_provider_status": self.qlib_provider_status(),
             "data_coverage": _empty_data_coverage(),
         }
 
@@ -5238,6 +5259,7 @@ def _empty_daily_collection_status(*, date: str, database_path: str) -> dict[str
             },
             quality_summary=_empty_daily_quality_summary(),
             source_summary_rows=[],
+            qlib_provider_status={"status": "pending", "issues": []},
         ),
         "collection": {
             "collected_instrument_count": 0,
@@ -5452,9 +5474,25 @@ def _daily_stage_rows(
     source_summary_rows: list[dict[str, Any]],
     quality_summary: dict[str, Any],
     job_stage_rows: dict[str, dict[str, Any]],
+    qlib_provider_status: dict[str, Any],
 ) -> list[dict[str, Any]]:
     dataset_by_name = {str(row.get("dataset") or ""): row for row in dataset_rows}
+    qlib_issues = qlib_provider_status.get("issues") or []
+    qlib_latest = qlib_provider_status.get("calendar_latest_date") or "-"
+    qlib_expected = qlib_provider_status.get("expected_latest_date") or "-"
     rows = [
+        {
+            "stage_id": "qlib_provider",
+            "label": "Qlib Provider",
+            "status": qlib_provider_status.get("status") or "pending",
+            "progress_percent": 100 if qlib_provider_status.get("status") == "ok" else 0,
+            "primary": f"最新日历 {qlib_latest}",
+            "secondary": (
+                f"预期 {qlib_expected}；"
+                f"样本 {len(qlib_provider_status.get('sample_instruments') or [])}；"
+                f"问题 {len(qlib_issues)}"
+            ),
+        },
         {
             "stage_id": "universe",
             "label": "标的清单 (Universe)",
@@ -5572,21 +5610,14 @@ def _daily_verdict(
     batches: dict[str, Any],
     quality_summary: dict[str, Any],
     source_summary_rows: list[dict[str, Any]],
+    qlib_provider_status: dict[str, Any],
 ) -> dict[str, Any]:
     if not database_exists:
         return {
             "level": "warning",
             "title": "还没有初始化数据库",
-            "summary": "控制台没有读到 qdc.duckdb，暂时无法判断采集状态。",
-            "next_action": "先运行 qdc init 或 daily-pipeline。",
-            "readiness_percent": 0,
-        }
-    if expected_count <= 0:
-        return {
-            "level": "warning",
-            "title": "还没有今日标的清单",
-            "summary": "当前日期没有应采标的，可能还没有刷新股票池或今天未开始采集。",
-            "next_action": "先确认日期和 universe，再运行 daily-pipeline。",
+            "summary": "控制台没有读到 qdc.duckdb，只能展示 Qlib provider 文件检查。",
+            "next_action": "先运行 qdc init，再执行 crawl-daily 和 build-factors。",
             "readiness_percent": 0,
         }
 
@@ -5598,12 +5629,14 @@ def _daily_verdict(
         for row in source_summary_rows
     )
     quality_failed = quality_summary.get("status") == "failed"
+    qlib_status = str(qlib_provider_status.get("status") or "pending")
+    qlib_issue = (qlib_provider_status.get("issues") or [{}])[0] if qlib_status != "ok" else {}
     if failed_batches or stale_batches:
         return {
             "level": "danger",
             "title": "采集卡住或失败",
             "summary": f"失败批次 {failed_batches} 个，疑似卡住 {stale_batches} 个。",
-            "next_action": "先看采集任务和问题标的，再重试失败批次。",
+            "next_action": "先看采集任务和供应商状态，再重试失败任务。",
             "readiness_percent": core_percent,
         }
     if vendor_failures:
@@ -5622,22 +5655,46 @@ def _daily_verdict(
             "next_action": "先处理质量体检里的失败维度。",
             "readiness_percent": core_percent,
         }
+    if qlib_status == "fail":
+        return {
+            "level": "warning",
+            "title": "Qlib 基础 provider 不可用",
+            "summary": str(qlib_issue.get("message") or "基础行情 provider 文件检查未通过。"),
+            "next_action": "先在 Qlib 仓库侧更新或修复 cn_data，再回来验证 external factors。",
+            "readiness_percent": 0,
+        }
+    if qlib_status == "warning":
+        return {
+            "level": "warning",
+            "title": "Qlib 基础 provider 需要更新",
+            "summary": str(qlib_issue.get("message") or "基础行情 provider 可能不是最新完整交易日。"),
+            "next_action": "QDC 可以继续采集当日文本因子，但训练底座需先更新 Qlib provider。",
+            "readiness_percent": max(core_percent, 50),
+        }
+    if expected_count <= 0:
+        return {
+            "level": "warning",
+            "title": "等待每日文档和因子记录",
+            "summary": "当前日期还没有可用于观察的公告、新闻或因子行。",
+            "next_action": "运行 crawl-daily，然后运行 build-factors、sync-parquet 和 quality。",
+            "readiness_percent": 0,
+        }
     if core_percent >= 100:
         return {
             "level": "success",
-            "title": "今日核心数据可用",
-            "summary": "日线行情、复权因子和涨跌停三项核心数据已覆盖全部应采标的。",
-            "next_action": "可以继续查看宽表或检查 Qlib 导出结果。",
+            "title": "每日文档因子链路可观察",
+            "summary": "Qlib provider 文件检查通过，文档采集、因子和质量状态没有阻塞问题。",
+            "next_action": "可以查看公告新闻明细、因子宽表或执行 verify-qlib 抽样读取。",
             "readiness_percent": core_percent,
         }
     return {
         "level": "running",
-        "title": "今日采集中",
+        "title": "等待文档因子链路推进",
         "summary": (
-            f"核心完整率 {core_percent:.2f}%，"
-            f"还有 {int(collection.get('problem_instrument_count') or 0)} 只标的缺核心数据。"
+            "基础行情可用性由 Qlib provider 检查给出；"
+            f"当前结构化诊断完整率 {core_percent:.2f}%。"
         ),
-        "next_action": "保持页面打开，等待批次继续推进。",
+        "next_action": "继续运行 crawl-daily、build-factors、sync-parquet 和 quality。",
         "readiness_percent": core_percent,
     }
 

@@ -59,6 +59,14 @@ class DailyPipelineSettings:
 
 
 @dataclass(frozen=True)
+class QlibProviderSettings:
+    """External Qlib provider consumed as the base market data layer."""
+
+    provider_uri: str | None
+    required_fields: list[str]
+
+
+@dataclass(frozen=True)
 class QdcSettings:
     """Runtime paths and basic project options."""
 
@@ -81,6 +89,7 @@ class QdcSettings:
     unknown_copyright_policy: str
     text_event_classifier: TextEventClassifierSettings
     daily_pipeline: DailyPipelineSettings
+    qlib_provider: QlibProviderSettings
     universes: dict[str, list[str]]
 
     @classmethod
@@ -98,6 +107,7 @@ class QdcSettings:
             payload=payload.get("llm", {}),
         )
         daily_pipeline = _parse_daily_pipeline_settings(payload.get("daily_pipeline", {}))
+        qlib_provider = _parse_qlib_provider_settings(payload.get("qlib_provider", {}))
         universes = _parse_universes(payload.get("universes", {}))
 
         required_paths = [
@@ -134,6 +144,7 @@ class QdcSettings:
             ),
             text_event_classifier=text_event_classifier,
             daily_pipeline=daily_pipeline,
+            qlib_provider=qlib_provider,
             universes=universes,
         )
 
@@ -219,6 +230,10 @@ class QdcSettings:
                 "skip_quality": self.daily_pipeline.skip_quality,
                 "skip_export": self.daily_pipeline.skip_export,
             },
+            "qlib_provider": {
+                "provider_uri": self.qlib_provider.provider_uri,
+                "required_fields": self.qlib_provider.required_fields,
+            },
             "universes": {
                 universe: {"symbol_count": len(symbols)}
                 for universe, symbols in sorted(self.universes.items())
@@ -282,6 +297,23 @@ def _parse_daily_pipeline_settings(payload: Any) -> DailyPipelineSettings:
         skip_sync=_optional_bool(spec.get("skip_sync")),
         skip_quality=_optional_bool(spec.get("skip_quality")),
         skip_export=_optional_bool(spec.get("skip_export")),
+    )
+
+
+def _parse_qlib_provider_settings(payload: Any) -> QlibProviderSettings:
+    if payload and not isinstance(payload, dict):
+        raise ValueError("qdc qlib_provider settings must be a mapping")
+    spec = payload or {}
+    required_fields = _optional_str_list(spec.get("required_fields")) or [
+        "$close",
+        "$volume",
+        "$factor",
+    ]
+    return QlibProviderSettings(
+        provider_uri=_optional_str(spec.get("provider_uri")),
+        required_fields=[
+            field if field.startswith("$") else f"${field}" for field in required_fields
+        ],
     )
 
 

@@ -21,6 +21,7 @@ from quant_data_center.crawlers.runtime import (
     request_timeout,
     sleep_with_deadline,
 )
+from quant_data_center.crawlers.metrics import build_document_source_metrics
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.database import QdcDatabase
 from quant_data_center.storage.objects import QdcObjectStore
@@ -130,6 +131,14 @@ class VendorNewsCrawler:
             observed_at=observed_at,
             raw_object_id=raw_object_id,
         )
+        source_metrics = build_document_source_metrics(
+            provider_record_count=len(provider_rows),
+            provider_record_keys=(_provider_key(row) for row in provider_rows),
+            parsed_record_keys=(
+                _provider_key(row) for row in provider_rows if _is_parsable_row(row)
+            ),
+            mapped_source_record_ids=(record.get("source_record_id") for record in records),
+        )
         body_count = sum(1 for record in records if record.get("body_text"))
         document_bundle = self.objects.put_document_bundle(
             dataset="news",
@@ -152,6 +161,7 @@ class VendorNewsCrawler:
                 "raw_object_id": raw_object_id,
                 "provider_record_count": len(provider_rows),
                 "body_inline_preview_count": body_count,
+                **source_metrics,
             },
             records=records,
         )
@@ -169,6 +179,7 @@ class VendorNewsCrawler:
             "provider_record_count": len(provider_rows),
             "mapped_record_count": row_count,
             "body_inline_preview_count": body_count,
+            **source_metrics,
             "observed_at": observed_at,
         }
 
@@ -800,6 +811,21 @@ def _normalize_news(
                 )
             records[news_id] = record
     return list(records.values())
+
+
+def _is_parsable_row(row: dict[str, Any]) -> bool:
+    return bool(
+        _clean_text(row.get("title"))
+        and _clean_text(row.get("publish_time"))
+        and _clean_text(row.get("publish_date"))
+    )
+
+
+def _provider_key(row: dict[str, Any]) -> str:
+    return (
+        _clean_text(row.get("source_record_id") or row.get("url"))
+        or f"{_clean_text(row.get('title'))}|{_clean_text(row.get('publish_time'))}"
+    )
 
 
 def _match_instruments(
