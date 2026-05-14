@@ -21,6 +21,7 @@ qlib_provider:
 runtime:
   database_backend: duckdb
   file_format: parquet
+  use_environment_proxy: false
 
 policy:
   prefer_free_sources: true

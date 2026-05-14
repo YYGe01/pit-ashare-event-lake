@@ -8,8 +8,9 @@ from datetime import datetime
 from html.parser import HTMLParser
 from typing import Any
 
-from quant_data_center.crawlers.date_scan import RollingDateWindowScanner
+from quant_data_center.crawlers.date_scan import scan_rolling_date_window
 from quant_data_center.crawlers.runtime import (
+    call_with_proxy_policy,
     make_deadline,
     raise_if_deadline_exceeded,
     request_timeout,
@@ -52,16 +53,13 @@ class EastmoneyRollNewsCrawler:
     ) -> dict[str, Any]:
         requests = __import__("requests")
         deadline = make_deadline(source_timeout_seconds)
-        pages = []
-        provider_rows: list[dict[str, Any]] = []
-        target_provider_rows: list[dict[str, Any]] = []
         observed_at = _timestamp()
-        scanner = RollingDateWindowScanner(target_date=crawl_date, max_pages=max_pages)
-        page_num = 1
-        while True:
+
+        def fetch_page(page_num: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             raise_if_deadline_exceeded(deadline, source_id=source_id)
             url = EASTMONEY_ROLL_NEWS_URL_TEMPLATE.format(page_num=page_num)
-            response = requests.get(
+            response = call_with_proxy_policy(
+                requests.get,
                 url,
                 headers=_headers(),
                 timeout=request_timeout(
@@ -69,39 +67,37 @@ class EastmoneyRollNewsCrawler:
                     default_seconds=request_timeout_seconds,
                     source_id=source_id,
                 ),
+                use_environment_proxy=self.settings.use_environment_proxy,
             )
             response.raise_for_status()
             rows = _extract_rows(
                 text=response.text,
                 limit=page_size,
             )
-            provider_rows.extend(rows)
-            scan_result = scanner.scan_page(
-                page_num=page_num,
-                rows=rows,
-                publish_time_getter=lambda row: row.get("publish_time")
-                or row.get("publish_date"),
+            return rows, {
+                "page_num": page_num,
+                "url": url,
+                "status_code": response.status_code,
+                "news_count": len(rows),
+            }
+
+        scan = scan_rolling_date_window(
+            target_date=crawl_date,
+            max_pages=max_pages,
+            fetch_page=fetch_page,
+            publish_time_getter=lambda row: row.get("publish_time")
+            or row.get("publish_date"),
+            before_fetch=lambda: sleep_with_deadline(
+                min_delay_seconds,
+                deadline=deadline,
+                source_id=source_id,
             )
-            target_provider_rows.extend(scan_result.target_rows)
-            pages.append(
-                {
-                    "page_num": page_num,
-                    "url": url,
-                    "status_code": response.status_code,
-                    "news_count": len(rows),
-                    **scan_result.metrics,
-                    "items": rows,
-                }
-            )
-            page_num += 1
-            if not scanner.should_continue(next_page_num=page_num):
-                break
-            if min_delay_seconds > 0:
-                sleep_with_deadline(
-                    min_delay_seconds,
-                    deadline=deadline,
-                    source_id=source_id,
-                )
+            if min_delay_seconds > 0
+            else None,
+        )
+        pages = scan.pages
+        provider_rows = scan.provider_rows
+        target_provider_rows = scan.target_rows
 
         raw_object_id = self.objects.put_json(
             dataset="news",
@@ -142,7 +138,7 @@ class EastmoneyRollNewsCrawler:
             ),
             mapped_source_record_ids=(record.get("source_record_id") for record in records),
         )
-        scan_fields = scanner.manifest_fields()
+        scan_fields = scan.manifest_fields
         mapping_failure_reason = (
             "empty_instrument_dictionary"
             if not instrument_hints and source_metrics["parsed_unique_record_count"]
@@ -154,6 +150,7 @@ class EastmoneyRollNewsCrawler:
             request_timeout_seconds=request_timeout_seconds,
             deadline=deadline,
             source_id=source_id,
+            use_environment_proxy=self.settings.use_environment_proxy,
         )
         document_bundle = self.objects.put_document_bundle(
             dataset="news",
@@ -328,6 +325,7 @@ def _attach_article_bodies(
     request_timeout_seconds: float,
     deadline: float | None,
     source_id: str,
+    use_environment_proxy: bool,
 ) -> dict[str, int]:
     stats = {"body_downloaded_count": 0, "body_failed_count": 0, "body_skipped_count": 0}
     by_url: dict[str, dict[str, Any]] = {}
@@ -344,6 +342,7 @@ def _attach_article_bodies(
                 request_timeout_seconds=request_timeout_seconds,
                 deadline=deadline,
                 source_id=source_id,
+                use_environment_proxy=use_environment_proxy,
             )
         result = by_url[url]
         for key, value in result.items():
@@ -362,10 +361,12 @@ def _fetch_article_body(
     request_timeout_seconds: float,
     deadline: float | None,
     source_id: str,
+    use_environment_proxy: bool,
 ) -> dict[str, Any]:
     try:
         raise_if_deadline_exceeded(deadline, source_id=source_id)
-        response = requests_module.get(
+        response = call_with_proxy_policy(
+            requests_module.get,
             url,
             headers=_article_headers(url),
             timeout=request_timeout(
@@ -373,6 +374,7 @@ def _fetch_article_body(
                 default_seconds=request_timeout_seconds,
                 source_id=source_id,
             ),
+            use_environment_proxy=use_environment_proxy,
         )
         response.raise_for_status()
         text = str(response.text or "")

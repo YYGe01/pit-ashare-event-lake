@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 from quant_data_center.crawlers.runtime import (
+    call_with_proxy_policy,
     make_deadline,
     raise_if_deadline_exceeded,
     request_timeout,
@@ -97,6 +98,7 @@ class VendorNewsCrawler:
             min_delay_seconds=min_delay_seconds,
             request_timeout_seconds=request_timeout_seconds,
             deadline=deadline,
+            use_environment_proxy=self.settings.use_environment_proxy,
         )
         provider_rows = fetch_result["rows"]
         stem = f"{source_id}_vendor_news_{crawl_date}"
@@ -224,6 +226,7 @@ def _fetch_provider_rows(
     min_delay_seconds: float,
     request_timeout_seconds: float,
     deadline: float | None,
+    use_environment_proxy: bool,
 ) -> dict[str, Any]:
     if source_id in AKSHARE_SOURCE_FUNCTIONS:
         return _fetch_akshare_rows(
@@ -232,6 +235,7 @@ def _fetch_provider_rows(
             page_size=page_size,
             max_pages=max_pages,
             deadline=deadline,
+            use_environment_proxy=use_environment_proxy,
         )
     if source_id == "wallstreetcn":
         return _fetch_wallstreetcn_rows(
@@ -241,6 +245,7 @@ def _fetch_provider_rows(
             page_size=page_size,
             request_timeout_seconds=request_timeout_seconds,
             deadline=deadline,
+            use_environment_proxy=use_environment_proxy,
         )
     if source_id == "yicai":
         return _fetch_yicai_rows(
@@ -252,6 +257,7 @@ def _fetch_provider_rows(
             min_delay_seconds=min_delay_seconds,
             request_timeout_seconds=request_timeout_seconds,
             deadline=deadline,
+            use_environment_proxy=use_environment_proxy,
         )
     if source_id == "jinrongjie":
         return _fetch_jinrongjie_rows(
@@ -261,6 +267,7 @@ def _fetch_provider_rows(
             page_size=page_size,
             request_timeout_seconds=request_timeout_seconds,
             deadline=deadline,
+            use_environment_proxy=use_environment_proxy,
         )
     if source_id == "fenghuang":
         return _fetch_fenghuang_rows(
@@ -270,6 +277,7 @@ def _fetch_provider_rows(
             page_size=page_size,
             request_timeout_seconds=request_timeout_seconds,
             deadline=deadline,
+            use_environment_proxy=use_environment_proxy,
         )
     if source_id == "yuncaijing":
         return _fetch_yuncaijing_rows(
@@ -279,6 +287,7 @@ def _fetch_provider_rows(
             page_size=page_size,
             request_timeout_seconds=request_timeout_seconds,
             deadline=deadline,
+            use_environment_proxy=use_environment_proxy,
         )
     raise ValueError(f"unsupported vendor news source_id: {source_id}")
 
@@ -290,11 +299,16 @@ def _fetch_akshare_rows(
     page_size: int,
     max_pages: int | None,
     deadline: float | None,
+    use_environment_proxy: bool,
 ) -> dict[str, Any]:
     raise_if_deadline_exceeded(deadline, source_id=source_id)
     function_name, kwargs = AKSHARE_SOURCE_FUNCTIONS[source_id]
     akshare = __import__("akshare")
-    frame = getattr(akshare, function_name)(**kwargs)
+    frame = call_with_proxy_policy(
+        getattr(akshare, function_name),
+        use_environment_proxy=use_environment_proxy,
+        **kwargs,
+    )
     raw_rows = frame.to_dict("records") if hasattr(frame, "to_dict") else []
     limit = max(1, page_size) * max(1, max_pages or 1)
     rows = [
@@ -375,6 +389,7 @@ def _fetch_wallstreetcn_rows(
     page_size: int,
     request_timeout_seconds: float,
     deadline: float | None,
+    use_environment_proxy: bool,
 ) -> dict[str, Any]:
     raise_if_deadline_exceeded(deadline, source_id=source_id)
     url = "https://api-one-wscn.awtmt.com/apiv1/content/lives"
@@ -385,7 +400,8 @@ def _fetch_wallstreetcn_rows(
         "first_page": "true",
         "accept": "live,vip-live",
     }
-    response = requests_module.get(
+    response = call_with_proxy_policy(
+        requests_module.get,
         url,
         headers=_headers(source_id),
         params=params,
@@ -394,6 +410,7 @@ def _fetch_wallstreetcn_rows(
             default_seconds=request_timeout_seconds,
             source_id=source_id,
         ),
+        use_environment_proxy=use_environment_proxy,
     )
     response.raise_for_status()
     body = response.json()
@@ -441,6 +458,7 @@ def _fetch_yicai_rows(
     min_delay_seconds: float,
     request_timeout_seconds: float,
     deadline: float | None,
+    use_environment_proxy: bool,
 ) -> dict[str, Any]:
     pages = []
     rows: list[dict[str, Any]] = []
@@ -454,7 +472,8 @@ def _fetch_yicai_rows(
             "type": "0",
             "id": "0",
         }
-        response = requests_module.get(
+        response = call_with_proxy_policy(
+            requests_module.get,
             url,
             headers=_headers(source_id),
             params=params,
@@ -463,6 +482,7 @@ def _fetch_yicai_rows(
                 default_seconds=request_timeout_seconds,
                 source_id=source_id,
             ),
+            use_environment_proxy=use_environment_proxy,
         )
         response.raise_for_status()
         items = response.json()
@@ -509,10 +529,12 @@ def _fetch_jinrongjie_rows(
     page_size: int,
     request_timeout_seconds: float,
     deadline: float | None,
+    use_environment_proxy: bool,
 ) -> dict[str, Any]:
     raise_if_deadline_exceeded(deadline, source_id=source_id)
     url = f"https://stockjs.jrj.com.cn/share/news/yaowen/yw{crawl_date}.js"
-    response = requests_module.get(
+    response = call_with_proxy_policy(
+        requests_module.get,
         url,
         headers=_headers(source_id),
         timeout=request_timeout(
@@ -520,6 +542,7 @@ def _fetch_jinrongjie_rows(
             default_seconds=request_timeout_seconds,
             source_id=source_id,
         ),
+        use_environment_proxy=use_environment_proxy,
     )
     response.raise_for_status()
     body = _json_from_maybe_javascript(response.text)
@@ -565,10 +588,12 @@ def _fetch_fenghuang_rows(
     page_size: int,
     request_timeout_seconds: float,
     deadline: float | None,
+    use_environment_proxy: bool,
 ) -> dict[str, Any]:
     raise_if_deadline_exceeded(deadline, source_id=source_id)
     url = "https://shankapi.ifeng.com/api/finance/studio/24h/latest/getClsData"
-    response = requests_module.get(
+    response = call_with_proxy_policy(
+        requests_module.get,
         url,
         headers=_headers(source_id),
         timeout=request_timeout(
@@ -576,6 +601,7 @@ def _fetch_fenghuang_rows(
             default_seconds=request_timeout_seconds,
             source_id=source_id,
         ),
+        use_environment_proxy=use_environment_proxy,
     )
     response.raise_for_status()
     body = _json_from_maybe_javascript(response.text)
@@ -620,10 +646,12 @@ def _fetch_yuncaijing_rows(
     page_size: int,
     request_timeout_seconds: float,
     deadline: float | None,
+    use_environment_proxy: bool,
 ) -> dict[str, Any]:
     raise_if_deadline_exceeded(deadline, source_id=source_id)
     url = f"https://www.yuncaijing.com/insider/list_{crawl_date}.html"
-    response = requests_module.get(
+    response = call_with_proxy_policy(
+        requests_module.get,
         url,
         headers=_headers(source_id),
         timeout=request_timeout(
@@ -631,6 +659,7 @@ def _fetch_yuncaijing_rows(
             default_seconds=request_timeout_seconds,
             source_id=source_id,
         ),
+        use_environment_proxy=use_environment_proxy,
     )
     response.raise_for_status()
     if not response.encoding:

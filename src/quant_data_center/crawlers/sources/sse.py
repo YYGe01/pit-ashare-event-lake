@@ -9,6 +9,7 @@ from urllib.parse import urljoin
 
 from quant_data_center.crawlers.date_scan import exact_date_query_scan_fields
 from quant_data_center.crawlers.runtime import (
+    call_with_proxy_policy,
     make_deadline,
     raise_if_deadline_exceeded,
     request_timeout,
@@ -62,7 +63,8 @@ class SseAnnouncementCrawler:
                 page_num=page_num,
                 page_size=page_size,
             )
-            response = requests.get(
+            response = call_with_proxy_policy(
+                requests.get,
                 SSE_ANNOUNCEMENT_URL,
                 headers=_headers(),
                 params=params,
@@ -71,6 +73,7 @@ class SseAnnouncementCrawler:
                     default_seconds=request_timeout_seconds,
                     source_id=source_id,
                 ),
+                use_environment_proxy=self.settings.use_environment_proxy,
             )
             response.raise_for_status()
             body = response.json()
@@ -147,6 +150,7 @@ class SseAnnouncementCrawler:
             min_delay_seconds=min_delay_seconds,
             request_timeout_seconds=45.0,
             deadline=deadline,
+            use_environment_proxy=self.settings.use_environment_proxy,
         )
         document_bundle = self.objects.put_document_bundle(
             dataset="announcement",
@@ -308,6 +312,7 @@ def _attach_pdf_objects(
     min_delay_seconds: float,
     request_timeout_seconds: float,
     deadline: float | None,
+    use_environment_proxy: bool,
 ) -> dict[str, int]:
     stats = {"downloaded": 0, "failed": 0, "skipped": 0}
     attempted = 0
@@ -341,6 +346,7 @@ def _attach_pdf_objects(
             pdf_url=pdf_url,
             request_timeout_seconds=request_timeout_seconds,
             deadline=deadline,
+            use_environment_proxy=use_environment_proxy,
         )
         _apply_pdf_result(record, result)
         if result["pdf_download_status"] == "success":
@@ -360,10 +366,12 @@ def _download_pdf(
     pdf_url: str,
     request_timeout_seconds: float,
     deadline: float | None,
+    use_environment_proxy: bool,
 ) -> dict[str, Any]:
     try:
         raise_if_deadline_exceeded(deadline, source_id=source_id)
-        response = requests_module.get(
+        response = call_with_proxy_policy(
+            requests_module.get,
             pdf_url,
             headers={**_headers(), "Accept": "application/pdf,*/*"},
             timeout=request_timeout(
@@ -371,6 +379,7 @@ def _download_pdf(
                 default_seconds=request_timeout_seconds,
                 source_id=source_id,
             ),
+            use_environment_proxy=use_environment_proxy,
         )
         response.raise_for_status()
         content = bytes(response.content)

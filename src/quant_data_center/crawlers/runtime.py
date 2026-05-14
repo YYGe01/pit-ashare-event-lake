@@ -2,11 +2,61 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import os
+import threading
 import time
+from typing import Any, Callable
 
 
 class CrawlSourceTimeoutError(TimeoutError):
     """Raised when a crawler source exceeds its configured source deadline."""
+
+
+PROXY_ENV_VARS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+)
+_PROXY_ENV_LOCK = threading.RLock()
+
+
+@contextmanager
+def environment_proxy_scope(*, use_environment_proxy: bool):
+    """Temporarily disable requests-compatible environment proxies."""
+
+    if use_environment_proxy:
+        yield
+        return
+    with _PROXY_ENV_LOCK:
+        saved = {name: os.environ.get(name) for name in PROXY_ENV_VARS}
+        for name in PROXY_ENV_VARS:
+            os.environ.pop(name, None)
+        try:
+            yield
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+
+def call_with_proxy_policy(
+    function: Callable[..., Any],
+    *args: Any,
+    use_environment_proxy: bool,
+    **kwargs: Any,
+) -> Any:
+    """Call an HTTP/provider function under the configured proxy policy."""
+
+    with environment_proxy_scope(use_environment_proxy=use_environment_proxy):
+        return function(*args, **kwargs)
 
 
 def make_deadline(timeout_seconds: float | int | None) -> float | None:

@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 from quant_data_center.crawlers.runtime import (
+    call_with_proxy_policy,
     make_deadline,
     raise_if_deadline_exceeded,
     request_timeout,
@@ -66,6 +67,7 @@ class NbdCompanyNewsCrawler:
                     deadline=deadline,
                     request_timeout_seconds=request_timeout_seconds,
                     source_id=source_id,
+                    use_environment_proxy=self.settings.use_environment_proxy,
                 )
                 rows = [
                     row
@@ -212,6 +214,7 @@ def _get_nbd_page(
     deadline: float | None,
     request_timeout_seconds: float,
     source_id: str,
+    use_environment_proxy: bool,
     max_attempts: int = 3,
 ) -> Any:
     candidates = [url]
@@ -222,7 +225,8 @@ def _get_nbd_page(
         for candidate in candidates:
             try:
                 raise_if_deadline_exceeded(deadline, source_id=source_id)
-                response = requests_module.get(
+                response = call_with_proxy_policy(
+                    requests_module.get,
                     candidate,
                     headers=_headers(),
                     timeout=request_timeout(
@@ -230,6 +234,7 @@ def _get_nbd_page(
                         default_seconds=request_timeout_seconds,
                         source_id=source_id,
                     ),
+                    use_environment_proxy=use_environment_proxy,
                 )
                 response.raise_for_status()
                 return response

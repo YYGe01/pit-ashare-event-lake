@@ -83,6 +83,7 @@ class QdcSettings:
     logs_dir: Path
     database_backend: str
     file_format: str
+    use_environment_proxy: bool
     prefer_free_sources: bool
     paid_providers_enabled: bool
     raw_append_only: bool
@@ -136,6 +137,7 @@ class QdcSettings:
             logs_dir=_resolve_path(project_root, paths["logs_dir"]),
             database_backend=str(runtime.get("database_backend", "duckdb")),
             file_format=str(runtime.get("file_format", "parquet")),
+            use_environment_proxy=_optional_bool(runtime.get("use_environment_proxy")) or False,
             prefer_free_sources=bool(policy.get("prefer_free_sources", True)),
             paid_providers_enabled=bool(policy.get("paid_providers_enabled", False)),
             raw_append_only=bool(policy.get("raw_append_only", True)),
@@ -184,6 +186,7 @@ class QdcSettings:
             "logs_dir": str(self.logs_dir),
             "database_backend": self.database_backend,
             "file_format": self.file_format,
+            "use_environment_proxy": self.use_environment_proxy,
             "prefer_free_sources": self.prefer_free_sources,
             "paid_providers_enabled": self.paid_providers_enabled,
             "raw_append_only": self.raw_append_only,

@@ -6,8 +6,9 @@ import re
 from datetime import datetime
 from typing import Any
 
-from quant_data_center.crawlers.date_scan import RollingDateWindowScanner
+from quant_data_center.crawlers.date_scan import scan_rolling_date_window
 from quant_data_center.crawlers.runtime import (
+    call_with_proxy_policy,
     make_deadline,
     raise_if_deadline_exceeded,
     request_timeout,
@@ -48,16 +49,13 @@ class SinaFinanceNewsCrawler:
     ) -> dict[str, Any]:
         requests = __import__("requests")
         deadline = make_deadline(source_timeout_seconds)
-        pages = []
-        provider_rows: list[dict[str, Any]] = []
-        target_provider_rows: list[dict[str, Any]] = []
         observed_at = _timestamp()
-        scanner = RollingDateWindowScanner(target_date=crawl_date, max_pages=max_pages)
-        page_num = 1
-        while True:
+
+        def fetch_page(page_num: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             raise_if_deadline_exceeded(deadline, source_id=source_id)
             params = _query_params(page_num=page_num, page_size=page_size)
-            response = requests.get(
+            response = call_with_proxy_policy(
+                requests.get,
                 SINA_ROLL_NEWS_URL,
                 headers=_headers(),
                 params=params,
@@ -66,36 +64,34 @@ class SinaFinanceNewsCrawler:
                     default_seconds=request_timeout_seconds,
                     source_id=source_id,
                 ),
+                use_environment_proxy=self.settings.use_environment_proxy,
             )
             response.raise_for_status()
             body = response.json()
             rows = _extract_rows(body)
-            provider_rows.extend(rows)
-            scan_result = scanner.scan_page(
-                page_num=page_num,
-                rows=rows,
-                publish_time_getter=_publish_time,
+            return rows, {
+                "page_num": page_num,
+                "request": params,
+                "status_code": response.status_code,
+                "news_count": len(rows),
+            }
+
+        scan = scan_rolling_date_window(
+            target_date=crawl_date,
+            max_pages=max_pages,
+            fetch_page=fetch_page,
+            publish_time_getter=_publish_time,
+            before_fetch=lambda: sleep_with_deadline(
+                min_delay_seconds,
+                deadline=deadline,
+                source_id=source_id,
             )
-            target_provider_rows.extend(scan_result.target_rows)
-            pages.append(
-                {
-                    "page_num": page_num,
-                    "request": params,
-                    "status_code": response.status_code,
-                    "news_count": len(rows),
-                    **scan_result.metrics,
-                    "items": rows,
-                }
-            )
-            page_num += 1
-            if not scanner.should_continue(next_page_num=page_num):
-                break
-            if min_delay_seconds > 0:
-                sleep_with_deadline(
-                    min_delay_seconds,
-                    deadline=deadline,
-                    source_id=source_id,
-                )
+            if min_delay_seconds > 0
+            else None,
+        )
+        pages = scan.pages
+        provider_rows = scan.provider_rows
+        target_provider_rows = scan.target_rows
 
         raw_object_id = self.objects.put_json(
             dataset="news",
@@ -137,7 +133,7 @@ class SinaFinanceNewsCrawler:
             ),
             mapped_source_record_ids=(record.get("source_record_id") for record in records),
         )
-        scan_fields = scanner.manifest_fields()
+        scan_fields = scan.manifest_fields
         mapping_failure_reason = (
             "empty_instrument_dictionary"
             if not instrument_hints and source_metrics["parsed_unique_record_count"]

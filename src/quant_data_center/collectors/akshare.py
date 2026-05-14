@@ -9,6 +9,7 @@ from hashlib import sha256
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from quant_data_center.crawlers.runtime import call_with_proxy_policy
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage.objects import QdcObjectStore
 from quant_data_center.storage.silver import SilverStore
@@ -30,7 +31,10 @@ class AkshareSilverCollector:
 
     def collect_stock_basic(self, *, source_id: str) -> int:
         akshare = __import__("akshare")
-        df = akshare.stock_info_a_code_name()
+        df = call_with_proxy_policy(
+            akshare.stock_info_a_code_name,
+            use_environment_proxy=self.settings.use_environment_proxy,
+        )
         provider_records = _records(df)
         self._write_source_objects(
             dataset="stock_basic",
@@ -1075,6 +1079,7 @@ class SinaRealtimeSilverCollector(AkshareSilverCollector):
             response_text = _sina_quote_get(
                 requests_module=requests,
                 quote_symbols=quote_symbols,
+                use_environment_proxy=self.settings.use_environment_proxy,
             )
             chunk_records = _parse_sina_quote_response(response_text)
             records.extend(chunk_records)
@@ -1136,6 +1141,7 @@ def _sina_quote_get(
     *,
     requests_module: Any,
     quote_symbols: list[str],
+    use_environment_proxy: bool = False,
     timeout_seconds: float = 15.0,
     max_attempts: int = 4,
 ) -> str:
@@ -1149,7 +1155,13 @@ def _sina_quote_get(
     last_error: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-            response = requests_module.get(url, headers=headers, timeout=timeout_seconds)
+            response = call_with_proxy_policy(
+                requests_module.get,
+                url,
+                headers=headers,
+                timeout=timeout_seconds,
+                use_environment_proxy=use_environment_proxy,
+            )
             response.raise_for_status()
             response.encoding = response.encoding or "gb18030"
             return str(response.text or "")
