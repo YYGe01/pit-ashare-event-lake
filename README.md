@@ -21,7 +21,6 @@ quant_data_center
 ```text
 docs/迁移实施计划.md
 docs/每日自动采集实施计划.md
-docs/数据运维自动化方案.md
 docs/训练数据源完整性评估与改进事项.md
 docs/数据流阅读指南.md
 docs/控制台产品设计方案.md
@@ -54,7 +53,6 @@ qdc crawl-daily --date 2026-05-14 --source-id eastmoney_public_sentiment --symbo
 qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
 qdc sync-parquet --layer all
 qdc quality
-qdc quality-issue-report --start 2026-05-13 --end 2026-05-13 --output data/quant_data_center/logs/quality-issue-2026-05-13.md
 qdc console --host 127.0.0.1 --port 8765
 ```
 
@@ -277,20 +275,6 @@ qdc verify-qlib --provider-uri ~/.qlib/qlib_data/cn_data --start 2026-05-13 --en
 qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
 qdc sync-parquet --layer all
 qdc quality
-```
-
-质量失败后的数据运维工单报告：
-
-```powershell
-qdc quality-issue-report --start 2026-05-13 --end 2026-05-13 --output data/quant_data_center/logs/quality-issue-2026-05-13.md
-scripts/run_qdc_data_health.ps1 -TargetDate 2026-05-13
-```
-
-如需让脚本在质量失败时自动创建 GitHub Issue，先确保本机或云服务器已登录 `gh`，再显式启用：
-
-```powershell
-$env:QDC_CREATE_GITHUB_ISSUE = "1"
-scripts/run_qdc_data_health.ps1 -TargetDate 2026-05-13
 ```
 
 自动化环境未激活 shell 时：

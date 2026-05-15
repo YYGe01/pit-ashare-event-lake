@@ -34,7 +34,6 @@ from quant_data_center.crawlers.sources.vendor_news import (
     VENDOR_NEWS_SOURCE_IDS,
     VendorNewsCrawler,
 )
-from quant_data_center.data_ops import QualityIssueReporter
 from quant_data_center.exports.qlib import (
     QlibExporter,
     QlibProviderVerifier,
@@ -226,34 +225,6 @@ def cmd_quality(args: argparse.Namespace) -> int:
     )
     _print_json(result)
     return 0 if result["status"] == "ok" else 1
-
-
-def cmd_quality_issue_report(args: argparse.Namespace) -> int:
-    settings = load_settings(args.config)
-    database = QdcDatabase(settings)
-    database.init_schema()
-    reporter = QualityIssueReporter(settings)
-    if args.output:
-        report = reporter.write_report(
-            args.output,
-            dataset=args.dataset,
-            status=args.status,
-            start_date=args.start,
-            end_date=args.end,
-            limit=args.limit,
-        )
-        payload = {key: value for key, value in report.items() if key != "body"}
-    else:
-        report = reporter.build_report(
-            dataset=args.dataset,
-            status=args.status,
-            start_date=args.start,
-            end_date=args.end,
-            limit=args.limit,
-        )
-        payload = report
-    _print_json(payload)
-    return 0 if report["status"] == "ok" else 1
 
 
 def cmd_export_qlib(args: argparse.Namespace) -> int:
@@ -2278,27 +2249,6 @@ def build_parser() -> argparse.ArgumentParser:
     quality_parser.add_argument("--start", help="YYYY-MM-DD")
     quality_parser.add_argument("--end", help="YYYY-MM-DD")
     quality_parser.set_defaults(func=cmd_quality)
-
-    quality_issue_parser = subparsers.add_parser(
-        "quality-issue-report",
-        help="Render open qdc quality issues as a GitHub-ready Markdown report",
-    )
-    quality_issue_parser.add_argument("--dataset")
-    quality_issue_parser.add_argument(
-        "--status",
-        default="open",
-        help="Quality issue status filter; defaults to open",
-    )
-    quality_issue_parser.add_argument("--start", help="YYYY-MM-DD data date filter")
-    quality_issue_parser.add_argument("--end", help="YYYY-MM-DD data date filter")
-    quality_issue_parser.add_argument(
-        "--limit",
-        type=int,
-        default=50,
-        help="Maximum issue rows to include in the report",
-    )
-    quality_issue_parser.add_argument("--output", help="Markdown output path")
-    quality_issue_parser.set_defaults(func=cmd_quality_issue_report)
 
     export_parser = subparsers.add_parser(
         "export-qlib",
