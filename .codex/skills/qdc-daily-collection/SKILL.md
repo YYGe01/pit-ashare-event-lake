@@ -34,6 +34,23 @@ conda run -n ai-trader qdc quality --start <date> --end <date>
 conda run -n ai-trader qdc daily-health --date <date> --format markdown
 ```
 
+`qdc crawl-daily` 默认读取 `config/quant_data_center.yaml` 的 `crawl_daily` 段；不要把已经验证过的稳定参数重新写成长命令。当前默认配置已内置：
+
+```text
+crawl_daily.source_timeout_seconds=900
+crawl_daily.instrument_parallelism=8
+crawl_daily.instrument_limit=0
+crawl_daily.interaction_schedule=cold-weekly
+crawl_daily.source_overrides.sse_announcement.page_size=500
+crawl_daily.source_overrides.sse_announcement.request_timeout_seconds=120
+crawl_daily.source_overrides.sse_announcement.source_timeout_seconds=900
+crawl_daily.source_overrides.cninfo_investor_interaction.source_timeout_seconds=7200
+```
+
+`qdc daily-pipeline --crawl-documents` 保留为历史一键入口；它的文档采集参数默认继承 `crawl_daily`，只有 `daily_pipeline.crawl_*` 显式非空时才覆盖。当前主线每日采集仍优先使用上面的分步流程。
+
+如果配置文件改名或不在默认路径，必须显式传 `--config <path>` 或设置 `QDC_CONFIG`；默认只找 `config/quant_data_center.yaml`。
+
 如果由 Codex 代跑且用户要求看到过程，优先用 `--no-capture-output` 和 `--watch`，把输出写入 `data/qdc_run_logs/<date>/`，并每 30 秒汇报当前命令、进程状态、`crawl_task`、`source_object` 或 `daily-health` 摘要。
 
 滚动新闻源同日重跑时，优先确认 `qdc_meta.crawl_cursor` 是否已有 `source_id + dataset + cursor_scope(date=<date>)` 游标。已有完整游标时，采集应在遇到已见 `record_key` 后停止，避免重复翻页到历史位置；没有完整游标时才按滚动日期窗口扫描。遇到源站慢响应时，先评估单请求超时是否过短；不要默认增加自动重试次数，因为重试会真实增加接口请求量。
@@ -88,7 +105,7 @@ ok:
 
 - `source_not_run` / `crawl_task_unfinished`：先补跑或恢复任务，不改代码。
 - `crawl_task_failed`：看 `last_error`。网络、超时、源站 502 先重跑；稳定复现再改超时、重试或源策略。
-- 公告源 `cninfo_announcement` / `sse_announcement` 如果 `last_error=source timeout exceeded ...`，优先单源补跑并加大超时，例如 `qdc crawl-daily --date <date> --source-id cninfo_announcement --force --source-timeout-seconds 900`；确认仍复现再改代码。
+- 公告源 `cninfo_announcement` / `sse_announcement` 如果失败，先确认本轮使用的是当前默认配置。`sse_announcement` 已通过 source override 默认使用 `page_size=500`；`cninfo_announcement` 默认 source timeout 已是 900 秒。若仍稳定复现，优先判断是源站临时断开、请求参数需要调优，还是需要把新的成功参数写入 `crawl_daily.source_overrides`；不要只在一次命令里临时堆参数。
 - `sync_parquet has no job_run covering the target date`：先确认本轮是否实际运行过 `qdc sync-parquet --layer all`；若已运行但仍提示，检查 CLI 是否记录了 `job_type=sync_parquet` 的 job_run。
 - `empty_source_result` / `below_*_rows`：先确认是否周末、节假日、显式 `--max-pages`、显式 `--symbols` 或上游真实低量。
 - `date_scan_incomplete`：正式采集不要用 `--max-pages` 限制；重跑该源。
