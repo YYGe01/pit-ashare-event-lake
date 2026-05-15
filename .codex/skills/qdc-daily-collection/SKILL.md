@@ -16,6 +16,14 @@ git status --short
 conda run -n ai-trader qdc validate-config
 ```
 
+Windows/conda 输出 markdown 或中文内容时，如果遇到 GBK/UnicodeEncodeError，改用：
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+$env:PYTHONUTF8='1'
+conda run --no-capture-output -n ai-trader ...
+```
+
 运行每日链路：
 
 ```powershell
@@ -25,6 +33,8 @@ conda run -n ai-trader qdc sync-parquet --layer all
 conda run -n ai-trader qdc quality --start <date> --end <date>
 conda run -n ai-trader qdc daily-health --date <date> --format markdown
 ```
+
+如果由 Codex 代跑且用户要求看到过程，优先用 `--no-capture-output`，把输出写入 `data/qdc_run_logs/<date>/`，并每 30 秒汇报当前命令、进程状态、`crawl_task`、`source_object` 或 `daily-health` 摘要；不要使用不存在的 `--watch` 参数。
 
 如果用户只要求检查报告，不要重新采集；直接运行 `qdc daily-health --date <date>`，必要时再查控制表和 raw manifest。
 
@@ -74,9 +84,11 @@ ok:
 
 - `source_not_run` / `crawl_task_unfinished`：先补跑或恢复任务，不改代码。
 - `crawl_task_failed`：看 `last_error`。网络、超时、源站 502 先重跑；稳定复现再改超时、重试或源策略。
+- 公告源 `cninfo_announcement` / `sse_announcement` 如果 `last_error=source timeout exceeded ...`，优先单源补跑并加大超时，例如 `qdc crawl-daily --date <date> --source-id cninfo_announcement --force --source-timeout-seconds 900`；确认仍复现再改代码。
 - `empty_source_result` / `below_*_rows`：先确认是否周末、节假日、显式 `--max-pages`、显式 `--symbols` 或上游真实低量。
 - `date_scan_incomplete`：正式采集不要用 `--max-pages` 限制；重跑该源。
 - `provider_records_without_silver` / `high_parse_failed_rate`：优先查 collector normalization、字段变化、过滤条件、去重键；确认后做永久代码修复并补测试。
+- 如果 raw/bronze 样本和 manifest 显示源站返回的 `publish_date` / `trade_date` 全部晚于目标日，例如目标日 `<date>` 但记录全是后一交易日，判定为源站已滚动或 latest-only 数据不可补；不要把后一日数据写入目标日，也不要跨日期采集来掩盖目标日报告，只记录结论并建议把该源调度提前到目标日收盘后或次日早间源站刷新前。
 - `low_mapping_rate` / `elevated_mapping_failures`：查 `stock_basic`、简称歧义和 instrument 映射规则；不要把低置信新闻直接计入公司级因子。
 - `documents_without_factor_rows`：先重跑 `build-factors`；仍为空再修 factor builder。
 - `quality_issue:*`：读取 `observed_value`，判断是坏数据、解析 bug、因子 bug 还是环境问题。
