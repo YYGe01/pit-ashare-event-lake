@@ -583,6 +583,8 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
         parallelism=args.parallel_sources,
         request_timeout_seconds=args.request_timeout_seconds,
         source_timeout_seconds=args.source_timeout_seconds,
+        instrument_parallelism=args.instrument_parallelism,
+        instrument_limit=args.instrument_limit,
         watch=False,
     )
     run_id = database.record_crawl_run(
@@ -607,6 +609,8 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
             "instrument_filter_preview": (instrument_filter or [])[:10],
             "stock_basic_mapping": stock_basic_mapping,
             "parallel_sources": args.parallel_sources,
+            "instrument_parallelism": args.instrument_parallelism,
+            "instrument_limit": args.instrument_limit,
             "request_timeout_seconds": args.request_timeout_seconds,
             "source_timeout_seconds": args.source_timeout_seconds,
         },
@@ -680,6 +684,8 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         parallelism=args.parallel_sources,
         request_timeout_seconds=args.request_timeout_seconds,
         source_timeout_seconds=args.source_timeout_seconds,
+        instrument_parallelism=args.instrument_parallelism,
+        instrument_limit=args.instrument_limit,
         watch=False,
     )
     status = "partial" if has_failures or len(selected_tasks) < len(tasks) else "ok"
@@ -707,6 +713,8 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
             "instrument_filter_preview": (instrument_filter or [])[:10],
             "stock_basic_mapping": stock_basic_mapping,
             "parallel_sources": args.parallel_sources,
+            "instrument_parallelism": args.instrument_parallelism,
+            "instrument_limit": args.instrument_limit,
             "request_timeout_seconds": args.request_timeout_seconds,
             "source_timeout_seconds": args.source_timeout_seconds,
         },
@@ -787,6 +795,8 @@ def _run_crawl_tasks(
     parallelism: int = DEFAULT_CRAWL_SOURCE_PARALLELISM,
     request_timeout_seconds: float = DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
     source_timeout_seconds: float | None = DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
+    instrument_parallelism: int | None = None,
+    instrument_limit: int | None = None,
     watch: bool = False,
 ) -> tuple[list[dict[str, Any]], bool]:
     total_tasks = len(tasks)
@@ -810,6 +820,8 @@ def _run_crawl_tasks(
                 instrument_filter=instrument_filter,
                 request_timeout_seconds=request_timeout_seconds,
                 source_timeout_seconds=source_timeout_seconds,
+                instrument_parallelism=instrument_parallelism,
+                instrument_limit=instrument_limit,
                 watch=watch,
             )
             for index, task in task_items
@@ -837,6 +849,8 @@ def _run_crawl_tasks(
                     instrument_filter=instrument_filter,
                     request_timeout_seconds=request_timeout_seconds,
                     source_timeout_seconds=source_timeout_seconds,
+                    instrument_parallelism=instrument_parallelism,
+                    instrument_limit=instrument_limit,
                     watch=watch,
                 )
                 for index, task in task_items
@@ -863,6 +877,8 @@ def _run_one_crawl_task(
     instrument_filter: list[str] | None,
     request_timeout_seconds: float,
     source_timeout_seconds: float | None,
+    instrument_parallelism: int | None,
+    instrument_limit: int | None,
     watch: bool,
 ) -> tuple[int, dict[str, Any]]:
     task_id = str(task["task_id"])
@@ -888,6 +904,8 @@ def _run_one_crawl_task(
                 instrument_filter=instrument_filter,
                 request_timeout_seconds=request_timeout_seconds,
                 source_timeout_seconds=source_timeout_seconds,
+                instrument_parallelism=instrument_parallelism,
+                instrument_limit=instrument_limit,
             )
         database.finish_crawl_task(task_id=task_id, status="success")
         output = {
@@ -902,6 +920,18 @@ def _run_one_crawl_task(
             "pdf_failed_count": int(result.get("pdf_failed_count", 0)),
             "pdf_skipped_count": int(result.get("pdf_skipped_count", 0)),
         }
+        for optional_key in (
+            "instrument_count",
+            "instrument_parallelism",
+            "instrument_limit",
+            "request_count",
+            "org_cache_hit_count",
+            "org_cache_update_count",
+            "org_failure_count",
+            "question_failure_count",
+        ):
+            if optional_key in result:
+                output[optional_key] = result[optional_key]
         _watch_print(
             watch,
             f"{_watch_task_prefix(phase='CRAWL', index=index, total=total_tasks)} OK task_id={task_id} docs={int(result.get('document_count', 0))} raws={int(result.get('raw_object_count', 0))}",
@@ -939,6 +969,8 @@ def _run_real_crawl_task(
     instrument_filter: list[str] | None = None,
     request_timeout_seconds: float = DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
     source_timeout_seconds: float | None = DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
+    instrument_parallelism: int | None = None,
+    instrument_limit: int | None = None,
 ) -> dict[str, Any]:
     source_id = str(task["source_id"])
     if source_id == "cninfo_announcement":
@@ -1016,6 +1048,8 @@ def _run_real_crawl_task(
             instrument_filter=instrument_filter,
             request_timeout_seconds=request_timeout_seconds,
             source_timeout_seconds=source_timeout_seconds,
+            instrument_parallelism=instrument_parallelism,
+            instrument_limit=instrument_limit,
         )
     if source_id == "eastmoney_public_sentiment":
         spec = crawler_source_spec(source_id)
@@ -2215,6 +2249,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CRAWL_SOURCE_PARALLELISM,
     )
     crawl_run_parser.add_argument(
+        "--instrument-parallelism",
+        type=int,
+        help="Per-source instrument workers for symbol-loop crawlers such as cninfo_investor_interaction",
+    )
+    crawl_run_parser.add_argument(
+        "--instrument-limit",
+        type=int,
+        help="Limit implicit stock_basic instruments for symbol-loop crawlers; use 0 for all active instruments",
+    )
+    crawl_run_parser.add_argument(
         "--request-timeout-seconds",
         type=float,
         default=DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
@@ -2266,6 +2310,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--parallel-sources",
         type=int,
         default=DEFAULT_CRAWL_SOURCE_PARALLELISM,
+    )
+    crawl_daily_parser.add_argument(
+        "--instrument-parallelism",
+        type=int,
+        help="Per-source instrument workers for symbol-loop crawlers such as cninfo_investor_interaction",
+    )
+    crawl_daily_parser.add_argument(
+        "--instrument-limit",
+        type=int,
+        help="Limit implicit stock_basic instruments for symbol-loop crawlers; use 0 for all active instruments",
     )
     crawl_daily_parser.add_argument(
         "--request-timeout-seconds",

@@ -3299,6 +3299,7 @@ def test_qdc_crawl_daily_collects_cninfo_investor_interactions(
     import requests
 
     monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setenv("QDC_INVESTOR_INTERACTION_REQUEST_INTERVAL_SECONDS", "0")
 
     assert (
         main(
@@ -3346,6 +3347,231 @@ def test_qdc_crawl_daily_collects_cninfo_investor_interactions(
     )
     assert row[5] == 1.5
     assert "new_business" in row[6]
+
+
+def test_qdc_crawl_daily_investor_interaction_tolerates_one_question_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    database.init_schema()
+
+    answer_time = int(
+        pd.Timestamp("2026-05-14 11:00:00", tz="Asia/Shanghai").timestamp() * 1000
+    )
+
+    class InvestorInteractionResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return self.payload
+
+    def fake_post(url, **kwargs):
+        params = kwargs.get("params") or {}
+        if url.endswith("/queryKeyboardInfo"):
+            data = kwargs.get("data") or {}
+            stock_code = str(data.get("keyWord") or "")
+            return InvestorInteractionResponse(
+                {
+                    "statusCode": 200,
+                    "message": "success",
+                    "data": [
+                        {
+                            "stockCode": stock_code,
+                            "shortName": "单元公司",
+                            "secid": f"org-{stock_code}",
+                        }
+                    ],
+                }
+            )
+        stock_code = str(params.get("stockcode") or "")
+        if stock_code == "600000":
+            import requests
+
+            raise requests.exceptions.Timeout("unit timeout")
+        return InvestorInteractionResponse(
+            {
+                "pageNo": 1,
+                "pageSize": 10,
+                "total": 1,
+                "totalPage": 1,
+                "rows": [
+                    {
+                        "indexId": "2267000000000000002",
+                        "mainContent": "请问公司经营情况如何？",
+                        "pubDate": answer_time,
+                        "stockCode": stock_code,
+                        "companyShortName": "单元公司",
+                        "attachedContent": "公司经营正常。",
+                        "attachedPubDate": answer_time,
+                        "updateDate": answer_time,
+                    }
+                ],
+            }
+        )
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setenv("QDC_INVESTOR_INTERACTION_REQUEST_INTERVAL_SECONDS", "0")
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-daily",
+                "--date",
+                "2026-05-14",
+                "--source-id",
+                "cninfo_investor_interaction",
+                "--symbols",
+                "SH600000,SZ000001",
+                "--page-size",
+                "10",
+            ]
+        )
+        == 0
+    )
+
+    assert database.silver_table_counts()["investor_interaction"] == 1
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            select instrument, title
+            from qdc_silver.investor_interaction
+            """
+        ).fetchone()
+        manifest = conn.execute(
+            """
+            select uri
+            from qdc_meta.source_object
+            where dataset = 'investor_interaction'
+              and layer = 'raw_manifest'
+            order by created_at desc
+            limit 1
+            """
+        ).fetchone()
+    assert row == ("SZ000001", "请问公司经营情况如何？")
+    assert manifest is not None
+    assert "manifest.json" in manifest[0]
+
+
+def test_qdc_crawl_daily_investor_interaction_uses_org_cache_and_stops_on_old_rows(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+
+    cache_path = settings.data_root / "cache" / "cninfo_investor_interaction_orgs.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "items": {
+                    "002594": {
+                        "symbol": "002594",
+                        "instrument": "SZ002594",
+                        "org_id": "gshk0001211",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    target_time = int(
+        pd.Timestamp("2026-05-14 11:00:00", tz="Asia/Shanghai").timestamp() * 1000
+    )
+    older_time = int(
+        pd.Timestamp("2026-05-13 11:00:00", tz="Asia/Shanghai").timestamp() * 1000
+    )
+
+    class InvestorInteractionResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return self.payload
+
+    requested_pages = []
+
+    def fake_post(url, **kwargs):
+        assert not url.endswith("/queryKeyboardInfo")
+        params = kwargs.get("params") or {}
+        page_num = int(params["pageNum"])
+        requested_pages.append(page_num)
+        if page_num == 1:
+            row_time = target_time
+            index_id = "target-row"
+        elif page_num == 2:
+            row_time = older_time
+            index_id = "older-row"
+        else:
+            raise AssertionError("crawler should stop after seeing rows older than target date")
+        return InvestorInteractionResponse(
+            {
+                "pageNo": page_num,
+                "pageSize": 1,
+                "total": 3,
+                "totalPage": 3,
+                "rows": [
+                    {
+                        "indexId": index_id,
+                        "mainContent": f"第 {page_num} 页问题",
+                        "pubDate": row_time,
+                        "stockCode": "002594",
+                        "companyShortName": "比亚迪",
+                        "attachedContent": "公司回复。",
+                        "attachedPubDate": row_time,
+                        "updateDate": row_time,
+                    }
+                ],
+            }
+        )
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setenv("QDC_INVESTOR_INTERACTION_REQUEST_INTERVAL_SECONDS", "0")
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-daily",
+                "--date",
+                "2026-05-14",
+                "--source-id",
+                "cninfo_investor_interaction",
+                "--symbols",
+                "SZ002594",
+                "--page-size",
+                "1",
+                "--instrument-parallelism",
+                "2",
+            ]
+        )
+        == 0
+    )
+
+    assert requested_pages == [1, 2]
+    assert database.silver_table_counts()["investor_interaction"] == 1
 
 
 def test_qdc_crawl_exhausted_dataset_tolerates_one_failed_source() -> None:
