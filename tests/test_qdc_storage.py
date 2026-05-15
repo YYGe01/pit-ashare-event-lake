@@ -3584,6 +3584,183 @@ def test_qdc_crawl_daily_investor_interaction_uses_org_cache_and_stops_on_old_ro
     assert cache_item["page_count"] == "2"
 
 
+def test_qdc_crawl_daily_investor_interaction_cold_weekly_collects_due_window(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    SilverStore(settings).upsert_stock_basic(
+        [
+            {
+                "instrument": "SZ000001",
+                "symbol": "000001",
+                "exchange": "SZ",
+                "name": "平安银行",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+            {
+                "instrument": "SZ002594",
+                "symbol": "002594",
+                "exchange": "SZ",
+                "name": "比亚迪",
+                "is_active": True,
+                "source_id": "unit_test",
+            },
+        ]
+    )
+
+    cache_path = settings.data_root / "cache" / "cninfo_investor_interaction_orgs.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "items": {
+                    "000001": {
+                        "symbol": "000001",
+                        "instrument": "SZ000001",
+                        "org_id": "org-000001",
+                        "org_status": "ok",
+                        "question_status": "no_rows",
+                        "last_checked_date": "2026-05-13",
+                        "consecutive_no_data_days": "14",
+                    },
+                    "002594": {
+                        "symbol": "002594",
+                        "instrument": "SZ002594",
+                        "org_id": "org-002594",
+                        "org_status": "ok",
+                        "question_status": "no_rows",
+                        "last_checked_date": "2026-05-07",
+                        "consecutive_no_data_days": "14",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    answer_time = int(
+        pd.Timestamp("2026-05-10 11:00:00", tz="Asia/Shanghai").timestamp() * 1000
+    )
+
+    class InvestorInteractionResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return self.payload
+
+    requested_question_symbols = []
+
+    def fake_post(url, **kwargs):
+        assert not url.endswith("/queryKeyboardInfo")
+        params = kwargs.get("params") or {}
+        stock_code = str(params.get("stockcode") or "")
+        requested_question_symbols.append(stock_code)
+        assert stock_code == "002594"
+        assert params["startDay"] == "2026-05-05"
+        assert params["endDay"] == "2026-05-14"
+        return InvestorInteractionResponse(
+            {
+                "pageNo": 1,
+                "pageSize": 10,
+                "total": 1,
+                "totalPage": 1,
+                "rows": [
+                    {
+                        "indexId": "cold-window-row",
+                        "mainContent": "请问公司近期订单情况？",
+                        "pubDate": answer_time,
+                        "stockCode": "002594",
+                        "companyShortName": "比亚迪",
+                        "attachedContent": "公司经营情况请关注公告。",
+                        "attachedPubDate": answer_time,
+                        "updateDate": answer_time,
+                    }
+                ],
+            }
+        )
+
+    import requests
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setenv("QDC_INVESTOR_INTERACTION_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("QDC_INVESTOR_INTERACTION_DISABLE_SESSION", "1")
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "crawl-daily",
+                "--date",
+                "2026-05-14",
+                "--source-id",
+                "cninfo_investor_interaction",
+                "--page-size",
+                "10",
+                "--instrument-limit",
+                "0",
+                "--interaction-schedule",
+                "cold-weekly",
+                "--interaction-cold-no-data-days",
+                "14",
+                "--interaction-cold-check-interval-days",
+                "7",
+                "--interaction-cold-lookback-days",
+                "10",
+                "--force",
+            ]
+        )
+        == 0
+    )
+
+    assert requested_question_symbols == ["002594"]
+    assert database.silver_table_counts()["investor_interaction"] == 1
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            select publish_date, instrument, source_record_id, observed_at
+            from qdc_silver.investor_interaction
+            """
+        ).fetchone()
+    assert (str(row[0]), row[1], row[2]) == ("2026-05-10", "SZ002594", "cold-window-row")
+    assert str(row[3])[:10] >= "2026-05-14"
+
+    cache_payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    due_item = cache_payload["items"]["002594"]
+    skipped_item = cache_payload["items"]["000001"]
+    assert due_item["question_status"] == "has_window_data"
+    assert due_item["accepted_window_row_count"] == "1"
+    assert due_item["last_window_match_date"] == "2026-05-10"
+    assert due_item["consecutive_no_data_days"] == "0"
+    assert skipped_item["last_checked_date"] == "2026-05-13"
+
+
+def test_qdc_crawl_affected_start_date_uses_oldest_crawler_publish_date() -> None:
+    assert (
+        cli_module._crawl_affected_start_date(
+            {
+                "results": [
+                    {"affected_publish_dates": ["2026-05-12", "2026-05-14"]},
+                    {"affected_publish_dates": []},
+                ]
+            },
+            default="2026-05-14",
+        )
+        == "2026-05-12"
+    )
+
+
 def test_qdc_crawl_exhausted_dataset_tolerates_one_failed_source() -> None:
     assert (
         _crawl_exhausted_datasets(

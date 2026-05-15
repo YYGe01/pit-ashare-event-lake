@@ -585,6 +585,13 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
         source_timeout_seconds=args.source_timeout_seconds,
         instrument_parallelism=args.instrument_parallelism,
         instrument_limit=args.instrument_limit,
+        interaction_schedule=args.interaction_schedule,
+        interaction_cold_no_data_days=args.interaction_cold_no_data_days,
+        interaction_cold_check_interval_days=args.interaction_cold_check_interval_days,
+        interaction_cold_lookback_days=args.interaction_cold_lookback_days,
+        interaction_unsupported_check_interval_days=(
+            args.interaction_unsupported_check_interval_days
+        ),
         watch=False,
     )
     run_id = database.record_crawl_run(
@@ -611,6 +618,13 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
             "parallel_sources": args.parallel_sources,
             "instrument_parallelism": args.instrument_parallelism,
             "instrument_limit": args.instrument_limit,
+            "interaction_schedule": args.interaction_schedule,
+            "interaction_cold_no_data_days": args.interaction_cold_no_data_days,
+            "interaction_cold_check_interval_days": args.interaction_cold_check_interval_days,
+            "interaction_cold_lookback_days": args.interaction_cold_lookback_days,
+            "interaction_unsupported_check_interval_days": (
+                args.interaction_unsupported_check_interval_days
+            ),
             "request_timeout_seconds": args.request_timeout_seconds,
             "source_timeout_seconds": args.source_timeout_seconds,
         },
@@ -686,6 +700,13 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         source_timeout_seconds=args.source_timeout_seconds,
         instrument_parallelism=args.instrument_parallelism,
         instrument_limit=args.instrument_limit,
+        interaction_schedule=args.interaction_schedule,
+        interaction_cold_no_data_days=args.interaction_cold_no_data_days,
+        interaction_cold_check_interval_days=args.interaction_cold_check_interval_days,
+        interaction_cold_lookback_days=args.interaction_cold_lookback_days,
+        interaction_unsupported_check_interval_days=(
+            args.interaction_unsupported_check_interval_days
+        ),
         watch=False,
     )
     status = "partial" if has_failures or len(selected_tasks) < len(tasks) else "ok"
@@ -715,6 +736,13 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
             "parallel_sources": args.parallel_sources,
             "instrument_parallelism": args.instrument_parallelism,
             "instrument_limit": args.instrument_limit,
+            "interaction_schedule": args.interaction_schedule,
+            "interaction_cold_no_data_days": args.interaction_cold_no_data_days,
+            "interaction_cold_check_interval_days": args.interaction_cold_check_interval_days,
+            "interaction_cold_lookback_days": args.interaction_cold_lookback_days,
+            "interaction_unsupported_check_interval_days": (
+                args.interaction_unsupported_check_interval_days
+            ),
             "request_timeout_seconds": args.request_timeout_seconds,
             "source_timeout_seconds": args.source_timeout_seconds,
         },
@@ -797,6 +825,11 @@ def _run_crawl_tasks(
     source_timeout_seconds: float | None = DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
     instrument_parallelism: int | None = None,
     instrument_limit: int | None = None,
+    interaction_schedule: str | None = None,
+    interaction_cold_no_data_days: int | None = None,
+    interaction_cold_check_interval_days: int | None = None,
+    interaction_cold_lookback_days: int | None = None,
+    interaction_unsupported_check_interval_days: int | None = None,
     watch: bool = False,
 ) -> tuple[list[dict[str, Any]], bool]:
     total_tasks = len(tasks)
@@ -822,6 +855,13 @@ def _run_crawl_tasks(
                 source_timeout_seconds=source_timeout_seconds,
                 instrument_parallelism=instrument_parallelism,
                 instrument_limit=instrument_limit,
+                interaction_schedule=interaction_schedule,
+                interaction_cold_no_data_days=interaction_cold_no_data_days,
+                interaction_cold_check_interval_days=interaction_cold_check_interval_days,
+                interaction_cold_lookback_days=interaction_cold_lookback_days,
+                interaction_unsupported_check_interval_days=(
+                    interaction_unsupported_check_interval_days
+                ),
                 watch=watch,
             )
             for index, task in task_items
@@ -851,6 +891,13 @@ def _run_crawl_tasks(
                     source_timeout_seconds=source_timeout_seconds,
                     instrument_parallelism=instrument_parallelism,
                     instrument_limit=instrument_limit,
+                    interaction_schedule=interaction_schedule,
+                    interaction_cold_no_data_days=interaction_cold_no_data_days,
+                    interaction_cold_check_interval_days=interaction_cold_check_interval_days,
+                    interaction_cold_lookback_days=interaction_cold_lookback_days,
+                    interaction_unsupported_check_interval_days=(
+                        interaction_unsupported_check_interval_days
+                    ),
                     watch=watch,
                 )
                 for index, task in task_items
@@ -879,6 +926,11 @@ def _run_one_crawl_task(
     source_timeout_seconds: float | None,
     instrument_parallelism: int | None,
     instrument_limit: int | None,
+    interaction_schedule: str | None,
+    interaction_cold_no_data_days: int | None,
+    interaction_cold_check_interval_days: int | None,
+    interaction_cold_lookback_days: int | None,
+    interaction_unsupported_check_interval_days: int | None,
     watch: bool,
 ) -> tuple[int, dict[str, Any]]:
     task_id = str(task["task_id"])
@@ -906,6 +958,13 @@ def _run_one_crawl_task(
                 source_timeout_seconds=source_timeout_seconds,
                 instrument_parallelism=instrument_parallelism,
                 instrument_limit=instrument_limit,
+                interaction_schedule=interaction_schedule,
+                interaction_cold_no_data_days=interaction_cold_no_data_days,
+                interaction_cold_check_interval_days=interaction_cold_check_interval_days,
+                interaction_cold_lookback_days=interaction_cold_lookback_days,
+                interaction_unsupported_check_interval_days=(
+                    interaction_unsupported_check_interval_days
+                ),
             )
         database.finish_crawl_task(task_id=task_id, status="success")
         output = {
@@ -922,14 +981,22 @@ def _run_one_crawl_task(
         }
         for optional_key in (
             "instrument_count",
+            "selected_instrument_count",
+            "skipped_instrument_count",
             "instrument_parallelism",
             "instrument_limit",
+            "interaction_schedule",
+            "schedule_decision_counts",
+            "accepted_start_date",
+            "accepted_end_date",
+            "affected_publish_dates",
             "requested_max_pages",
             "effective_max_pages",
             "request_count",
             "org_cache_hit_count",
             "org_cache_update_count",
             "target_date_instrument_count",
+            "accepted_window_instrument_count",
             "instrument_status_counts",
             "org_failure_count",
             "question_failure_count",
@@ -975,6 +1042,11 @@ def _run_real_crawl_task(
     source_timeout_seconds: float | None = DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
     instrument_parallelism: int | None = None,
     instrument_limit: int | None = None,
+    interaction_schedule: str | None = None,
+    interaction_cold_no_data_days: int | None = None,
+    interaction_cold_check_interval_days: int | None = None,
+    interaction_cold_lookback_days: int | None = None,
+    interaction_unsupported_check_interval_days: int | None = None,
 ) -> dict[str, Any]:
     source_id = str(task["source_id"])
     if source_id == "cninfo_announcement":
@@ -1054,6 +1126,11 @@ def _run_real_crawl_task(
             source_timeout_seconds=source_timeout_seconds,
             instrument_parallelism=instrument_parallelism,
             instrument_limit=instrument_limit,
+            interaction_schedule=interaction_schedule,
+            cold_no_data_days=interaction_cold_no_data_days,
+            cold_check_interval_days=interaction_cold_check_interval_days,
+            cold_lookback_days=interaction_cold_lookback_days,
+            unsupported_check_interval_days=interaction_unsupported_check_interval_days,
         )
     if source_id == "eastmoney_public_sentiment":
         spec = crawler_source_spec(source_id)
@@ -1298,6 +1375,37 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             DEFAULT_CRAWL_SOURCE_PARALLELISM,
         )
     )
+    crawl_instrument_parallelism = _daily_pipeline_option(
+        args,
+        settings,
+        "crawl_instrument_parallelism",
+    )
+    crawl_instrument_limit = _daily_pipeline_option(args, settings, "crawl_instrument_limit")
+    crawl_interaction_schedule = _daily_pipeline_option(
+        args,
+        settings,
+        "crawl_interaction_schedule",
+    )
+    crawl_interaction_cold_no_data_days = _daily_pipeline_option(
+        args,
+        settings,
+        "crawl_interaction_cold_no_data_days",
+    )
+    crawl_interaction_cold_check_interval_days = _daily_pipeline_option(
+        args,
+        settings,
+        "crawl_interaction_cold_check_interval_days",
+    )
+    crawl_interaction_cold_lookback_days = _daily_pipeline_option(
+        args,
+        settings,
+        "crawl_interaction_cold_lookback_days",
+    )
+    crawl_interaction_unsupported_check_interval_days = _daily_pipeline_option(
+        args,
+        settings,
+        "crawl_interaction_unsupported_check_interval_days",
+    )
     crawl_request_timeout_seconds = float(
         _daily_pipeline_option(
             args,
@@ -1438,6 +1546,15 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             parallelism=crawl_parallelism,
             request_timeout_seconds=crawl_request_timeout_seconds,
             source_timeout_seconds=crawl_source_timeout_seconds,
+            instrument_parallelism=crawl_instrument_parallelism,
+            instrument_limit=crawl_instrument_limit,
+            interaction_schedule=crawl_interaction_schedule,
+            interaction_cold_no_data_days=crawl_interaction_cold_no_data_days,
+            interaction_cold_check_interval_days=crawl_interaction_cold_check_interval_days,
+            interaction_cold_lookback_days=crawl_interaction_cold_lookback_days,
+            interaction_unsupported_check_interval_days=(
+                crawl_interaction_unsupported_check_interval_days
+            ),
             watch=bool(args.watch),
         )
         steps.append({"step": "crawl_documents", **crawl_result})
@@ -1450,18 +1567,19 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             status = "partial"
             should_continue = continue_on_failure
 
+    factor_start = _crawl_affected_start_date(crawl_result, default=run_date)
     if should_continue and not args.control_only and not skip_factors:
         if args.watch:
             _watch_print(
                 True,
-                f"{_watch_task_prefix(phase='pipeline', index=3, total=2)} START step=build_factors",
+                f"{_watch_task_prefix(phase='pipeline', index=3, total=2)} START step=build_factors start={factor_start} end={run_date}",
             )
         factor_result = FactorBuilder(settings).build(
             factor_set="all",
-            start_date=run_date,
+            start_date=factor_start,
             end_date=run_date,
         )
-        steps.append({"step": "build_factors", **factor_result})
+        steps.append({"step": "build_factors", "start_date": factor_start, **factor_result})
         if args.watch:
             _watch_print(
                 True,
@@ -1544,6 +1662,18 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             "crawl_parallel_sources": crawl_parallelism,
             "crawl_request_timeout_seconds": crawl_request_timeout_seconds,
             "crawl_source_timeout_seconds": crawl_source_timeout_seconds,
+            "crawl_instrument_parallelism": crawl_instrument_parallelism,
+            "crawl_instrument_limit": crawl_instrument_limit,
+            "crawl_interaction_schedule": crawl_interaction_schedule,
+            "crawl_interaction_cold_no_data_days": crawl_interaction_cold_no_data_days,
+            "crawl_interaction_cold_check_interval_days": (
+                crawl_interaction_cold_check_interval_days
+            ),
+            "crawl_interaction_cold_lookback_days": crawl_interaction_cold_lookback_days,
+            "crawl_interaction_unsupported_check_interval_days": (
+                crawl_interaction_unsupported_check_interval_days
+            ),
+            "factor_start_date": factor_start,
             "quality_status": quality_result["status"] if quality_result else None,
         },
     )
@@ -1579,6 +1709,13 @@ def _run_daily_pipeline_crawl_documents(
     parallelism: int,
     request_timeout_seconds: float,
     source_timeout_seconds: float | None,
+    instrument_parallelism: int | None,
+    instrument_limit: int | None,
+    interaction_schedule: str | None,
+    interaction_cold_no_data_days: int | None,
+    interaction_cold_check_interval_days: int | None,
+    interaction_cold_lookback_days: int | None,
+    interaction_unsupported_check_interval_days: int | None,
     watch: bool,
 ) -> dict[str, Any]:
     _watch_print(
@@ -1613,6 +1750,15 @@ def _run_daily_pipeline_crawl_documents(
         parallelism=parallelism,
         request_timeout_seconds=request_timeout_seconds,
         source_timeout_seconds=source_timeout_seconds,
+        instrument_parallelism=instrument_parallelism,
+        instrument_limit=instrument_limit,
+        interaction_schedule=interaction_schedule,
+        interaction_cold_no_data_days=interaction_cold_no_data_days,
+        interaction_cold_check_interval_days=interaction_cold_check_interval_days,
+        interaction_cold_lookback_days=interaction_cold_lookback_days,
+        interaction_unsupported_check_interval_days=(
+            interaction_unsupported_check_interval_days
+        ),
         watch=watch,
     )
     remaining_task_count = len(tasks) - len(selected_tasks)
@@ -1647,6 +1793,15 @@ def _run_daily_pipeline_crawl_documents(
             "parallel_sources": parallelism,
             "request_timeout_seconds": request_timeout_seconds,
             "source_timeout_seconds": source_timeout_seconds,
+            "instrument_parallelism": instrument_parallelism,
+            "instrument_limit": instrument_limit,
+            "interaction_schedule": interaction_schedule,
+            "interaction_cold_no_data_days": interaction_cold_no_data_days,
+            "interaction_cold_check_interval_days": interaction_cold_check_interval_days,
+            "interaction_cold_lookback_days": interaction_cold_lookback_days,
+            "interaction_unsupported_check_interval_days": (
+                interaction_unsupported_check_interval_days
+            ),
         },
     )
     return {
@@ -1660,6 +1815,20 @@ def _run_daily_pipeline_crawl_documents(
         "exhausted_datasets": exhausted_datasets,
         "results": results,
     }
+
+
+def _crawl_affected_start_date(crawl_result: dict[str, Any] | None, *, default: str) -> str:
+    if not crawl_result:
+        return default
+    affected_dates = [
+        str(item)
+        for result in crawl_result.get("results", [])
+        for item in (result.get("affected_publish_dates") or [])
+        if item
+    ]
+    if not affected_dates:
+        return default
+    return min([default, *affected_dates])
 
 
 def _daily_pipeline_document_instrument_filter(
@@ -1988,6 +2157,43 @@ def _run_real_backfill_task(*, settings: QdcSettings, task: dict[str, object]) -
     raise ValueError(f"unsupported qdc dataset for real backfill: {dataset}")
 
 
+def _add_interaction_schedule_args(
+    parser: argparse.ArgumentParser,
+    *,
+    option_prefix: str = "",
+) -> None:
+    flag_prefix = f"--{option_prefix}-interaction" if option_prefix else "--interaction"
+    help_prefix = "Crawler document investor-interaction" if option_prefix else "Investor-interaction"
+    parser.add_argument(
+        f"{flag_prefix}-schedule",
+        choices=["strict", "cold-weekly", "adaptive"],
+        help=(
+            f"{help_prefix} schedule; strict scans every selected instrument, "
+            "cold-weekly/adaptive skips cold instruments until their recheck interval"
+        ),
+    )
+    parser.add_argument(
+        f"{flag_prefix}-cold-no-data-days",
+        type=int,
+        help=f"{help_prefix} cold threshold in consecutive no-data checks",
+    )
+    parser.add_argument(
+        f"{flag_prefix}-cold-check-interval-days",
+        type=int,
+        help=f"{help_prefix} cold instrument recheck interval in calendar days",
+    )
+    parser.add_argument(
+        f"{flag_prefix}-cold-lookback-days",
+        type=int,
+        help=f"{help_prefix} accepted rolling window when a cold instrument is rechecked",
+    )
+    parser.add_argument(
+        f"{flag_prefix}-unsupported-check-interval-days",
+        type=int,
+        help=f"{help_prefix} recheck interval for missing-org or unsupported instruments",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="qdc", allow_abbrev=False)
     parser.add_argument(
@@ -2196,6 +2402,9 @@ def build_parser() -> argparse.ArgumentParser:
     daily_pipeline_parser.add_argument("--crawl-parallelism", type=int)
     daily_pipeline_parser.add_argument("--crawl-request-timeout-seconds", type=float)
     daily_pipeline_parser.add_argument("--crawl-source-timeout-seconds", type=float)
+    daily_pipeline_parser.add_argument("--crawl-instrument-parallelism", type=int)
+    daily_pipeline_parser.add_argument("--crawl-instrument-limit", type=int)
+    _add_interaction_schedule_args(daily_pipeline_parser, option_prefix="crawl")
     daily_pipeline_parser.add_argument(
         "--skip-crawl-pdf-download",
         action=argparse.BooleanOptionalAction,
@@ -2262,6 +2471,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Limit implicit stock_basic instruments for symbol-loop crawlers; use 0 for all active instruments",
     )
+    _add_interaction_schedule_args(crawl_run_parser)
     crawl_run_parser.add_argument(
         "--request-timeout-seconds",
         type=float,
@@ -2325,6 +2535,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Limit implicit stock_basic instruments for symbol-loop crawlers; use 0 for all active instruments",
     )
+    _add_interaction_schedule_args(crawl_daily_parser)
     crawl_daily_parser.add_argument(
         "--request-timeout-seconds",
         type=float,

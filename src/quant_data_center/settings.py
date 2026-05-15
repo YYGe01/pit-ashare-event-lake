@@ -51,6 +51,13 @@ class DailyPipelineSettings:
     crawl_parallelism: int | None
     crawl_request_timeout_seconds: float | None
     crawl_source_timeout_seconds: float | None
+    crawl_instrument_parallelism: int | None
+    crawl_instrument_limit: int | None
+    crawl_interaction_schedule: str | None
+    crawl_interaction_cold_no_data_days: int | None
+    crawl_interaction_cold_check_interval_days: int | None
+    crawl_interaction_cold_lookback_days: int | None
+    crawl_interaction_unsupported_check_interval_days: int | None
     skip_crawl_pdf_download: bool | None
     skip_factors: bool | None
     skip_sync: bool | None
@@ -227,6 +234,21 @@ class QdcSettings:
                     self.daily_pipeline.crawl_request_timeout_seconds
                 ),
                 "crawl_source_timeout_seconds": self.daily_pipeline.crawl_source_timeout_seconds,
+                "crawl_instrument_parallelism": self.daily_pipeline.crawl_instrument_parallelism,
+                "crawl_instrument_limit": self.daily_pipeline.crawl_instrument_limit,
+                "crawl_interaction_schedule": self.daily_pipeline.crawl_interaction_schedule,
+                "crawl_interaction_cold_no_data_days": (
+                    self.daily_pipeline.crawl_interaction_cold_no_data_days
+                ),
+                "crawl_interaction_cold_check_interval_days": (
+                    self.daily_pipeline.crawl_interaction_cold_check_interval_days
+                ),
+                "crawl_interaction_cold_lookback_days": (
+                    self.daily_pipeline.crawl_interaction_cold_lookback_days
+                ),
+                "crawl_interaction_unsupported_check_interval_days": (
+                    self.daily_pipeline.crawl_interaction_unsupported_check_interval_days
+                ),
                 "skip_crawl_pdf_download": self.daily_pipeline.skip_crawl_pdf_download,
                 "skip_factors": self.daily_pipeline.skip_factors,
                 "skip_sync": self.daily_pipeline.skip_sync,
@@ -295,6 +317,21 @@ def _parse_daily_pipeline_settings(payload: Any) -> DailyPipelineSettings:
             spec.get("crawl_request_timeout_seconds")
         ),
         crawl_source_timeout_seconds=_optional_float(spec.get("crawl_source_timeout_seconds")),
+        crawl_instrument_parallelism=_optional_int(spec.get("crawl_instrument_parallelism")),
+        crawl_instrument_limit=_optional_int(spec.get("crawl_instrument_limit")),
+        crawl_interaction_schedule=_optional_str(spec.get("crawl_interaction_schedule")),
+        crawl_interaction_cold_no_data_days=_optional_int(
+            spec.get("crawl_interaction_cold_no_data_days")
+        ),
+        crawl_interaction_cold_check_interval_days=_optional_int(
+            spec.get("crawl_interaction_cold_check_interval_days")
+        ),
+        crawl_interaction_cold_lookback_days=_optional_int(
+            spec.get("crawl_interaction_cold_lookback_days")
+        ),
+        crawl_interaction_unsupported_check_interval_days=_optional_int(
+            spec.get("crawl_interaction_unsupported_check_interval_days")
+        ),
         skip_crawl_pdf_download=_optional_bool(spec.get("skip_crawl_pdf_download")),
         skip_factors=_optional_bool(spec.get("skip_factors")),
         skip_sync=_optional_bool(spec.get("skip_sync")),

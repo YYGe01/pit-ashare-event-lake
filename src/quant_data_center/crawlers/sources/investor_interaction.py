@@ -10,7 +10,8 @@ import threading
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -42,6 +43,20 @@ CNINFO_IR_REFERER = "https://irm.cninfo.com.cn/"
 PARSER_VERSION = "cninfo_investor_interaction_v1"
 DEFAULT_UNFILTERED_INSTRUMENT_LIMIT = 50
 DEFAULT_INSTRUMENT_MAX_PAGES = 2
+DEFAULT_INTERACTION_SCHEDULE = "strict"
+DEFAULT_COLD_NO_DATA_DAYS = 14
+DEFAULT_COLD_CHECK_INTERVAL_DAYS = 7
+DEFAULT_COLD_LOOKBACK_DAYS = 14
+DEFAULT_UNSUPPORTED_CHECK_INTERVAL_DAYS = 30
+
+
+@dataclass(frozen=True)
+class _InteractionScheduleOptions:
+    mode: str
+    cold_no_data_days: int
+    cold_check_interval_days: int
+    cold_lookback_days: int
+    unsupported_check_interval_days: int
 
 
 class CninfoInvestorInteractionCrawler:
@@ -66,6 +81,11 @@ class CninfoInvestorInteractionCrawler:
         instrument_filter: list[str] | None = None,
         instrument_parallelism: int | None = None,
         instrument_limit: int | None = None,
+        interaction_schedule: str | None = None,
+        cold_no_data_days: int | None = None,
+        cold_check_interval_days: int | None = None,
+        cold_lookback_days: int | None = None,
+        unsupported_check_interval_days: int | None = None,
     ) -> dict[str, Any]:
         requests = __import__("requests")
         deadline = make_deadline(source_timeout_seconds)
@@ -74,9 +94,29 @@ class CninfoInvestorInteractionCrawler:
             instrument_filter,
             instrument_limit=instrument_limit,
         )
-        worker_count = min(_instrument_parallelism(instrument_parallelism), max(1, len(instruments)))
         effective_max_pages = _effective_max_pages(max_pages)
         org_cache = _load_org_cache(self.settings)
+        schedule_options = _schedule_options(
+            interaction_schedule=interaction_schedule,
+            cold_no_data_days=cold_no_data_days,
+            cold_check_interval_days=cold_check_interval_days,
+            cold_lookback_days=cold_lookback_days,
+            unsupported_check_interval_days=unsupported_check_interval_days,
+        )
+        schedule_plan = _schedule_instruments(
+            instruments=instruments,
+            org_cache=org_cache,
+            crawl_date=crawl_date,
+            options=schedule_options,
+            force_all=bool(instrument_filter),
+        )
+        selected_instruments = schedule_plan["selected_instruments"]
+        worker_count = min(
+            _instrument_parallelism(instrument_parallelism),
+            max(1, len(selected_instruments)),
+        )
+        accepted_start_date = str(schedule_plan["accepted_start_date"])
+        accepted_end_date = str(schedule_plan["accepted_end_date"])
         rate_limiter = _RequestRateLimiter(
             _request_interval_seconds(
                 min_delay_seconds=min_delay_seconds,
@@ -92,12 +132,14 @@ class CninfoInvestorInteractionCrawler:
         org_cache_hit_count = 0
         request_count = 0
         target_date_instrument_count = 0
+        accepted_window_instrument_count = 0
         instrument_status_counts: Counter[str] = Counter()
         instrument_results = _crawl_instruments(
             requests=requests,
             settings=self.settings,
-            instruments=instruments,
+            instruments=selected_instruments,
             org_cache=org_cache,
+            instrument_windows=schedule_plan["instrument_windows"],
             rate_limiter=rate_limiter,
             deadline=deadline,
             source_id=source_id,
@@ -119,6 +161,8 @@ class CninfoInvestorInteractionCrawler:
             instrument_status_counts[status] += 1
             if status == "has_target_date":
                 target_date_instrument_count += 1
+            if status in {"has_target_date", "has_window_data"}:
+                accepted_window_instrument_count += 1
         if org_cache_updates:
             org_cache.update(org_cache_updates)
             _write_org_cache(self.settings, org_cache)
@@ -139,17 +183,35 @@ class CninfoInvestorInteractionCrawler:
                     "instrument_filter": instrument_filter or [],
                     "instrument_mode": instrument_mode,
                     "instrument_count": len(instruments),
+                    "selected_instrument_count": len(selected_instruments),
+                    "skipped_instrument_count": len(schedule_plan["skipped_instruments"]),
                     "instrument_parallelism": worker_count,
                     "instrument_limit": instrument_limit,
+                    "interaction_schedule": schedule_options.mode,
+                    "cold_no_data_days": schedule_options.cold_no_data_days,
+                    "cold_check_interval_days": schedule_options.cold_check_interval_days,
+                    "cold_lookback_days": schedule_options.cold_lookback_days,
+                    "unsupported_check_interval_days": (
+                        schedule_options.unsupported_check_interval_days
+                    ),
+                    "accepted_start_date": accepted_start_date,
+                    "accepted_end_date": accepted_end_date,
                 },
                 "org_cache": {
                     "path": str(_org_cache_path(self.settings)),
                     "hit_count": org_cache_hit_count,
                     "update_count": len(org_cache_updates),
                 },
+                "schedule": {
+                    "mode": schedule_options.mode,
+                    "decision_counts": dict(sorted(schedule_plan["decision_counts"].items())),
+                    "skipped_instrument_count": len(schedule_plan["skipped_instruments"]),
+                    "skipped_instrument_preview": schedule_plan["skipped_instruments"][:50],
+                },
                 "request_count": request_count,
                 "instrument_status_counts": dict(sorted(instrument_status_counts.items())),
                 "target_date_instrument_count": target_date_instrument_count,
+                "accepted_window_instrument_count": accepted_window_instrument_count,
                 "org_failures": org_failures,
                 "question_failures": question_failures,
                 "pages": pages,
@@ -166,8 +228,13 @@ class CninfoInvestorInteractionCrawler:
             source_id=source_id,
             rows=provider_rows,
             crawl_date=crawl_date,
+            accepted_start_date=accepted_start_date,
+            accepted_end_date=accepted_end_date,
             observed_at=observed_at,
             raw_object_id=raw_object_id,
+        )
+        affected_publish_dates = sorted(
+            {str(record["publish_date"]) for record in records if record.get("publish_date")}
         )
         source_metrics = build_document_source_metrics(
             provider_record_count=len(provider_rows),
@@ -183,15 +250,22 @@ class CninfoInvestorInteractionCrawler:
             manifest={
                 "function": "cninfo_investor_interaction",
                 "url": CNINFO_IR_QUESTION_URL,
-                "accepted_date_rule": "answer/update time is converted to Asia/Shanghai and must equal crawl_date; unanswered rows fall back to question time",
+                "accepted_date_rule": _accepted_date_rule(schedule_options.mode),
                 "copyright_policy": "metadata_and_inline_preview; public question/reply text is retained for factor explainability",
                 "raw_object_id": raw_object_id,
                 "provider_record_count": len(provider_rows),
                 "instrument_filter": instrument_filter or [],
                 "instrument_mode": instrument_mode,
                 "instrument_count": len(instruments),
+                "selected_instrument_count": len(selected_instruments),
+                "skipped_instrument_count": len(schedule_plan["skipped_instruments"]),
                 "instrument_parallelism": worker_count,
                 "instrument_limit": instrument_limit,
+                "interaction_schedule": schedule_options.mode,
+                "schedule_decision_counts": dict(sorted(schedule_plan["decision_counts"].items())),
+                "accepted_start_date": accepted_start_date,
+                "accepted_end_date": accepted_end_date,
+                "affected_publish_dates": affected_publish_dates,
                 "requested_max_pages": max_pages,
                 "effective_max_pages": effective_max_pages,
                 "org_cache_hit_count": org_cache_hit_count,
@@ -199,6 +273,7 @@ class CninfoInvestorInteractionCrawler:
                 "request_count": request_count,
                 "instrument_status_counts": dict(sorted(instrument_status_counts.items())),
                 "target_date_instrument_count": target_date_instrument_count,
+                "accepted_window_instrument_count": accepted_window_instrument_count,
                 "org_failure_count": len(org_failures),
                 "question_failure_count": len(question_failures),
                 **source_metrics,
@@ -219,8 +294,15 @@ class CninfoInvestorInteractionCrawler:
             "provider_record_count": len(provider_rows),
             "mapped_record_count": row_count,
             "instrument_count": len(instruments),
+            "selected_instrument_count": len(selected_instruments),
+            "skipped_instrument_count": len(schedule_plan["skipped_instruments"]),
             "instrument_parallelism": worker_count,
             "instrument_limit": instrument_limit,
+            "interaction_schedule": schedule_options.mode,
+            "schedule_decision_counts": dict(sorted(schedule_plan["decision_counts"].items())),
+            "accepted_start_date": accepted_start_date,
+            "accepted_end_date": accepted_end_date,
+            "affected_publish_dates": affected_publish_dates,
             "requested_max_pages": max_pages,
             "effective_max_pages": effective_max_pages,
             "org_cache_hit_count": org_cache_hit_count,
@@ -228,6 +310,7 @@ class CninfoInvestorInteractionCrawler:
             "request_count": request_count,
             "instrument_status_counts": dict(sorted(instrument_status_counts.items())),
             "target_date_instrument_count": target_date_instrument_count,
+            "accepted_window_instrument_count": accepted_window_instrument_count,
             "org_failure_count": len(org_failures),
             "question_failure_count": len(question_failures),
             **source_metrics,
@@ -249,12 +332,212 @@ class CninfoInvestorInteractionCrawler:
         return instruments[:max_instruments], f"stock_basic_active_first_{max_instruments}"
 
 
+def _schedule_options(
+    *,
+    interaction_schedule: str | None,
+    cold_no_data_days: int | None,
+    cold_check_interval_days: int | None,
+    cold_lookback_days: int | None,
+    unsupported_check_interval_days: int | None,
+) -> _InteractionScheduleOptions:
+    return _InteractionScheduleOptions(
+        mode=_normalize_schedule_mode(
+            interaction_schedule
+            or os.environ.get("QDC_INVESTOR_INTERACTION_SCHEDULE")
+            or DEFAULT_INTERACTION_SCHEDULE
+        ),
+        cold_no_data_days=_positive_int_option(
+            cold_no_data_days,
+            "QDC_INVESTOR_INTERACTION_COLD_NO_DATA_DAYS",
+            DEFAULT_COLD_NO_DATA_DAYS,
+        ),
+        cold_check_interval_days=_positive_int_option(
+            cold_check_interval_days,
+            "QDC_INVESTOR_INTERACTION_COLD_CHECK_INTERVAL_DAYS",
+            DEFAULT_COLD_CHECK_INTERVAL_DAYS,
+        ),
+        cold_lookback_days=_positive_int_option(
+            cold_lookback_days,
+            "QDC_INVESTOR_INTERACTION_COLD_LOOKBACK_DAYS",
+            DEFAULT_COLD_LOOKBACK_DAYS,
+        ),
+        unsupported_check_interval_days=_positive_int_option(
+            unsupported_check_interval_days,
+            "QDC_INVESTOR_INTERACTION_UNSUPPORTED_CHECK_INTERVAL_DAYS",
+            DEFAULT_UNSUPPORTED_CHECK_INTERVAL_DAYS,
+        ),
+    )
+
+
+def _normalize_schedule_mode(value: str) -> str:
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    if normalized in {"", "strict"}:
+        return "strict"
+    if normalized in {"cold-weekly", "adaptive"}:
+        return "cold-weekly"
+    raise ValueError(
+        "unsupported interaction schedule; expected one of: strict, cold-weekly, adaptive"
+    )
+
+
+def _positive_int_option(value: int | None, env_key: str, default: int) -> int:
+    raw: Any = value
+    if raw is None:
+        raw = os.environ.get(env_key)
+    if raw in (None, ""):
+        return max(1, int(default))
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return max(1, int(default))
+
+
+def _schedule_instruments(
+    *,
+    instruments: list[str],
+    org_cache: dict[str, dict[str, str]],
+    crawl_date: str,
+    options: _InteractionScheduleOptions,
+    force_all: bool,
+) -> dict[str, Any]:
+    crawl_day = _parse_date(crawl_date)
+    if crawl_day is None:
+        raise ValueError(f"invalid crawl_date for investor interaction schedule: {crawl_date}")
+    decision_counts: Counter[str] = Counter()
+    selected: list[str] = []
+    skipped: list[str] = []
+    windows: dict[str, dict[str, str]] = {}
+    accepted_start = crawl_day
+    accepted_end = crawl_day
+    for instrument in instruments:
+        symbol = instrument_to_symbol(instrument)
+        cached_item = org_cache.get(symbol) or {}
+        decision = _schedule_decision(
+            cached_item=cached_item,
+            crawl_day=crawl_day,
+            options=options,
+            force_all=force_all,
+        )
+        bucket = decision["bucket"]
+        decision_counts[bucket] += 1
+        if decision["selected"]:
+            selected.append(instrument)
+            start_day = decision["start_date"]
+            end_day = decision["end_date"]
+            accepted_start = min(accepted_start, start_day)
+            accepted_end = max(accepted_end, end_day)
+            windows[instrument] = {
+                "accepted_start_date": start_day.isoformat(),
+                "accepted_end_date": end_day.isoformat(),
+                "schedule_bucket": bucket,
+            }
+        else:
+            skipped.append(instrument)
+    return {
+        "selected_instruments": selected,
+        "skipped_instruments": skipped,
+        "instrument_windows": windows,
+        "decision_counts": decision_counts,
+        "accepted_start_date": accepted_start.isoformat(),
+        "accepted_end_date": accepted_end.isoformat(),
+    }
+
+
+def _schedule_decision(
+    *,
+    cached_item: dict[str, str],
+    crawl_day: date,
+    options: _InteractionScheduleOptions,
+    force_all: bool,
+) -> dict[str, Any]:
+    target_window = {
+        "selected": True,
+        "start_date": crawl_day,
+        "end_date": crawl_day,
+        "bucket": "strict" if options.mode == "strict" else "daily_probe",
+    }
+    if options.mode == "strict":
+        return target_window
+    if force_all:
+        return {**target_window, "bucket": "explicit"}
+    if not cached_item:
+        return {**target_window, "bucket": "new"}
+    if str(cached_item.get("org_status") or "") != "ok":
+        if _days_since(cached_item.get("last_checked_date"), crawl_day) >= (
+            options.unsupported_check_interval_days
+        ):
+            return {**target_window, "bucket": "unsupported_due"}
+        return {
+            "selected": False,
+            "start_date": crawl_day,
+            "end_date": crawl_day,
+            "bucket": "unsupported_not_due",
+        }
+    question_status = str(cached_item.get("question_status") or "")
+    if question_status == "question_failed":
+        return {**target_window, "bucket": "retry_failed"}
+    if _cache_int(cached_item, "consecutive_no_data_days") < options.cold_no_data_days:
+        return target_window
+    if _days_since(cached_item.get("last_checked_date"), crawl_day) >= (
+        options.cold_check_interval_days
+    ):
+        return {
+            "selected": True,
+            "start_date": crawl_day - timedelta(days=options.cold_lookback_days - 1),
+            "end_date": crawl_day,
+            "bucket": "cold_due",
+        }
+    return {
+        "selected": False,
+        "start_date": crawl_day,
+        "end_date": crawl_day,
+        "bucket": "cold_not_due",
+    }
+
+
+def _cache_int(cached_item: dict[str, str], key: str) -> int:
+    try:
+        return max(0, int(cached_item.get(key) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _days_since(value: str | None, crawl_day: date) -> int:
+    parsed = _parse_date(value)
+    if parsed is None:
+        return 10**9
+    return max(0, (crawl_day - parsed).days)
+
+
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _accepted_date_rule(schedule_mode: str) -> str:
+    if schedule_mode == "strict":
+        return (
+            "answer/update time is converted to Asia/Shanghai and must equal crawl_date; "
+            "unanswered rows fall back to question time"
+        )
+    return (
+        "answer/update time is converted to Asia/Shanghai and must fall inside the "
+        "instrument accepted date window; cold instruments may be observed later and "
+        "must be filtered by observed_at for strict PIT research"
+    )
+
+
 def _crawl_instruments(
     *,
     requests: Any,
     settings: QdcSettings,
     instruments: list[str],
     org_cache: dict[str, dict[str, str]],
+    instrument_windows: dict[str, dict[str, str]],
     rate_limiter: "_RequestRateLimiter",
     deadline: float | None,
     source_id: str,
@@ -273,6 +556,7 @@ def _crawl_instruments(
                     settings=settings,
                     instrument=instrument,
                     org_cache=org_cache,
+                    schedule_window=instrument_windows[instrument],
                     rate_limiter=rate_limiter,
                     deadline=deadline,
                     source_id=source_id,
@@ -292,6 +576,7 @@ def _crawl_instruments(
                     settings=settings,
                     instrument=instrument,
                     org_cache=org_cache,
+                    schedule_window=instrument_windows[instrument],
                     rate_limiter=rate_limiter,
                     deadline=deadline,
                     source_id=source_id,
@@ -316,6 +601,7 @@ def _crawl_one_instrument(
     settings: QdcSettings,
     instrument: str,
     org_cache: dict[str, dict[str, str]],
+    schedule_window: dict[str, str],
     rate_limiter: "_RequestRateLimiter",
     deadline: float | None,
     source_id: str,
@@ -334,8 +620,13 @@ def _crawl_one_instrument(
     provider_date_counts: Counter[str] = Counter()
     latest_provider_publish_date: str | None = None
     oldest_provider_publish_date: str | None = None
+    latest_accepted_publish_date: str | None = None
     target_row_count = 0
+    accepted_window_row_count = 0
     question_elapsed_ms: float | None = None
+    accepted_start_date = schedule_window["accepted_start_date"]
+    accepted_end_date = schedule_window["accepted_end_date"]
+    schedule_bucket = schedule_window["schedule_bucket"]
     symbol = instrument_to_symbol(instrument)
     cached_item = org_cache.get(symbol) or {}
     try:
@@ -383,7 +674,8 @@ def _crawl_one_instrument(
         params = _query_params(
             symbol=symbol,
             org_id=org_id,
-            crawl_date=crawl_date,
+            start_date=accepted_start_date,
+            end_date=accepted_end_date,
             page_size=page_size,
             page_num=page_num,
         )
@@ -416,9 +708,16 @@ def _crawl_one_instrument(
             )
             break
         rows = _extract_rows(body)
-        scan = _date_scan_summary(rows=rows, crawl_date=crawl_date, page_size=page_size)
+        scan = _date_scan_summary(
+            rows=rows,
+            crawl_date=crawl_date,
+            accepted_start_date=accepted_start_date,
+            accepted_end_date=accepted_end_date,
+            page_size=page_size,
+        )
         provider_date_counts.update(scan["date_counts"])
         target_row_count += int(scan["target_row_count"])
+        accepted_window_row_count += int(scan["accepted_window_row_count"])
         latest_provider_publish_date = _max_date(
             latest_provider_publish_date,
             scan["latest_provider_publish_date"],
@@ -426,6 +725,10 @@ def _crawl_one_instrument(
         oldest_provider_publish_date = _min_date(
             oldest_provider_publish_date,
             scan["oldest_provider_publish_date"],
+        )
+        latest_accepted_publish_date = _max_date(
+            latest_accepted_publish_date,
+            scan["latest_accepted_publish_date"],
         )
         for row in rows:
             row["__instrument"] = instrument
@@ -440,14 +743,19 @@ def _crawl_one_instrument(
                 "stock_code": symbol,
                 "org_id": org_id,
                 "page_num": page_num,
+                "schedule_bucket": schedule_bucket,
+                "accepted_start_date": accepted_start_date,
+                "accepted_end_date": accepted_end_date,
                 "request": params,
                 "status_code": response.status_code,
                 "provider_record_count": len(rows),
                 "total_pages": total_pages,
                 "hits": body.get("total"),
                 "target_row_count": scan["target_row_count"],
+                "accepted_window_row_count": scan["accepted_window_row_count"],
                 "latest_provider_publish_date": scan["latest_provider_publish_date"],
                 "oldest_provider_publish_date": scan["oldest_provider_publish_date"],
+                "latest_accepted_publish_date": scan["latest_accepted_publish_date"],
                 "date_stop_reason": scan["stop_reason"],
             }
         )
@@ -458,6 +766,7 @@ def _crawl_one_instrument(
     instrument_status = _instrument_status(
         provider_rows=provider_rows,
         target_row_count=target_row_count,
+        accepted_window_row_count=accepted_window_row_count,
         question_failures=question_failures,
     )
     org_cache_updates[symbol] = _cache_entry(
@@ -469,10 +778,12 @@ def _crawl_one_instrument(
         question_status=instrument_status,
         crawl_date=crawl_date,
         target_row_count=target_row_count,
+        accepted_window_row_count=accepted_window_row_count,
         provider_record_count=len(provider_rows),
         page_count=len(pages),
         latest_provider_publish_date=latest_provider_publish_date,
         oldest_provider_publish_date=oldest_provider_publish_date,
+        latest_accepted_publish_date=latest_accepted_publish_date,
         provider_date_counts=dict(sorted(provider_date_counts.items())),
         latency_ms=question_elapsed_ms,
         error=question_failures[-1]["error"] if question_failures else None,
@@ -668,10 +979,12 @@ def _cache_entry(
     crawl_date: str,
     org_id: str | None = None,
     target_row_count: int = 0,
+    accepted_window_row_count: int = 0,
     provider_record_count: int = 0,
     page_count: int = 0,
     latest_provider_publish_date: str | None = None,
     oldest_provider_publish_date: str | None = None,
+    latest_accepted_publish_date: str | None = None,
     provider_date_counts: dict[str, int] | None = None,
     latency_ms: float | None = None,
     error: str | None = None,
@@ -686,6 +999,7 @@ def _cache_entry(
             "last_checked_date": crawl_date,
             "updated_at": _timestamp(),
             "target_row_count": str(target_row_count),
+            "accepted_window_row_count": str(accepted_window_row_count),
             "provider_record_count": str(provider_record_count),
             "page_count": str(page_count),
         }
@@ -697,8 +1011,12 @@ def _cache_entry(
         entry["last_question_seen_date"] = latest_provider_publish_date
     if oldest_provider_publish_date:
         entry["oldest_provider_publish_date"] = oldest_provider_publish_date
+    if latest_accepted_publish_date:
+        entry["last_window_match_date"] = latest_accepted_publish_date
     if target_row_count > 0:
         entry["last_target_date"] = crawl_date
+        entry["consecutive_no_data_days"] = "0"
+    elif accepted_window_row_count > 0:
         entry["consecutive_no_data_days"] = "0"
     elif question_status in {"no_target_date", "no_rows"}:
         entry["consecutive_no_data_days"] = str(_next_no_data_days(previous))
@@ -728,7 +1046,8 @@ def _query_params(
     *,
     symbol: str,
     org_id: str,
-    crawl_date: str,
+    start_date: str,
+    end_date: str,
     page_size: int,
     page_num: int,
 ) -> dict[str, str]:
@@ -739,8 +1058,8 @@ def _query_params(
         "pageSize": str(max(1, int(page_size))),
         "pageNum": str(page_num),
         "keyWord": "",
-        "startDay": crawl_date,
-        "endDay": crawl_date,
+        "startDay": start_date,
+        "endDay": end_date,
     }
 
 
@@ -773,32 +1092,50 @@ def _date_scan_summary(
     *,
     rows: list[dict[str, Any]],
     crawl_date: str,
+    accepted_start_date: str,
+    accepted_end_date: str,
     page_size: int,
 ) -> dict[str, Any]:
     row_dates = [_row_publish_date(row) for row in rows]
     dated = [value for value in row_dates if value]
     date_counts = Counter(dated)
     target_row_count = date_counts.get(crawl_date, 0)
-    older_row_count = sum(count for value, count in date_counts.items() if value < crawl_date)
-    newer_row_count = sum(count for value, count in date_counts.items() if value > crawl_date)
+    accepted_window_row_count = sum(
+        count
+        for value, count in date_counts.items()
+        if accepted_start_date <= value <= accepted_end_date
+    )
+    older_row_count = sum(
+        count for value, count in date_counts.items() if value < accepted_start_date
+    )
+    newer_row_count = sum(count for value, count in date_counts.items() if value > accepted_end_date)
     latest_date = max(dated) if dated else None
     oldest_date = min(dated) if dated else None
+    accepted_dates = [
+        value for value in dated if accepted_start_date <= value <= accepted_end_date
+    ]
+    latest_accepted_date = max(accepted_dates) if accepted_dates else None
+    strict_target_window = accepted_start_date == crawl_date and accepted_end_date == crawl_date
+    older_reason = "older_than_target_date" if strict_target_window else "older_than_window_start"
+    exhausted_reason = "target_date_exhausted" if strict_target_window else "window_exhausted"
     stop_reason: str | None = None
     if not rows:
         stop_reason = "empty_page"
     elif older_row_count > 0:
-        stop_reason = "older_than_target_date"
-    elif target_row_count > 0 and len(rows) < max(1, int(page_size)):
-        stop_reason = "target_date_exhausted"
-    elif target_row_count > 0 and oldest_date and oldest_date > crawl_date:
-        stop_reason = "target_date_exhausted"
+        stop_reason = older_reason
+    elif accepted_window_row_count > 0 and len(rows) < max(1, int(page_size)):
+        stop_reason = exhausted_reason
+    elif accepted_window_row_count > 0 and oldest_date and oldest_date > accepted_end_date:
+        stop_reason = exhausted_reason
     return {
         "date_counts": date_counts,
         "target_row_count": target_row_count,
+        "accepted_window_row_count": accepted_window_row_count,
         "older_row_count": older_row_count,
         "newer_row_count": newer_row_count,
         "latest_provider_publish_date": latest_date,
         "oldest_provider_publish_date": oldest_date,
+        "latest_accepted_publish_date": latest_accepted_date,
         "stop_reason": stop_reason,
     }
 
@@ -807,12 +1144,15 @@ def _instrument_status(
     *,
     provider_rows: list[dict[str, Any]],
     target_row_count: int,
+    accepted_window_row_count: int,
     question_failures: list[dict[str, str | int]],
 ) -> str:
     if question_failures:
         return "question_failed"
     if target_row_count > 0:
         return "has_target_date"
+    if accepted_window_row_count > 0:
+        return "has_window_data"
     if provider_rows:
         return "no_target_date"
     return "no_rows"
@@ -860,6 +1200,8 @@ def _normalize_investor_interactions(
     source_id: str,
     rows: list[dict[str, Any]],
     crawl_date: str,
+    accepted_start_date: str,
+    accepted_end_date: str,
     observed_at: str,
     raw_object_id: str,
 ) -> list[dict[str, Any]]:
@@ -875,7 +1217,12 @@ def _normalize_investor_interactions(
         )
         publish_time = answer_time or _millis_time(row.get("updateDate")) or question_time
         publish_date = publish_time[:10] if publish_time else None
-        if not question_text or publish_date != crawl_date or not stock_code:
+        if (
+            not question_text
+            or not publish_date
+            or not (accepted_start_date <= publish_date <= accepted_end_date)
+            or not stock_code
+        ):
             continue
         try:
             instrument = normalize_instrument(stock_code)
