@@ -42,12 +42,13 @@ qdc verify-qlib --provider-uri ~/.qlib/qlib_data/cn_data --start 2026-05-13 --en
 当前默认工作流是非结构化采集和外部因子加工：
 
 ```powershell
+qdc daily-pipeline
 qdc crawl-daily --date 2026-05-13 --source-id cninfo_announcement --page-size 100 --skip-pdf-download
 qdc crawl-daily --date 2026-05-13 --source-id sse_announcement --page-size 100 --skip-pdf-download
 qdc crawl-daily --date 2026-05-13 --source-id eastmoney_roll_news --page-size 100
 qdc crawl-daily --date 2026-05-13 --source-id eastmoney_research_report --page-size 100
 qdc crawl-daily --date 2026-05-14 --source-id cninfo_investor_interaction --symbols SZ002594 --page-size 20 --max-pages 1
-qdc crawl-daily --date 2026-05-14 --source-id cninfo_investor_interaction --page-size 50 --instrument-parallelism 8 --instrument-limit 0 --interaction-schedule cold-weekly --source-timeout-seconds 7200
+qdc crawl-daily --date 2026-05-14 --source-id cninfo_investor_interaction --page-size 50 --instrument-parallelism 8 --instrument-limit 0 --source-timeout-seconds 7200
 qdc crawl-daily --date 2026-05-14 --source-id eastmoney_public_sentiment --symbols "SH600000,SZ000001" --page-size 5 --max-pages 1
 qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
 qdc sync-parquet --layer all
@@ -55,9 +56,17 @@ qdc quality
 qdc console --host 127.0.0.1 --port 8765
 ```
 
+`daily-pipeline` 的常用固定参数已经集中在 [config/quant_data_center.yaml](config/quant_data_center.yaml)；字段说明见 [config/README.md](config/README.md)。当前 `daily_pipeline.date_offset_days: -1`，正常跑昨日完整采集不需要再传日期：
+
+```powershell
+conda run -n ai-trader qdc daily-pipeline
+```
+
+临时补跑固定日期时再显式传 `--date YYYY-MM-DD`。
+
 `crawl-run` / `crawl-daily` 默认只采公告 metadata，不下载 PDF；需要留存公开 PDF 时显式加 `--download-pdfs`，可再配合 `--pdf-limit` 控制 smoke 下载量。
 滚动新闻源会按目标日期窗口向后翻页，跳过目标日之后的新闻，直到完整覆盖目标日；完整采集不建议传 `--max-pages`，只做接口 smoke 时再用它限制页数。
-互动问答源 `cninfo_investor_interaction` 按标的访问互动易公开问答接口；建议日常 smoke 先传 `--symbols`，未传标的时会从 `stock_basic` 活跃标的中取前 50 个作为保护性默认值。全市场日更要显式传 `--instrument-limit 0`。`--interaction-schedule cold-weekly` / `adaptive` 会把连续无互动的冷标的降频复查，并在复查时拉最近滚动窗口；这是前向延迟覆盖策略，不是半年后仍能补历史的回采能力。2026-05-15 实测当前免费入口不能可靠按 2024 / 2023 等旧日期窗口回采，训练 baseline 默认不要依赖互动问答。
+互动问答源 `cninfo_investor_interaction` 按标的访问互动易公开问答接口；建议日常 smoke 先传 `--symbols`，未传标的时会从 `stock_basic` 活跃标的中取前 50 个作为保护性默认值。默认调度为 `cold-weekly` 冷标策略；全市场日更要显式传 `--instrument-limit 0`，或在 `config/quant_data_center.yaml` 的 `daily_pipeline.crawl_instrument_limit` 配置为 `0`。冷标策略会把连续无互动的标的降频复查，并在复查时拉最近滚动窗口；这是前向延迟覆盖策略，不是半年后仍能补历史的回采能力。2026-05-15 实测当前免费入口不能可靠按 2024 / 2023 等旧日期窗口回采，训练 baseline 默认不要依赖互动问答。若要恢复严格每日全扫，显式传 `--interaction-schedule strict`。
 新闻采集依赖 `qdc_silver.stock_basic` 做标题到 instrument 的映射；当本地 `stock_basic` 为空时，`crawl-run` / `crawl-daily` 会先用 AkShare 初始化映射基准。`crawl-daily` 会自动重跑同日 failed 任务；若修复映射或解析逻辑后需要重跑已 success 的同日任务，显式加 `--force`。
 
 ```powershell

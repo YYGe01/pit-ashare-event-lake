@@ -8,7 +8,7 @@ import math
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -1335,13 +1335,17 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     database = QdcDatabase(settings)
     database.init_schema()
-    run_date = parse_date(args.date).isoformat() if args.date else _today(settings)
+    run_date = _daily_pipeline_run_date(args=args, settings=settings)
     pipeline_universe = _daily_pipeline_option(args, settings, "universe", "all_a")
     source_id = _daily_pipeline_option(args, settings, "source_id", "akshare")
     source_ids = _daily_pipeline_source_ids(args=args, settings=settings, fallback=source_id)
+    symbols_arg = _daily_pipeline_option(args, settings, "symbols")
     all_market = bool(
         _daily_pipeline_option(args, settings, "all_market", False)
     ) or _is_full_market_universe(pipeline_universe)
+    plan_only = bool(_daily_pipeline_option(args, settings, "plan_only", False))
+    control_only = bool(_daily_pipeline_option(args, settings, "control_only", False))
+    watch = bool(_daily_pipeline_option(args, settings, "watch", False))
     skip_stock_basic_refresh = bool(
         _daily_pipeline_option(args, settings, "skip_stock_basic_refresh", False)
     )
@@ -1435,18 +1439,18 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         settings=settings,
         database=database,
         universe=pipeline_universe,
-        symbols_arg=args.symbols,
+        symbols_arg=symbols_arg,
         all_market=all_market,
         source_id=source_id,
         refresh_stock_basic=all_market and not skip_stock_basic_refresh,
-        plan_only=bool(args.plan_only),
+        plan_only=plan_only,
     )
     _validate_backfill_plan_symbols(dataset="daily_bar", symbols=symbols)
     crawl_instrument_filter, crawl_instrument_filter_mode = (
         _daily_pipeline_document_instrument_filter(
             settings=settings,
             universe=pipeline_universe,
-            symbols_arg=args.symbols,
+            symbols_arg=symbols_arg,
             symbols=symbols,
             all_market=all_market,
             crawl_date=run_date,
@@ -1470,12 +1474,12 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     ]
     selected_tasks = tasks[:limit_tasks] if limit_tasks else tasks
     has_incomplete_tasks = len(selected_tasks) < len(tasks)
-    if args.watch:
+    if watch:
         _watch_print(
             True,
             f"{_watch_task_prefix(phase='pipeline', index=1, total=1)} START date={run_date} universe={universe} planned_tasks={len(planned)} runnable_tasks={len(tasks)} selected_tasks={len(selected_tasks)}",
         )
-    if args.plan_only:
+    if plan_only:
         _print_json(
             {
                 "status": "ok",
@@ -1493,16 +1497,16 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         settings=settings,
         database=database,
         tasks=selected_tasks,
-        control_only=bool(args.control_only),
+        control_only=control_only,
         parallelism=daily_parallelism,
-        watch=bool(args.watch),
+        watch=watch,
     )
     daily_exhausted_units = _backfill_exhausted_units(
         selected_tasks=selected_tasks,
         results=daily_results,
     )
     daily_step_status = "partial" if has_incomplete_tasks or daily_exhausted_units else "ok"
-    if args.watch:
+    if watch:
         _watch_print(
             True,
             f"{_watch_task_prefix(phase='pipeline', index=1, total=1)} END step=daily status={daily_step_status} ran={len(daily_results)}/{len(selected_tasks)}",
@@ -1525,7 +1529,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     should_continue = daily_step_status == "ok" or continue_on_failure
     crawl_result: dict[str, Any] | None = None
     if should_continue and crawl_documents:
-        if args.watch:
+        if watch:
             _watch_print(
                 True,
                 f"{_watch_task_prefix(phase='pipeline', index=2, total=2)} START step=crawl_documents",
@@ -1536,7 +1540,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             run_date=run_date,
             source_id=crawl_source_id,
             limit_tasks=crawl_limit_tasks,
-            control_only=bool(args.control_only),
+            control_only=control_only,
             page_size=crawl_page_size,
             max_pages=crawl_max_pages,
             download_pdfs=not skip_crawl_pdf_download,
@@ -1555,10 +1559,10 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             interaction_unsupported_check_interval_days=(
                 crawl_interaction_unsupported_check_interval_days
             ),
-            watch=bool(args.watch),
+            watch=watch,
         )
         steps.append({"step": "crawl_documents", **crawl_result})
-        if args.watch:
+        if watch:
             _watch_print(
                 True,
                 f"{_watch_task_prefix(phase='pipeline', index=2, total=2)} END step=crawl_documents status={crawl_result['status']} ran={crawl_result['ran_count']}/{crawl_result['planned_count']}",
@@ -1568,8 +1572,8 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             should_continue = continue_on_failure
 
     factor_start = _crawl_affected_start_date(crawl_result, default=run_date)
-    if should_continue and not args.control_only and not skip_factors:
-        if args.watch:
+    if should_continue and not control_only and not skip_factors:
+        if watch:
             _watch_print(
                 True,
                 f"{_watch_task_prefix(phase='pipeline', index=3, total=2)} START step=build_factors start={factor_start} end={run_date}",
@@ -1580,36 +1584,36 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             end_date=run_date,
         )
         steps.append({"step": "build_factors", "start_date": factor_start, **factor_result})
-        if args.watch:
+        if watch:
             _watch_print(
                 True,
                 f"{_watch_task_prefix(phase='pipeline', index=3, total=2)} END step=build_factors status={factor_result.get('status', 'unknown')}",
             )
 
-    if should_continue and not args.control_only and not skip_sync:
-        if args.watch:
+    if should_continue and not control_only and not skip_sync:
+        if watch:
             _watch_print(
                 True,
                 f"{_watch_task_prefix(phase='pipeline', index=4, total=2)} START step=sync_parquet",
             )
         sync_result = QdcParquetSync(settings).sync(layer="all")
         steps.append({"step": "sync_parquet", "status": "ok", **sync_result})
-        if args.watch:
+        if watch:
             _watch_print(
                 True,
                 f"{_watch_task_prefix(phase='pipeline', index=4, total=2)} END step=sync_parquet status={sync_result.get('status', 'unknown')}",
             )
 
     quality_result: dict[str, Any] | None = None
-    if should_continue and not args.control_only and not skip_quality:
-        if args.watch:
+    if should_continue and not control_only and not skip_quality:
+        if watch:
             _watch_print(
                 True,
                 f"{_watch_task_prefix(phase='pipeline', index=5, total=2)} START step=quality",
             )
         quality_result = QualityChecker(settings).run(start_date=run_date, end_date=run_date)
         steps.append({"step": "quality", **quality_result})
-        if args.watch:
+        if watch:
             _watch_print(
                 True,
                 f"{_watch_task_prefix(phase='pipeline', index=5, total=2)} END step=quality status={quality_result.get('status', 'unknown')}",
@@ -1618,8 +1622,8 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             status = "partial"
             should_continue = continue_on_failure
 
-    if should_continue and not args.control_only and not skip_export:
-        if args.watch:
+    if should_continue and not control_only and not skip_export:
+        if watch:
             _watch_print(
                 True,
                 f"{_watch_task_prefix(phase='pipeline', index=6, total=2)} START step=export_qlib",
@@ -1632,7 +1636,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
         )
         summarized_export = _summarize_export_result(export_result)
         steps.append({"step": "export_qlib", **summarized_export})
-        if args.watch:
+        if watch:
             _watch_print(
                 True,
                 f"{_watch_task_prefix(phase='pipeline', index=6, total=2)} END step=export_qlib status={summarized_export.get('status', 'unknown')} object_id_count={summarized_export.get('object_id_count', 0)}",
@@ -1652,7 +1656,8 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             "symbol_count": len(symbols),
             "planned_count": len(planned),
             "ran_count": len(daily_results),
-            "control_only": bool(args.control_only),
+            "control_only": control_only,
+            "watch": watch,
             "daily_parallelism": daily_parallelism,
             "crawl_documents": crawl_documents,
             "crawl_status": crawl_result["status"] if crawl_result else None,
@@ -1829,6 +1834,14 @@ def _crawl_affected_start_date(crawl_result: dict[str, Any] | None, *, default: 
     if not affected_dates:
         return default
     return min([default, *affected_dates])
+
+
+def _daily_pipeline_run_date(*, args: argparse.Namespace, settings: QdcSettings) -> str:
+    run_date_option = _daily_pipeline_option(args, settings, "date")
+    if run_date_option:
+        return parse_date(run_date_option).isoformat()
+    offset_days = int(_daily_pipeline_option(args, settings, "date_offset_days", 0) or 0)
+    return (parse_date(_today(settings)) + timedelta(days=offset_days)).isoformat()
 
 
 def _daily_pipeline_document_instrument_filter(
@@ -2332,7 +2345,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daily_pipeline_parser.add_argument(
         "--date",
-        help="YYYY-MM-DD or YYYYMMDD; defaults to today's date in project timezone",
+        help="YYYY-MM-DD or YYYYMMDD; overrides daily_pipeline.date/date_offset_days",
+    )
+    daily_pipeline_parser.add_argument(
+        "--date-offset-days",
+        type=int,
+        help="Relative run date offset when --date and daily_pipeline.date are unset; -1 means yesterday",
     )
     daily_pipeline_parser.add_argument(
         "--universe",
@@ -2368,11 +2386,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--market-name",
         help="Qlib instruments market file name; defaults to all_a for full market",
     )
-    daily_pipeline_parser.add_argument("--plan-only", action="store_true")
-    daily_pipeline_parser.add_argument("--control-only", action="store_true")
+    daily_pipeline_parser.add_argument(
+        "--plan-only", action=argparse.BooleanOptionalAction, default=None
+    )
+    daily_pipeline_parser.add_argument(
+        "--control-only", action=argparse.BooleanOptionalAction, default=None
+    )
     daily_pipeline_parser.add_argument(
         "--watch",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Print per-stage and per-task execution progress to stderr",
     )
     daily_pipeline_parser.add_argument(

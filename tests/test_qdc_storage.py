@@ -19,6 +19,10 @@ from quant_data_center.cli import (
     main,
 )
 from quant_data_center.console import QdcConsoleData, _locked_api_payload
+from quant_data_center.crawlers.sources.investor_interaction import (
+    DEFAULT_INTERACTION_SCHEDULE,
+    _schedule_options,
+)
 from quant_data_center.exports.qlib import QLIB_FIELDS, inspect_qlib_provider
 from quant_data_center.jobs.backfill import parse_date, plan_backfill_tasks
 from quant_data_center.qlib_ext.handlers import DEFAULT_EXTERNAL_FIELDS
@@ -3584,6 +3588,25 @@ def test_qdc_crawl_daily_investor_interaction_uses_org_cache_and_stops_on_old_ro
     assert cache_item["page_count"] == "2"
 
 
+def test_investor_interaction_defaults_to_cold_weekly_schedule(monkeypatch) -> None:
+    monkeypatch.delenv("QDC_INVESTOR_INTERACTION_SCHEDULE", raising=False)
+
+    options = _schedule_options(
+        interaction_schedule=None,
+        cold_no_data_days=None,
+        cold_check_interval_days=None,
+        cold_lookback_days=None,
+        unsupported_check_interval_days=None,
+    )
+
+    assert DEFAULT_INTERACTION_SCHEDULE == "cold-weekly"
+    assert options.mode == "cold-weekly"
+    assert options.cold_no_data_days == 14
+    assert options.cold_check_interval_days == 7
+    assert options.cold_lookback_days == 14
+    assert options.unsupported_check_interval_days == 30
+
+
 def test_qdc_crawl_daily_investor_interaction_cold_weekly_collects_due_window(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -3759,6 +3782,32 @@ def test_qdc_crawl_affected_start_date_uses_oldest_crawler_publish_date() -> Non
         )
         == "2026-05-12"
     )
+
+
+def test_daily_pipeline_run_date_uses_configured_offset(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """
+daily_pipeline:
+  date_offset_days: -1
+""",
+    )
+    settings = QdcSettings.from_yaml(config_path)
+    monkeypatch.setattr(cli_module, "_today", lambda _settings: "2026-05-15")
+
+    run_date = cli_module._daily_pipeline_run_date(
+        args=SimpleNamespace(date=None, date_offset_days=None),
+        settings=settings,
+    )
+    overridden = cli_module._daily_pipeline_run_date(
+        args=SimpleNamespace(date="2026-05-13", date_offset_days=None),
+        settings=settings,
+    )
+
+    assert run_date == "2026-05-14"
+    assert overridden == "2026-05-13"
 
 
 def test_qdc_crawl_exhausted_dataset_tolerates_one_failed_source() -> None:

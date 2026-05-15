@@ -30,20 +30,43 @@ policy:
   unknown_copyright_policy: metadata_only
 
 daily_pipeline:
+  date: null
+  date_offset_days: -1
   universe: all_a
   source_id: akshare
   source_ids:
     - akshare
     - eastmoney
     - sina
+  symbols: null
+  all_market: null
+  skip_stock_basic_refresh: false
   batch_size: 50
+  limit_tasks: null
   daily_parallelism: 1
+  provider_uri: null
+  export_start: null
+  market_name: null
+  plan_only: false
+  control_only: false
+  watch: false
+  continue_on_failure: false
   crawl_documents: true
+  crawl_source_id: null
+  crawl_limit_tasks: null
   crawl_page_size: 30
+  crawl_max_pages: null
+  crawl_pdf_limit: null
   crawl_parallelism: 1
   crawl_request_timeout_seconds: 30
-  crawl_source_timeout_seconds: 180
-  skip_stock_basic_refresh: false
+  crawl_source_timeout_seconds: 7200
+  crawl_instrument_parallelism: 8
+  crawl_instrument_limit: 0
+  crawl_interaction_schedule: cold-weekly
+  crawl_interaction_cold_no_data_days: 14
+  crawl_interaction_cold_check_interval_days: 7
+  crawl_interaction_cold_lookback_days: 14
+  crawl_interaction_unsupported_check_interval_days: 30
   skip_crawl_pdf_download: true
   skip_factors: false
   skip_sync: false

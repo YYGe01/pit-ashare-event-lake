@@ -30,9 +30,12 @@ class TextEventClassifierSettings:
 class DailyPipelineSettings:
     """Default options for the post-close daily pipeline."""
 
+    date: str | None
+    date_offset_days: int | None
     universe: str | None
     source_id: str | None
     source_ids: list[str] | None
+    symbols: str | None
     all_market: bool | None
     skip_stock_basic_refresh: bool | None
     batch_size: int | None
@@ -41,6 +44,9 @@ class DailyPipelineSettings:
     provider_uri: str | None
     export_start: str | None
     market_name: str | None
+    plan_only: bool | None
+    control_only: bool | None
+    watch: bool | None
     continue_on_failure: bool | None
     crawl_documents: bool | None
     crawl_source_id: str | None
@@ -211,9 +217,12 @@ class QdcSettings:
                 "max_tokens": self.text_event_classifier.max_tokens,
             },
             "daily_pipeline": {
+                "date": self.daily_pipeline.date,
+                "date_offset_days": self.daily_pipeline.date_offset_days,
                 "universe": self.daily_pipeline.universe,
                 "source_id": self.daily_pipeline.source_id,
                 "source_ids": self.daily_pipeline.source_ids,
+                "symbols": self.daily_pipeline.symbols,
                 "all_market": self.daily_pipeline.all_market,
                 "skip_stock_basic_refresh": self.daily_pipeline.skip_stock_basic_refresh,
                 "batch_size": self.daily_pipeline.batch_size,
@@ -222,6 +231,9 @@ class QdcSettings:
                 "provider_uri": self.daily_pipeline.provider_uri,
                 "export_start": self.daily_pipeline.export_start,
                 "market_name": self.daily_pipeline.market_name,
+                "plan_only": self.daily_pipeline.plan_only,
+                "control_only": self.daily_pipeline.control_only,
+                "watch": self.daily_pipeline.watch,
                 "continue_on_failure": self.daily_pipeline.continue_on_failure,
                 "crawl_documents": self.daily_pipeline.crawl_documents,
                 "crawl_source_id": self.daily_pipeline.crawl_source_id,
@@ -294,9 +306,12 @@ def _parse_daily_pipeline_settings(payload: Any) -> DailyPipelineSettings:
         raise ValueError("qdc daily_pipeline settings must be a mapping")
     spec = payload or {}
     return DailyPipelineSettings(
+        date=_optional_str(spec.get("date")),
+        date_offset_days=_optional_int(spec.get("date_offset_days")),
         universe=_optional_str(spec.get("universe")),
         source_id=_optional_str(spec.get("source_id")),
         source_ids=_optional_str_list(spec.get("source_ids")),
+        symbols=_optional_str(spec.get("symbols")),
         all_market=_optional_bool(spec.get("all_market")),
         skip_stock_basic_refresh=_optional_bool(spec.get("skip_stock_basic_refresh")),
         batch_size=_optional_int(spec.get("batch_size")),
@@ -305,6 +320,9 @@ def _parse_daily_pipeline_settings(payload: Any) -> DailyPipelineSettings:
         provider_uri=_optional_str(spec.get("provider_uri")),
         export_start=_optional_str(spec.get("export_start")),
         market_name=_optional_str(spec.get("market_name")),
+        plan_only=_optional_bool(spec.get("plan_only")),
+        control_only=_optional_bool(spec.get("control_only")),
+        watch=_optional_bool(spec.get("watch")),
         continue_on_failure=_optional_bool(spec.get("continue_on_failure")),
         crawl_documents=_optional_bool(spec.get("crawl_documents")),
         crawl_source_id=_optional_str(spec.get("crawl_source_id")),
