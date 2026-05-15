@@ -34,6 +34,7 @@ from quant_data_center.crawlers.sources.vendor_news import (
     VENDOR_NEWS_SOURCE_IDS,
     VendorNewsCrawler,
 )
+from quant_data_center.daily_health import DailyHealthReporter, render_daily_health_markdown
 from quant_data_center.exports.qlib import (
     QlibExporter,
     QlibProviderVerifier,
@@ -225,6 +226,40 @@ def cmd_quality(args: argparse.Namespace) -> int:
     )
     _print_json(result)
     return 0 if result["status"] == "ok" else 1
+
+
+def cmd_daily_health(args: argparse.Namespace) -> int:
+    settings = load_settings(args.config)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    target_date = _daily_pipeline_run_date(args=args, settings=settings)
+    report = DailyHealthReporter(settings).build_report(
+        target_date=target_date,
+        source_id=args.source_id,
+        lookback_days=args.lookback_days,
+    )
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if args.format == "markdown":
+            output_path.write_text(render_daily_health_markdown(report), encoding="utf-8")
+        else:
+            output_path.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2, default=str),
+                encoding="utf-8",
+            )
+        payload = {
+            key: value
+            for key, value in report.items()
+            if key not in {"markdown", "source_rows", "checks", "quality_issues"}
+        }
+        payload["output"] = str(output_path)
+        _print_json(payload)
+    elif args.format == "markdown":
+        print(render_daily_health_markdown(report))
+    else:
+        _print_json(report)
+    return 1 if report["status"] == "error" else 0
 
 
 def cmd_export_qlib(args: argparse.Namespace) -> int:
@@ -2249,6 +2284,26 @@ def build_parser() -> argparse.ArgumentParser:
     quality_parser.add_argument("--start", help="YYYY-MM-DD")
     quality_parser.add_argument("--end", help="YYYY-MM-DD")
     quality_parser.set_defaults(func=cmd_quality)
+
+    health_parser = subparsers.add_parser(
+        "daily-health",
+        help="Report daily collection health across crawl sources, factors, and quality issues",
+    )
+    health_parser.add_argument(
+        "--date",
+        help="YYYY-MM-DD or YYYYMMDD; defaults to daily_pipeline.date/date_offset_days",
+    )
+    health_parser.add_argument(
+        "--date-offset-days",
+        type=int,
+        default=None,
+        help="Relative report date offset when --date and daily_pipeline.date are unset",
+    )
+    health_parser.add_argument("--source-id", help="Limit the report to one crawler source")
+    health_parser.add_argument("--lookback-days", type=int, default=20)
+    health_parser.add_argument("--format", choices=["json", "markdown"], default="json")
+    health_parser.add_argument("--output", help="Optional report output path")
+    health_parser.set_defaults(func=cmd_daily_health)
 
     export_parser = subparsers.add_parser(
         "export-qlib",

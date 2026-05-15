@@ -53,6 +53,7 @@ qdc crawl-daily --date 2026-05-14 --source-id eastmoney_public_sentiment --symbo
 qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
 qdc sync-parquet --layer all
 qdc quality
+qdc daily-health --date 2026-05-13 --format markdown
 qdc console --host 127.0.0.1 --port 8765
 ```
 
@@ -275,7 +276,16 @@ qdc verify-qlib --provider-uri ~/.qlib/qlib_data/cn_data --start 2026-05-13 --en
 qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
 qdc sync-parquet --layer all
 qdc quality
+qdc daily-health --date 2026-05-13 --format markdown
 ```
+
+每日采集任务可直接使用项目 skill：
+
+```text
+.codex/skills/qdc-daily-collection/SKILL.md
+```
+
+该 skill 固定执行 `crawl-daily -> build-factors -> sync-parquet -> quality -> daily-health`，并按 `daily-health` 的 `ok / warning / error` 口径判断是否需要重跑、观察或修复代码。
 
 自动化环境未激活 shell 时：
 

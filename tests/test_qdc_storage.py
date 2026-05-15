@@ -29,6 +29,7 @@ from quant_data_center.qlib_ext.handlers import DEFAULT_EXTERNAL_FIELDS
 from quant_data_center.settings import QdcSettings
 from quant_data_center.storage import database as database_module
 from quant_data_center.storage.database import QdcDatabase
+from quant_data_center.storage.objects import QdcObjectStore
 from quant_data_center.storage.schema import CONTROL_TABLES, SILVER_TABLES
 from quant_data_center.storage.silver import SilverStore
 
@@ -6116,6 +6117,141 @@ def test_qdc_quality_records_issues_for_invalid_daily_bar(tmp_path: Path) -> Non
         "close_outside_range",
         "invalid_price_range",
     ]
+
+
+def test_qdc_daily_health_flags_provider_records_without_silver(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    target_date = "2026-05-13"
+    source_id = "eastmoney_roll_news"
+    task_id, _inserted = database.insert_crawl_task(
+        source_id=source_id,
+        dataset="news",
+        crawl_date=target_date,
+        partition_key=f"date={target_date}",
+        request={"source_id": source_id, "dataset": "news", "crawl_date": target_date},
+    )
+    database.finish_crawl_task(task_id=task_id, status="success")
+    database.record_crawl_run(
+        status="success",
+        source_id=source_id,
+        dataset="news",
+        crawl_date=target_date,
+        planned_count=1,
+        success_count=1,
+        document_count=0,
+        raw_object_count=1,
+        parameters={"page_size": 30},
+    )
+    for stage in ("build_factors", "sync_parquet", "quality"):
+        database.record_job_run(
+            job_type=stage,
+            status="success",
+            dataset=stage,
+            start_date=target_date,
+            end_date=target_date,
+        )
+    QdcObjectStore(settings).put_document_bundle(
+        dataset="news",
+        source_id=source_id,
+        partition_value=target_date,
+        stem="unit_empty_silver",
+        manifest={
+            "date_scan_complete": True,
+            "provider_record_count": 3,
+            "parse_failed_count": 0,
+            "parsed_unique_record_count": 3,
+            "mapped_source_record_count": 0,
+            "mapping_failed_count": 3,
+        },
+        records=[],
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "daily-health",
+                "--date",
+                target_date,
+                "--source-id",
+                source_id,
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "error"
+    assert payload["source_rows"][0]["provider_record_count"] == 3
+    assert "provider_records_without_silver" in {
+        check["code"] for check in payload["source_rows"][0]["checks"]
+    }
+
+
+def test_qdc_daily_health_accepts_sparse_interaction_source(tmp_path: Path, capsys) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    target_date = "2026-05-13"
+    source_id = "cninfo_investor_interaction"
+    task_id, _inserted = database.insert_crawl_task(
+        source_id=source_id,
+        dataset="investor_interaction",
+        crawl_date=target_date,
+        partition_key=f"date={target_date}",
+        request={
+            "source_id": source_id,
+            "dataset": "investor_interaction",
+            "crawl_date": target_date,
+        },
+    )
+    database.finish_crawl_task(task_id=task_id, status="success")
+    database.record_crawl_run(
+        status="success",
+        source_id=source_id,
+        dataset="investor_interaction",
+        crawl_date=target_date,
+        planned_count=1,
+        success_count=1,
+        document_count=0,
+        raw_object_count=0,
+        parameters={"page_size": 50, "interaction_schedule": "cold-weekly"},
+    )
+    for stage in ("build_factors", "sync_parquet", "quality"):
+        database.record_job_run(
+            job_type=stage,
+            status="success",
+            dataset=stage,
+            start_date=target_date,
+            end_date=target_date,
+        )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "daily-health",
+                "--date",
+                target_date,
+                "--source-id",
+                source_id,
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "ok"
+    assert payload["source_rows"][0]["reason_codes"] == []
 
 
 def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> None:

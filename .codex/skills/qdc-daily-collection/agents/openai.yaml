@@ -1,0 +1,4 @@
+interface:
+  display_name: "QDC Daily Collection"
+  short_description: "Run QDC daily collection and health checks."
+  default_prompt: "Run the QDC daily collection workflow for yesterday, inspect daily-health, fix confirmed code/config issues, and rerun checks."
