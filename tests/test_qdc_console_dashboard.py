@@ -253,6 +253,7 @@ def test_qdc_console_builds_crawl_daily_command(tmp_path: Path) -> None:
     assert command[command.index("--config") + 1] == str(settings.config_path)
     assert "crawl-daily" in command
     assert "daily-pipeline" not in command
+    assert "--watch" in command
     assert command[command.index("--source-id") + 1] == "cninfo_announcement"
     assert command[command.index("--symbols") + 1] == "SH600000,SZ000001"
     assert command[command.index("--page-size") + 1] == "20"

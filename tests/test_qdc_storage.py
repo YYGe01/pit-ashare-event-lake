@@ -15,10 +15,12 @@ from quant_data_center import cli as cli_module
 from quant_data_center.cli import (
     _backfill_exhausted_units,
     _crawl_exhausted_datasets,
+    _order_crawl_tasks,
     _print_json,
     main,
 )
 from quant_data_center.console import QdcConsoleData, _locked_api_payload
+from quant_data_center.crawlers.registry import CRAWL_DAILY_SOURCE_IDS
 from quant_data_center.crawlers.sources.investor_interaction import (
     DEFAULT_INTERACTION_SCHEDULE,
     _schedule_options,
@@ -3937,6 +3939,30 @@ def test_qdc_crawl_daily_control_only_plans_and_runs_default_sources(tmp_path: P
     }
     assert {task["status"] for task in tasks} == {"success"}
     assert database.table_counts()["crawl_run"] == 1
+
+
+def test_qdc_crawl_daily_runs_in_registry_order_with_interaction_last() -> None:
+    assert CRAWL_DAILY_SOURCE_IDS == [
+        "cninfo_announcement",
+        "sse_announcement",
+        "sina_finance_news",
+        "eastmoney_roll_news",
+        "eastmoney_research_report",
+        "eastmoney_public_sentiment",
+        "cninfo_investor_interaction",
+    ]
+
+    tasks = [
+        {"source_id": "cninfo_investor_interaction", "task_id": "interaction"},
+        {"source_id": "cninfo_announcement", "task_id": "cninfo"},
+        {"source_id": "eastmoney_public_sentiment", "task_id": "sentiment"},
+    ]
+
+    assert [task["source_id"] for task in _order_crawl_tasks(tasks)] == [
+        "cninfo_announcement",
+        "eastmoney_public_sentiment",
+        "cninfo_investor_interaction",
+    ]
 
 
 def test_qdc_crawl_recover_running_marks_stale_tasks_failed(tmp_path: Path) -> None:

@@ -19,7 +19,11 @@ from quant_data_center.collectors.akshare import (
     SinaRealtimeSilverCollector,
 )
 from quant_data_center.console import run_console
-from quant_data_center.crawlers.registry import crawler_source_spec, enabled_daily_source_specs
+from quant_data_center.crawlers.registry import (
+    CRAWL_DAILY_SOURCE_IDS,
+    crawler_source_spec,
+    enabled_daily_source_specs,
+)
 from quant_data_center.crawlers.sources.cninfo import CninfoAnnouncementCrawler
 from quant_data_center.crawlers.sources.eastmoney import EastmoneyRollNewsCrawler
 from quant_data_center.crawlers.sources.investor_interaction import (
@@ -627,7 +631,7 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
         interaction_unsupported_check_interval_days=(
             args.interaction_unsupported_check_interval_days
         ),
-        watch=False,
+        watch=bool(args.watch),
     )
     run_id = database.record_crawl_run(
         status="failed" if has_failures else "success",
@@ -702,11 +706,13 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         )
         return 0
     retryable_statuses = {"pending", "failed"} | ({"success"} if args.force else set())
-    tasks = [
-        task
-        for task in database.list_crawl_tasks(source_id=args.source_id)
-        if task["crawl_date"] == crawl_date and task["status"] in retryable_statuses
-    ]
+    tasks = _order_crawl_tasks(
+        [
+            task
+            for task in database.list_crawl_tasks(source_id=args.source_id)
+            if task["crawl_date"] == crawl_date and task["status"] in retryable_statuses
+        ]
+    )
     selected_tasks = tasks[: args.limit_tasks] if args.limit_tasks else tasks
     instrument_filter, instrument_filter_mode = _resolve_crawl_document_instrument_filter(
         settings=settings,
@@ -742,7 +748,7 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         interaction_unsupported_check_interval_days=(
             args.interaction_unsupported_check_interval_days
         ),
-        watch=False,
+        watch=bool(args.watch),
     )
     status = "partial" if has_failures or len(selected_tasks) < len(tasks) else "ok"
     run_id = database.record_crawl_run(
@@ -842,6 +848,22 @@ def _plan_crawl_tasks(
             "partition_key": partition_key,
         }
     ]
+
+
+def _order_crawl_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    source_order = {
+        source_id: index for index, source_id in enumerate(CRAWL_DAILY_SOURCE_IDS)
+    }
+    return sorted(
+        tasks,
+        key=lambda task: (
+            source_order.get(str(task["source_id"]), len(source_order)),
+            str(task.get("created_at") or ""),
+            str(task.get("source_id") or ""),
+            str(task.get("partition_key") or ""),
+            str(task.get("task_id") or ""),
+        ),
+    )
 
 
 def _run_crawl_tasks(
@@ -1771,11 +1793,13 @@ def _run_daily_pipeline_crawl_documents(
                 crawl_date=run_date,
             )
         )
-    tasks = [
-        task
-        for task in database.list_crawl_tasks(status="pending", source_id=source_id)
-        if task["crawl_date"] == run_date
-    ]
+    tasks = _order_crawl_tasks(
+        [
+            task
+            for task in database.list_crawl_tasks(status="pending", source_id=source_id)
+            if task["crawl_date"] == run_date
+        ]
+    )
     selected_tasks = tasks[:limit_tasks] if limit_tasks else tasks
     results, _has_failures = _run_crawl_tasks(
         settings=settings,
@@ -2579,6 +2603,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Validate crawler task state flow without collecting real documents",
     )
+    crawl_run_parser.add_argument("--watch", action="store_true")
     crawl_run_parser.set_defaults(func=cmd_crawl_run)
 
     crawl_daily_parser = subparsers.add_parser(
@@ -2642,6 +2667,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Rerun existing crawl tasks for this date, including successful tasks",
     )
+    crawl_daily_parser.add_argument("--watch", action="store_true")
     crawl_daily_parser.add_argument("--plan-only", action="store_true")
     crawl_daily_parser.add_argument("--control-only", action="store_true")
     crawl_daily_parser.set_defaults(func=cmd_crawl_daily)

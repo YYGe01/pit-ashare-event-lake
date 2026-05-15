@@ -4113,6 +4113,7 @@ def _crawl_daily_command(settings: QdcSettings, payload: dict[str, Any]) -> list
         "--config",
         str(settings.config_path),
         "crawl-daily",
+        "--watch",
     ]
     run_date = _payload_text(payload, "date")
     if run_date:

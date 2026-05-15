@@ -323,8 +323,8 @@ CRAWL_DAILY_SOURCE_IDS = [
     "sina_finance_news",
     "eastmoney_roll_news",
     "eastmoney_research_report",
-    "cninfo_investor_interaction",
     "eastmoney_public_sentiment",
+    "cninfo_investor_interaction",
 ]
 
 

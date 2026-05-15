@@ -39,10 +39,20 @@ qdc db-info
 qdc verify-qlib --provider-uri ~/.qlib/qlib_data/cn_data --start 2026-05-13 --end 2026-05-13 --instruments "SH600000,SZ000001" --fields '$close,$volume,$factor'
 ```
 
-当前默认工作流是非结构化采集和外部因子加工：
+当前默认每日流程是非结构化采集和外部因子加工，推荐分步执行，方便定位哪个阶段失败：
 
 ```powershell
-qdc daily-pipeline
+qdc crawl-daily --date 2026-05-13 --watch
+qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
+qdc sync-parquet --layer all
+qdc quality --start 2026-05-13 --end 2026-05-13
+qdc daily-health --date 2026-05-13 --format markdown
+qdc console --host 127.0.0.1 --port 8765
+```
+
+单源 smoke 和补跑示例：
+
+```powershell
 qdc crawl-daily --date 2026-05-13 --source-id cninfo_announcement --page-size 100 --skip-pdf-download
 qdc crawl-daily --date 2026-05-13 --source-id sse_announcement --page-size 100 --skip-pdf-download
 qdc crawl-daily --date 2026-05-13 --source-id eastmoney_roll_news --page-size 100
@@ -50,20 +60,37 @@ qdc crawl-daily --date 2026-05-13 --source-id eastmoney_research_report --page-s
 qdc crawl-daily --date 2026-05-14 --source-id cninfo_investor_interaction --symbols SZ002594 --page-size 20 --max-pages 1
 qdc crawl-daily --date 2026-05-14 --source-id cninfo_investor_interaction --page-size 50 --instrument-parallelism 8 --instrument-limit 0 --source-timeout-seconds 7200
 qdc crawl-daily --date 2026-05-14 --source-id eastmoney_public_sentiment --symbols "SH600000,SZ000001" --page-size 5 --max-pages 1
-qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
-qdc sync-parquet --layer all
-qdc quality
-qdc daily-health --date 2026-05-13 --format markdown
-qdc console --host 127.0.0.1 --port 8765
 ```
 
-`daily-pipeline` 的常用固定参数已经集中在 [config/quant_data_center.yaml](config/quant_data_center.yaml)；字段说明见 [config/README.md](config/README.md)。当前 `daily_pipeline.date_offset_days: -1`，正常跑昨日完整采集不需要再传日期：
+`daily-pipeline` 是保留的一键流水线入口，会先跑历史结构化 `daily_bar` 任务，再按配置可选跑文档采集、因子、Parquet、quality 和 Qlib 导出。常用固定参数集中在 [config/quant_data_center.yaml](config/quant_data_center.yaml)；字段说明见 [config/README.md](config/README.md)。当前主线每日采集优先使用上面的分步流程。
 
 ```powershell
 conda run -n ai-trader qdc daily-pipeline
 ```
 
 临时补跑固定日期时再显式传 `--date YYYY-MM-DD`。
+
+如果由 Codex 或自动化终端代跑，建议把输出同步写入本地日志，日志目录是 `data/quant_data_center/logs`：
+
+```powershell
+$targetDate = "2026-05-13"
+$logDir = "data/quant_data_center/logs"
+New-Item -ItemType Directory -Force $logDir | Out-Null
+$logFile = Join-Path $logDir "daily-collection-$targetDate.log"
+
+function Invoke-QdcLogged {
+  param([string[]]$QdcArgs, [string]$LogFile)
+  ">>> qdc $($QdcArgs -join ' ')" | Tee-Object -FilePath $LogFile -Append
+  & conda run -n ai-trader qdc @QdcArgs 2>&1 | Tee-Object -FilePath $LogFile -Append
+  if ($LASTEXITCODE -ne 0) { throw "qdc $($QdcArgs -join ' ') failed with exit code $LASTEXITCODE" }
+}
+
+Invoke-QdcLogged -QdcArgs @("crawl-daily", "--date", $targetDate, "--watch") -LogFile $logFile
+Invoke-QdcLogged -QdcArgs @("build-factors", "--factor-set", "all", "--start", $targetDate, "--end", $targetDate) -LogFile $logFile
+Invoke-QdcLogged -QdcArgs @("sync-parquet", "--layer", "all") -LogFile $logFile
+Invoke-QdcLogged -QdcArgs @("quality", "--start", $targetDate, "--end", $targetDate) -LogFile $logFile
+Invoke-QdcLogged -QdcArgs @("daily-health", "--date", $targetDate, "--format", "markdown") -LogFile $logFile
+```
 
 `crawl-run` / `crawl-daily` 默认只采公告 metadata，不下载 PDF；需要留存公开 PDF 时显式加 `--download-pdfs`，可再配合 `--pdf-limit` 控制 smoke 下载量。
 滚动新闻源会按目标日期窗口向后翻页，跳过目标日之后的新闻，直到完整覆盖目标日；完整采集不建议传 `--max-pages`，只做接口 smoke 时再用它限制页数。
