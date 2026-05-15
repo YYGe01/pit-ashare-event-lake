@@ -8,6 +8,7 @@ import os
 import re
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
@@ -40,6 +41,7 @@ CNINFO_IR_DETAIL_URL = "https://irm.cninfo.com.cn/ircs/question/questionDetail"
 CNINFO_IR_REFERER = "https://irm.cninfo.com.cn/"
 PARSER_VERSION = "cninfo_investor_interaction_v1"
 DEFAULT_UNFILTERED_INSTRUMENT_LIMIT = 50
+DEFAULT_INSTRUMENT_MAX_PAGES = 2
 
 
 class CninfoInvestorInteractionCrawler:
@@ -73,6 +75,7 @@ class CninfoInvestorInteractionCrawler:
             instrument_limit=instrument_limit,
         )
         worker_count = min(_instrument_parallelism(instrument_parallelism), max(1, len(instruments)))
+        effective_max_pages = _effective_max_pages(max_pages)
         org_cache = _load_org_cache(self.settings)
         rate_limiter = _RequestRateLimiter(
             _request_interval_seconds(
@@ -88,6 +91,8 @@ class CninfoInvestorInteractionCrawler:
         org_cache_updates: dict[str, dict[str, str]] = {}
         org_cache_hit_count = 0
         request_count = 0
+        target_date_instrument_count = 0
+        instrument_status_counts: Counter[str] = Counter()
         instrument_results = _crawl_instruments(
             requests=requests,
             settings=self.settings,
@@ -98,7 +103,7 @@ class CninfoInvestorInteractionCrawler:
             source_id=source_id,
             crawl_date=crawl_date,
             page_size=page_size,
-            max_pages=max_pages,
+            max_pages=effective_max_pages,
             request_timeout_seconds=request_timeout_seconds,
             worker_count=worker_count,
         )
@@ -110,6 +115,10 @@ class CninfoInvestorInteractionCrawler:
             org_cache_updates.update(result["org_cache_updates"])
             org_cache_hit_count += int(result["org_cache_hit_count"])
             request_count += int(result["request_count"])
+            status = str(result["instrument_status"])
+            instrument_status_counts[status] += 1
+            if status == "has_target_date":
+                target_date_instrument_count += 1
         if org_cache_updates:
             org_cache.update(org_cache_updates)
             _write_org_cache(self.settings, org_cache)
@@ -125,7 +134,8 @@ class CninfoInvestorInteractionCrawler:
                 "params": {
                     "crawl_date": crawl_date,
                     "page_size": page_size,
-                    "max_pages": max_pages,
+                    "max_pages": effective_max_pages,
+                    "requested_max_pages": max_pages,
                     "instrument_filter": instrument_filter or [],
                     "instrument_mode": instrument_mode,
                     "instrument_count": len(instruments),
@@ -138,6 +148,8 @@ class CninfoInvestorInteractionCrawler:
                     "update_count": len(org_cache_updates),
                 },
                 "request_count": request_count,
+                "instrument_status_counts": dict(sorted(instrument_status_counts.items())),
+                "target_date_instrument_count": target_date_instrument_count,
                 "org_failures": org_failures,
                 "question_failures": question_failures,
                 "pages": pages,
@@ -180,9 +192,13 @@ class CninfoInvestorInteractionCrawler:
                 "instrument_count": len(instruments),
                 "instrument_parallelism": worker_count,
                 "instrument_limit": instrument_limit,
+                "requested_max_pages": max_pages,
+                "effective_max_pages": effective_max_pages,
                 "org_cache_hit_count": org_cache_hit_count,
                 "org_cache_update_count": len(org_cache_updates),
                 "request_count": request_count,
+                "instrument_status_counts": dict(sorted(instrument_status_counts.items())),
+                "target_date_instrument_count": target_date_instrument_count,
                 "org_failure_count": len(org_failures),
                 "question_failure_count": len(question_failures),
                 **source_metrics,
@@ -205,9 +221,13 @@ class CninfoInvestorInteractionCrawler:
             "instrument_count": len(instruments),
             "instrument_parallelism": worker_count,
             "instrument_limit": instrument_limit,
+            "requested_max_pages": max_pages,
+            "effective_max_pages": effective_max_pages,
             "org_cache_hit_count": org_cache_hit_count,
             "org_cache_update_count": len(org_cache_updates),
             "request_count": request_count,
+            "instrument_status_counts": dict(sorted(instrument_status_counts.items())),
+            "target_date_instrument_count": target_date_instrument_count,
             "org_failure_count": len(org_failures),
             "question_failure_count": len(question_failures),
             **source_metrics,
@@ -244,51 +264,55 @@ def _crawl_instruments(
     request_timeout_seconds: float,
     worker_count: int,
 ) -> list[dict[str, Any]]:
-    if worker_count <= 1:
-        return [
-            _crawl_one_instrument(
-                requests=requests,
-                settings=settings,
-                instrument=instrument,
-                org_cache=org_cache,
-                rate_limiter=rate_limiter,
-                deadline=deadline,
-                source_id=source_id,
-                crawl_date=crawl_date,
-                page_size=page_size,
-                max_pages=max_pages,
-                request_timeout_seconds=request_timeout_seconds,
-            )
-            for instrument in instruments
-        ]
-    indexed_results: list[tuple[int, dict[str, Any]]] = []
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        futures = {
-            executor.submit(
-                _crawl_one_instrument,
-                requests=requests,
-                settings=settings,
-                instrument=instrument,
-                org_cache=org_cache,
-                rate_limiter=rate_limiter,
-                deadline=deadline,
-                source_id=source_id,
-                crawl_date=crawl_date,
-                page_size=page_size,
-                max_pages=max_pages,
-                request_timeout_seconds=request_timeout_seconds,
-            ): index
-            for index, instrument in enumerate(instruments)
-        }
-        for future in as_completed(futures):
-            indexed_results.append((futures[future], future.result()))
-    indexed_results.sort(key=lambda item: item[0])
-    return [result for _index, result in indexed_results]
+    post_client = _make_post_client(requests)
+    try:
+        if worker_count <= 1:
+            return [
+                _crawl_one_instrument(
+                    post=post_client.post,
+                    settings=settings,
+                    instrument=instrument,
+                    org_cache=org_cache,
+                    rate_limiter=rate_limiter,
+                    deadline=deadline,
+                    source_id=source_id,
+                    crawl_date=crawl_date,
+                    page_size=page_size,
+                    max_pages=max_pages,
+                    request_timeout_seconds=request_timeout_seconds,
+                )
+                for instrument in instruments
+            ]
+        indexed_results: list[tuple[int, dict[str, Any]]] = []
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(
+                    _crawl_one_instrument,
+                    post=post_client.post,
+                    settings=settings,
+                    instrument=instrument,
+                    org_cache=org_cache,
+                    rate_limiter=rate_limiter,
+                    deadline=deadline,
+                    source_id=source_id,
+                    crawl_date=crawl_date,
+                    page_size=page_size,
+                    max_pages=max_pages,
+                    request_timeout_seconds=request_timeout_seconds,
+                ): index
+                for index, instrument in enumerate(instruments)
+            }
+            for future in as_completed(futures):
+                indexed_results.append((futures[future], future.result()))
+        indexed_results.sort(key=lambda item: item[0])
+        return [result for _index, result in indexed_results]
+    finally:
+        post_client.close()
 
 
 def _crawl_one_instrument(
     *,
-    requests: Any,
+    post: Any,
     settings: QdcSettings,
     instrument: str,
     org_cache: dict[str, dict[str, str]],
@@ -307,7 +331,13 @@ def _crawl_one_instrument(
     org_cache_updates: dict[str, dict[str, str]] = {}
     org_cache_hit_count = 0
     request_count = 0
+    provider_date_counts: Counter[str] = Counter()
+    latest_provider_publish_date: str | None = None
+    oldest_provider_publish_date: str | None = None
+    target_row_count = 0
+    question_elapsed_ms: float | None = None
     symbol = instrument_to_symbol(instrument)
+    cached_item = org_cache.get(symbol) or {}
     try:
         org_id = _cached_org_id(org_cache, symbol)
         if org_id:
@@ -316,21 +346,25 @@ def _crawl_one_instrument(
             rate_limiter.wait(deadline=deadline, source_id=source_id)
             request_count += 1
             org_id = _fetch_org_id(
-                requests=requests,
+                post=post,
                 settings=settings,
                 symbol=symbol,
                 deadline=deadline,
                 source_id=source_id,
                 request_timeout_seconds=request_timeout_seconds,
             )
-            org_cache_updates[symbol] = {
-                "symbol": symbol,
-                "instrument": instrument,
-                "org_id": org_id,
-                "updated_at": _timestamp(),
-            }
     except Exception as exc:
-        org_failures.append({"instrument": instrument, "error": str(exc)[:300]})
+        error_text = str(exc)[:300]
+        org_failures.append({"instrument": instrument, "error": error_text})
+        org_cache_updates[symbol] = _cache_entry(
+            previous=cached_item,
+            symbol=symbol,
+            instrument=instrument,
+            org_status="missing_org",
+            question_status="not_requested",
+            crawl_date=crawl_date,
+            error=error_text,
+        )
         return {
             "provider_rows": provider_rows,
             "pages": pages,
@@ -339,9 +373,11 @@ def _crawl_one_instrument(
             "org_cache_updates": org_cache_updates,
             "org_cache_hit_count": org_cache_hit_count,
             "request_count": request_count,
+            "instrument_status": "missing_org",
         }
     page_num = 1
     total_pages: int | None = None
+    question_started = time.monotonic()
     while total_pages is None or page_num <= total_pages:
         raise_if_deadline_exceeded(deadline, source_id=source_id)
         params = _query_params(
@@ -355,7 +391,7 @@ def _crawl_one_instrument(
             rate_limiter.wait(deadline=deadline, source_id=source_id)
             request_count += 1
             response = call_with_proxy_policy(
-                requests.post,
+                post,
                 CNINFO_IR_QUESTION_URL,
                 headers=_headers(),
                 params=params,
@@ -369,16 +405,28 @@ def _crawl_one_instrument(
             response.raise_for_status()
             body = response.json()
         except Exception as exc:
+            error_text = str(exc)[:300]
             question_failures.append(
                 {
                     "instrument": instrument,
                     "stock_code": symbol,
                     "page_num": page_num,
-                    "error": str(exc)[:300],
+                    "error": error_text,
                 }
             )
             break
         rows = _extract_rows(body)
+        scan = _date_scan_summary(rows=rows, crawl_date=crawl_date, page_size=page_size)
+        provider_date_counts.update(scan["date_counts"])
+        target_row_count += int(scan["target_row_count"])
+        latest_provider_publish_date = _max_date(
+            latest_provider_publish_date,
+            scan["latest_provider_publish_date"],
+        )
+        oldest_provider_publish_date = _min_date(
+            oldest_provider_publish_date,
+            scan["oldest_provider_publish_date"],
+        )
         for row in rows:
             row["__instrument"] = instrument
             row["__org_id"] = org_id
@@ -386,7 +434,6 @@ def _crawl_one_instrument(
         total_pages = _total_pages(body, page_size=page_size)
         if max_pages is not None:
             total_pages = min(total_pages, max(1, int(max_pages)))
-        stop_reason = _date_stop_reason(rows=rows, crawl_date=crawl_date)
         pages.append(
             {
                 "instrument": instrument,
@@ -398,12 +445,38 @@ def _crawl_one_instrument(
                 "provider_record_count": len(rows),
                 "total_pages": total_pages,
                 "hits": body.get("total"),
-                "date_stop_reason": stop_reason,
+                "target_row_count": scan["target_row_count"],
+                "latest_provider_publish_date": scan["latest_provider_publish_date"],
+                "oldest_provider_publish_date": scan["oldest_provider_publish_date"],
+                "date_stop_reason": scan["stop_reason"],
             }
         )
-        if not rows or stop_reason == "older_than_target_date":
+        if scan["stop_reason"]:
             break
         page_num += 1
+    question_elapsed_ms = round((time.monotonic() - question_started) * 1000, 3)
+    instrument_status = _instrument_status(
+        provider_rows=provider_rows,
+        target_row_count=target_row_count,
+        question_failures=question_failures,
+    )
+    org_cache_updates[symbol] = _cache_entry(
+        previous=cached_item,
+        symbol=symbol,
+        instrument=instrument,
+        org_id=org_id,
+        org_status="ok",
+        question_status=instrument_status,
+        crawl_date=crawl_date,
+        target_row_count=target_row_count,
+        provider_record_count=len(provider_rows),
+        page_count=len(pages),
+        latest_provider_publish_date=latest_provider_publish_date,
+        oldest_provider_publish_date=oldest_provider_publish_date,
+        provider_date_counts=dict(sorted(provider_date_counts.items())),
+        latency_ms=question_elapsed_ms,
+        error=question_failures[-1]["error"] if question_failures else None,
+    )
     return {
         "provider_rows": provider_rows,
         "pages": pages,
@@ -412,12 +485,13 @@ def _crawl_one_instrument(
         "org_cache_updates": org_cache_updates,
         "org_cache_hit_count": org_cache_hit_count,
         "request_count": request_count,
+        "instrument_status": instrument_status,
     }
 
 
 def _fetch_org_id(
     *,
-    requests: Any,
+    post: Any,
     settings: QdcSettings,
     symbol: str,
     deadline: float | None,
@@ -425,7 +499,7 @@ def _fetch_org_id(
     request_timeout_seconds: float,
 ) -> str:
     response = call_with_proxy_policy(
-        requests.post,
+        post,
         CNINFO_IR_KEYBOARD_URL,
         headers=_headers(),
         params={"_t": "1691144074"},
@@ -462,6 +536,49 @@ class _RequestRateLimiter:
             self._next_request_at = max(self._next_request_at, now) + self.interval_seconds
         if wait_seconds > 0:
             sleep_with_deadline(wait_seconds, deadline=deadline, source_id=source_id)
+
+
+class _ModulePostClient:
+    def __init__(self, post: Any) -> None:
+        self.post = post
+
+    def close(self) -> None:
+        return None
+
+
+class _ThreadLocalPostClient:
+    def __init__(self, requests: Any) -> None:
+        self.requests = requests
+        self._local = threading.local()
+        self._lock = threading.Lock()
+        self._sessions: list[Any] = []
+
+    def post(self, *args: Any, **kwargs: Any) -> Any:
+        session = getattr(self._local, "session", None)
+        if session is None:
+            session = self.requests.Session()
+            self._local.session = session
+            with self._lock:
+                self._sessions.append(session)
+        return session.post(*args, **kwargs)
+
+    def close(self) -> None:
+        with self._lock:
+            sessions = list(self._sessions)
+            self._sessions.clear()
+        for session in sessions:
+            close = getattr(session, "close", None)
+            if close:
+                close()
+
+
+def _make_post_client(requests: Any) -> Any:
+    if os.environ.get("QDC_INVESTOR_INTERACTION_DISABLE_SESSION") == "1":
+        return _ModulePostClient(requests.post)
+    session_factory = getattr(requests, "Session", None)
+    if session_factory is None:
+        return _ModulePostClient(requests.post)
+    return _ThreadLocalPostClient(requests)
 
 
 def _request_interval_seconds(*, min_delay_seconds: float, worker_count: int) -> float:
@@ -510,7 +627,8 @@ def _load_org_cache(settings: QdcSettings) -> dict[str, dict[str, str]]:
             cache[normalized_symbol] = {"symbol": normalized_symbol, "org_id": item}
         elif isinstance(item, dict):
             org_id = str(item.get("org_id") or "").strip()
-            if org_id:
+            status_keys = {"org_status", "question_status", "last_checked_date"}
+            if org_id or status_keys.intersection(item):
                 cache[normalized_symbol] = {
                     str(key): str(value)
                     for key, value in item.items()
@@ -538,6 +656,72 @@ def _cached_org_id(org_cache: dict[str, dict[str, str]], symbol: str) -> str | N
         return None
     org_id = str(item.get("org_id") or "").strip()
     return org_id or None
+
+
+def _cache_entry(
+    *,
+    previous: dict[str, str],
+    symbol: str,
+    instrument: str,
+    org_status: str,
+    question_status: str,
+    crawl_date: str,
+    org_id: str | None = None,
+    target_row_count: int = 0,
+    provider_record_count: int = 0,
+    page_count: int = 0,
+    latest_provider_publish_date: str | None = None,
+    oldest_provider_publish_date: str | None = None,
+    provider_date_counts: dict[str, int] | None = None,
+    latency_ms: float | None = None,
+    error: str | None = None,
+) -> dict[str, str]:
+    entry = dict(previous)
+    entry.update(
+        {
+            "symbol": symbol,
+            "instrument": instrument,
+            "org_status": org_status,
+            "question_status": question_status,
+            "last_checked_date": crawl_date,
+            "updated_at": _timestamp(),
+            "target_row_count": str(target_row_count),
+            "provider_record_count": str(provider_record_count),
+            "page_count": str(page_count),
+        }
+    )
+    if org_id:
+        entry["org_id"] = org_id
+    if latest_provider_publish_date:
+        entry["latest_provider_publish_date"] = latest_provider_publish_date
+        entry["last_question_seen_date"] = latest_provider_publish_date
+    if oldest_provider_publish_date:
+        entry["oldest_provider_publish_date"] = oldest_provider_publish_date
+    if target_row_count > 0:
+        entry["last_target_date"] = crawl_date
+        entry["consecutive_no_data_days"] = "0"
+    elif question_status in {"no_target_date", "no_rows"}:
+        entry["consecutive_no_data_days"] = str(_next_no_data_days(previous))
+    if provider_date_counts is not None:
+        entry["provider_date_counts_json"] = json.dumps(
+            provider_date_counts,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    if latency_ms is not None:
+        entry["last_latency_ms"] = str(latency_ms)
+    if error:
+        entry["last_error"] = error
+    else:
+        entry.pop("last_error", None)
+    return {str(key): str(value) for key, value in entry.items() if value is not None}
+
+
+def _next_no_data_days(previous: dict[str, str]) -> int:
+    try:
+        return max(0, int(previous.get("consecutive_no_data_days") or 0)) + 1
+    except ValueError:
+        return 1
 
 
 def _query_params(
@@ -585,12 +769,69 @@ def _total_pages(body: dict[str, Any], *, page_size: int) -> int:
     return 1
 
 
-def _date_stop_reason(*, rows: list[dict[str, Any]], crawl_date: str) -> str | None:
+def _date_scan_summary(
+    *,
+    rows: list[dict[str, Any]],
+    crawl_date: str,
+    page_size: int,
+) -> dict[str, Any]:
     row_dates = [_row_publish_date(row) for row in rows]
     dated = [value for value in row_dates if value]
-    if dated and any(value < crawl_date for value in dated):
-        return "older_than_target_date"
-    return None
+    date_counts = Counter(dated)
+    target_row_count = date_counts.get(crawl_date, 0)
+    older_row_count = sum(count for value, count in date_counts.items() if value < crawl_date)
+    newer_row_count = sum(count for value, count in date_counts.items() if value > crawl_date)
+    latest_date = max(dated) if dated else None
+    oldest_date = min(dated) if dated else None
+    stop_reason: str | None = None
+    if not rows:
+        stop_reason = "empty_page"
+    elif older_row_count > 0:
+        stop_reason = "older_than_target_date"
+    elif target_row_count > 0 and len(rows) < max(1, int(page_size)):
+        stop_reason = "target_date_exhausted"
+    elif target_row_count > 0 and oldest_date and oldest_date > crawl_date:
+        stop_reason = "target_date_exhausted"
+    return {
+        "date_counts": date_counts,
+        "target_row_count": target_row_count,
+        "older_row_count": older_row_count,
+        "newer_row_count": newer_row_count,
+        "latest_provider_publish_date": latest_date,
+        "oldest_provider_publish_date": oldest_date,
+        "stop_reason": stop_reason,
+    }
+
+
+def _instrument_status(
+    *,
+    provider_rows: list[dict[str, Any]],
+    target_row_count: int,
+    question_failures: list[dict[str, str | int]],
+) -> str:
+    if question_failures:
+        return "question_failed"
+    if target_row_count > 0:
+        return "has_target_date"
+    if provider_rows:
+        return "no_target_date"
+    return "no_rows"
+
+
+def _max_date(left: str | None, right: str | None) -> str | None:
+    if not left:
+        return right
+    if not right:
+        return left
+    return max(left, right)
+
+
+def _min_date(left: str | None, right: str | None) -> str | None:
+    if not left:
+        return right
+    if not right:
+        return left
+    return min(left, right)
 
 
 def _row_publish_date(row: dict[str, Any]) -> str | None:
@@ -768,6 +1009,20 @@ def _slug(value: str) -> str:
 
 def _timestamp() -> str:
     return datetime.now().replace(microsecond=0).isoformat(" ")
+
+
+def _effective_max_pages(value: int | None) -> int | None:
+    if value is not None:
+        return max(1, int(value))
+    raw = os.environ.get("QDC_INVESTOR_INTERACTION_DEFAULT_MAX_PAGES")
+    if raw and raw.strip().lower() in {"0", "all", "none", "unlimited"}:
+        return None
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return DEFAULT_INSTRUMENT_MAX_PAGES
+    return DEFAULT_INSTRUMENT_MAX_PAGES
 
 
 def _unfiltered_instrument_limit(value: int | None = None) -> int | None:

@@ -3300,6 +3300,7 @@ def test_qdc_crawl_daily_collects_cninfo_investor_interactions(
 
     monkeypatch.setattr(requests, "post", fake_post)
     monkeypatch.setenv("QDC_INVESTOR_INTERACTION_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("QDC_INVESTOR_INTERACTION_DISABLE_SESSION", "1")
 
     assert (
         main(
@@ -3420,6 +3421,7 @@ def test_qdc_crawl_daily_investor_interaction_tolerates_one_question_failure(
 
     monkeypatch.setattr(requests, "post", fake_post)
     monkeypatch.setenv("QDC_INVESTOR_INTERACTION_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("QDC_INVESTOR_INTERACTION_DISABLE_SESSION", "1")
 
     assert (
         main(
@@ -3548,6 +3550,7 @@ def test_qdc_crawl_daily_investor_interaction_uses_org_cache_and_stops_on_old_ro
 
     monkeypatch.setattr(requests, "post", fake_post)
     monkeypatch.setenv("QDC_INVESTOR_INTERACTION_REQUEST_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("QDC_INVESTOR_INTERACTION_DISABLE_SESSION", "1")
 
     assert (
         main(
@@ -3572,6 +3575,13 @@ def test_qdc_crawl_daily_investor_interaction_uses_org_cache_and_stops_on_old_ro
 
     assert requested_pages == [1, 2]
     assert database.silver_table_counts()["investor_interaction"] == 1
+    cache_payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    cache_item = cache_payload["items"]["002594"]
+    assert cache_item["org_status"] == "ok"
+    assert cache_item["question_status"] == "has_target_date"
+    assert cache_item["last_target_date"] == "2026-05-14"
+    assert cache_item["target_row_count"] == "1"
+    assert cache_item["page_count"] == "2"
 
 
 def test_qdc_crawl_exhausted_dataset_tolerates_one_failed_source() -> None:

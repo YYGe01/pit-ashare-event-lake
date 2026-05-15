@@ -924,9 +924,13 @@ def _run_one_crawl_task(
             "instrument_count",
             "instrument_parallelism",
             "instrument_limit",
+            "requested_max_pages",
+            "effective_max_pages",
             "request_count",
             "org_cache_hit_count",
             "org_cache_update_count",
+            "target_date_instrument_count",
+            "instrument_status_counts",
             "org_failure_count",
             "question_failure_count",
         ):
