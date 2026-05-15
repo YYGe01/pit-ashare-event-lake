@@ -6118,6 +6118,58 @@ def test_qdc_quality_records_issues_for_invalid_daily_bar(tmp_path: Path) -> Non
     ]
 
 
+def test_qdc_quality_issue_report_writes_github_markdown(tmp_path: Path, capsys) -> None:
+    config_path, database = _seed_research_rows(tmp_path)
+    silver = SilverStore(QdcSettings.from_yaml(config_path))
+    silver.upsert_daily_bar(
+        [
+            {
+                "trade_date": "2026-05-13",
+                "instrument": "SH600000",
+                "open": 10.0,
+                "high": 9.5,
+                "low": 10.5,
+                "close": 10.2,
+                "volume": 1000,
+                "source_id": "unit_test",
+            }
+        ]
+    )
+    assert main(["--config", str(config_path), "quality", "--dataset", "daily_bar"]) == 1
+    assert database.list_quality_issues(dataset="daily_bar")
+    capsys.readouterr()
+
+    report_path = tmp_path / "quality-report.md"
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "quality-issue-report",
+                "--dataset",
+                "daily_bar",
+                "--start",
+                "2026-05-13",
+                "--end",
+                "2026-05-13",
+                "--output",
+                str(report_path),
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    body = report_path.read_text(encoding="utf-8")
+
+    assert payload["status"] == "fail"
+    assert payload["issue_count"] == 2
+    assert payload["output"] == str(report_path)
+    assert "Data quality failure" in payload["title"]
+    assert "invalid_price_range" in body
+    assert "close_outside_range" in body
+    assert ".codex/skills/data-ops/SKILL.md" in body
+
+
 def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> None:
     config_path, database = _seed_research_rows(tmp_path)
     silver = SilverStore(QdcSettings.from_yaml(config_path))
