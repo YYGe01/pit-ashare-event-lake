@@ -54,24 +54,54 @@ daily_pipeline:
   crawl_documents: true
   crawl_source_id: null
   crawl_limit_tasks: null
-  crawl_page_size: 30
+  crawl_page_size: null
   crawl_max_pages: null
   crawl_pdf_limit: null
-  crawl_parallelism: 1
-  crawl_request_timeout_seconds: 30
-  crawl_source_timeout_seconds: 7200
-  crawl_instrument_parallelism: 8
-  crawl_instrument_limit: 0
-  crawl_interaction_schedule: cold-weekly
-  crawl_interaction_cold_no_data_days: 14
-  crawl_interaction_cold_check_interval_days: 7
-  crawl_interaction_cold_lookback_days: 14
-  crawl_interaction_unsupported_check_interval_days: 30
-  skip_crawl_pdf_download: true
+  crawl_parallelism: null
+  crawl_request_timeout_seconds: null
+  crawl_source_timeout_seconds: null
+  crawl_instrument_parallelism: null
+  crawl_instrument_limit: null
+  crawl_interaction_schedule: null
+  crawl_interaction_cold_no_data_days: null
+  crawl_interaction_cold_check_interval_days: null
+  crawl_interaction_cold_lookback_days: null
+  crawl_interaction_unsupported_check_interval_days: null
+  skip_crawl_pdf_download: null
   skip_factors: false
   skip_sync: false
   skip_quality: false
   skip_export: false
+
+crawl_daily:
+  date: null
+  source_id: null
+  symbols: null
+  limit_tasks: null
+  page_size: 30
+  max_pages: null
+  pdf_limit: null
+  parallel_sources: 1
+  request_timeout_seconds: 30
+  source_timeout_seconds: 900
+  instrument_parallelism: 8
+  instrument_limit: 0
+  interaction_schedule: cold-weekly
+  interaction_cold_no_data_days: 14
+  interaction_cold_check_interval_days: 7
+  interaction_cold_lookback_days: 14
+  interaction_unsupported_check_interval_days: 30
+  skip_pdf_download: true
+  watch: false
+  plan_only: false
+  control_only: false
+  source_overrides:
+    sse_announcement:
+      page_size: 500
+      request_timeout_seconds: 120
+      source_timeout_seconds: 900
+    cninfo_investor_interaction:
+      source_timeout_seconds: 7200
 
 llm:
   text_event:

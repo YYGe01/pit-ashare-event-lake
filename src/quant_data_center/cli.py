@@ -47,7 +47,7 @@ from quant_data_center.factor_engine import build_text_event_classifier
 from quant_data_center.factors import FactorBuilder
 from quant_data_center.jobs.backfill import parse_date, parse_symbols, plan_backfill_tasks
 from quant_data_center.quality import QualityChecker
-from quant_data_center.settings import QdcSettings
+from quant_data_center.settings import CrawlOptionsSettings, QdcSettings
 from quant_data_center.storage.database import QdcDatabase
 from quant_data_center.storage.parquet import QdcParquetSync
 
@@ -83,6 +83,21 @@ DEFAULT_CRAWL_SOURCE_PARALLELISM = 1
 DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS = 30.0
 DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS = 180.0
 DEFAULT_DAILY_TASK_PARALLELISM = 1
+CRAWL_RUNTIME_OPTION_KEYS = {
+    "page_size",
+    "max_pages",
+    "download_pdfs",
+    "pdf_limit",
+    "request_timeout_seconds",
+    "source_timeout_seconds",
+    "instrument_parallelism",
+    "instrument_limit",
+    "interaction_schedule",
+    "interaction_cold_no_data_days",
+    "interaction_cold_check_interval_days",
+    "interaction_cold_lookback_days",
+    "interaction_unsupported_check_interval_days",
+}
 
 
 def default_config_path() -> Path:
@@ -583,10 +598,150 @@ def cmd_crawl_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _crawl_config_option(
+    args: argparse.Namespace,
+    settings: QdcSettings,
+    name: str,
+    fallback: Any = None,
+) -> Any:
+    value = getattr(args, name, None)
+    if value is not None:
+        return value
+    value = getattr(settings.crawl_daily, name, None)
+    if value is not None:
+        return value
+    return fallback
+
+
+def _crawl_cli_runtime_option_names(args: argparse.Namespace) -> set[str]:
+    names = {
+        "page_size",
+        "max_pages",
+        "pdf_limit",
+        "request_timeout_seconds",
+        "source_timeout_seconds",
+        "instrument_parallelism",
+        "instrument_limit",
+        "interaction_schedule",
+        "interaction_cold_no_data_days",
+        "interaction_cold_check_interval_days",
+        "interaction_cold_lookback_days",
+        "interaction_unsupported_check_interval_days",
+    }
+    result = {name for name in names if getattr(args, name, None) is not None}
+    if getattr(args, "skip_pdf_download", None) is not None:
+        result.add("download_pdfs")
+    return result
+
+
+def _crawl_source_runtime_overrides(
+    *,
+    settings: QdcSettings,
+    cli_runtime_option_names: set[str],
+) -> dict[str, dict[str, Any]]:
+    overrides: dict[str, dict[str, Any]] = {}
+    for source_id, options in settings.crawl_daily.source_overrides.items():
+        runtime_options = _crawl_options_to_runtime_dict(options)
+        effective = {
+            key: value
+            for key, value in runtime_options.items()
+            if key not in cli_runtime_option_names and value is not None
+        }
+        if effective:
+            overrides[source_id] = effective
+    return overrides
+
+
+def _crawl_options_to_runtime_dict(options: CrawlOptionsSettings) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "page_size": options.page_size,
+        "max_pages": options.max_pages,
+        "pdf_limit": options.pdf_limit,
+        "request_timeout_seconds": options.request_timeout_seconds,
+        "source_timeout_seconds": options.source_timeout_seconds,
+        "instrument_parallelism": options.instrument_parallelism,
+        "instrument_limit": options.instrument_limit,
+        "interaction_schedule": options.interaction_schedule,
+        "interaction_cold_no_data_days": options.interaction_cold_no_data_days,
+        "interaction_cold_check_interval_days": (
+            options.interaction_cold_check_interval_days
+        ),
+        "interaction_cold_lookback_days": options.interaction_cold_lookback_days,
+        "interaction_unsupported_check_interval_days": (
+            options.interaction_unsupported_check_interval_days
+        ),
+    }
+    if options.skip_pdf_download is not None:
+        result["download_pdfs"] = not options.skip_pdf_download
+    return result
+
+
 def cmd_crawl_run(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     database = QdcDatabase(settings)
     database.init_schema()
+    page_size = int(_crawl_config_option(args, settings, "page_size", 30))
+    max_pages = _crawl_config_option(args, settings, "max_pages")
+    pdf_limit = _crawl_config_option(args, settings, "pdf_limit")
+    parallel_sources = int(
+        _crawl_config_option(
+            args,
+            settings,
+            "parallel_sources",
+            DEFAULT_CRAWL_SOURCE_PARALLELISM,
+        )
+    )
+    request_timeout_seconds = float(
+        _crawl_config_option(
+            args,
+            settings,
+            "request_timeout_seconds",
+            DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
+        )
+    )
+    source_timeout_seconds = _crawl_config_option(
+        args,
+        settings,
+        "source_timeout_seconds",
+        DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
+    )
+    if source_timeout_seconds is not None:
+        source_timeout_seconds = float(source_timeout_seconds)
+    skip_pdf_download = bool(
+        _crawl_config_option(args, settings, "skip_pdf_download", True)
+    )
+    instrument_parallelism = _crawl_config_option(
+        args,
+        settings,
+        "instrument_parallelism",
+    )
+    instrument_limit = _crawl_config_option(args, settings, "instrument_limit")
+    interaction_schedule = _crawl_config_option(args, settings, "interaction_schedule")
+    interaction_cold_no_data_days = _crawl_config_option(
+        args,
+        settings,
+        "interaction_cold_no_data_days",
+    )
+    interaction_cold_check_interval_days = _crawl_config_option(
+        args,
+        settings,
+        "interaction_cold_check_interval_days",
+    )
+    interaction_cold_lookback_days = _crawl_config_option(
+        args,
+        settings,
+        "interaction_cold_lookback_days",
+    )
+    interaction_unsupported_check_interval_days = _crawl_config_option(
+        args,
+        settings,
+        "interaction_unsupported_check_interval_days",
+    )
+    cli_runtime_option_names = _crawl_cli_runtime_option_names(args)
+    source_runtime_overrides = _crawl_source_runtime_overrides(
+        settings=settings,
+        cli_runtime_option_names=cli_runtime_option_names,
+    )
     if args.source_id:
         database.upsert_crawler_source(crawler_source_spec(args.source_id).to_record())
     task_status = "failed" if args.retry_failed else "pending"
@@ -624,23 +779,24 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
         database=database,
         tasks=tasks,
         control_only=bool(args.control_only),
-        page_size=args.page_size,
-        max_pages=args.max_pages,
-        download_pdfs=not bool(args.skip_pdf_download),
-        pdf_limit=args.pdf_limit,
+        page_size=page_size,
+        max_pages=max_pages,
+        download_pdfs=not skip_pdf_download,
+        pdf_limit=pdf_limit,
         instrument_filter=instrument_filter,
-        parallelism=args.parallel_sources,
-        request_timeout_seconds=args.request_timeout_seconds,
-        source_timeout_seconds=args.source_timeout_seconds,
-        instrument_parallelism=args.instrument_parallelism,
-        instrument_limit=args.instrument_limit,
-        interaction_schedule=args.interaction_schedule,
-        interaction_cold_no_data_days=args.interaction_cold_no_data_days,
-        interaction_cold_check_interval_days=args.interaction_cold_check_interval_days,
-        interaction_cold_lookback_days=args.interaction_cold_lookback_days,
+        parallelism=parallel_sources,
+        request_timeout_seconds=request_timeout_seconds,
+        source_timeout_seconds=source_timeout_seconds,
+        instrument_parallelism=instrument_parallelism,
+        instrument_limit=instrument_limit,
+        interaction_schedule=interaction_schedule,
+        interaction_cold_no_data_days=interaction_cold_no_data_days,
+        interaction_cold_check_interval_days=interaction_cold_check_interval_days,
+        interaction_cold_lookback_days=interaction_cold_lookback_days,
         interaction_unsupported_check_interval_days=(
-            args.interaction_unsupported_check_interval_days
+            interaction_unsupported_check_interval_days
         ),
+        source_runtime_overrides=source_runtime_overrides,
         watch=bool(args.watch),
     )
     run_id = database.record_crawl_run(
@@ -656,26 +812,27 @@ def cmd_crawl_run(args: argparse.Namespace) -> int:
             "control_only": bool(args.control_only),
             "retry_failed": bool(args.retry_failed),
             "task_status": task_status,
-            "page_size": args.page_size,
-            "max_pages": args.max_pages,
-            "download_pdfs": not bool(args.skip_pdf_download),
-            "pdf_limit": args.pdf_limit,
+            "page_size": page_size,
+            "max_pages": max_pages,
+            "download_pdfs": not skip_pdf_download,
+            "pdf_limit": pdf_limit,
             "instrument_filter_mode": instrument_filter_mode,
             "instrument_filter_count": len(instrument_filter or []),
             "instrument_filter_preview": (instrument_filter or [])[:10],
             "stock_basic_mapping": stock_basic_mapping,
-            "parallel_sources": args.parallel_sources,
-            "instrument_parallelism": args.instrument_parallelism,
-            "instrument_limit": args.instrument_limit,
-            "interaction_schedule": args.interaction_schedule,
-            "interaction_cold_no_data_days": args.interaction_cold_no_data_days,
-            "interaction_cold_check_interval_days": args.interaction_cold_check_interval_days,
-            "interaction_cold_lookback_days": args.interaction_cold_lookback_days,
+            "parallel_sources": parallel_sources,
+            "instrument_parallelism": instrument_parallelism,
+            "instrument_limit": instrument_limit,
+            "interaction_schedule": interaction_schedule,
+            "interaction_cold_no_data_days": interaction_cold_no_data_days,
+            "interaction_cold_check_interval_days": interaction_cold_check_interval_days,
+            "interaction_cold_lookback_days": interaction_cold_lookback_days,
             "interaction_unsupported_check_interval_days": (
-                args.interaction_unsupported_check_interval_days
+                interaction_unsupported_check_interval_days
             ),
-            "request_timeout_seconds": args.request_timeout_seconds,
-            "source_timeout_seconds": args.source_timeout_seconds,
+            "request_timeout_seconds": request_timeout_seconds,
+            "source_timeout_seconds": source_timeout_seconds,
+            "source_overrides": source_runtime_overrides,
         },
     )
     _print_json(
@@ -694,9 +851,80 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
     settings = load_settings(args.config)
     database = QdcDatabase(settings)
     database.init_schema()
-    crawl_date = parse_date(args.date).isoformat() if args.date else _today(settings)
+    date_value = args.date if args.date is not None else settings.crawl_daily.date
+    source_id = (
+        args.source_id if args.source_id is not None else settings.crawl_daily.source_id
+    )
+    symbols_arg = args.symbols if args.symbols is not None else settings.crawl_daily.symbols
+    limit_tasks = _crawl_config_option(args, settings, "limit_tasks")
+    page_size = int(_crawl_config_option(args, settings, "page_size", 30))
+    max_pages = _crawl_config_option(args, settings, "max_pages")
+    pdf_limit = _crawl_config_option(args, settings, "pdf_limit")
+    parallel_sources = int(
+        _crawl_config_option(
+            args,
+            settings,
+            "parallel_sources",
+            DEFAULT_CRAWL_SOURCE_PARALLELISM,
+        )
+    )
+    request_timeout_seconds = float(
+        _crawl_config_option(
+            args,
+            settings,
+            "request_timeout_seconds",
+            DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
+        )
+    )
+    source_timeout_seconds = _crawl_config_option(
+        args,
+        settings,
+        "source_timeout_seconds",
+        DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
+    )
+    if source_timeout_seconds is not None:
+        source_timeout_seconds = float(source_timeout_seconds)
+    skip_pdf_download = bool(
+        _crawl_config_option(args, settings, "skip_pdf_download", True)
+    )
+    instrument_parallelism = _crawl_config_option(
+        args,
+        settings,
+        "instrument_parallelism",
+    )
+    instrument_limit = _crawl_config_option(args, settings, "instrument_limit")
+    interaction_schedule = _crawl_config_option(args, settings, "interaction_schedule")
+    interaction_cold_no_data_days = _crawl_config_option(
+        args,
+        settings,
+        "interaction_cold_no_data_days",
+    )
+    interaction_cold_check_interval_days = _crawl_config_option(
+        args,
+        settings,
+        "interaction_cold_check_interval_days",
+    )
+    interaction_cold_lookback_days = _crawl_config_option(
+        args,
+        settings,
+        "interaction_cold_lookback_days",
+    )
+    interaction_unsupported_check_interval_days = _crawl_config_option(
+        args,
+        settings,
+        "interaction_unsupported_check_interval_days",
+    )
+    watch = bool(_crawl_config_option(args, settings, "watch", False))
+    plan_only = bool(_crawl_config_option(args, settings, "plan_only", False))
+    control_only = bool(_crawl_config_option(args, settings, "control_only", False))
+    cli_runtime_option_names = _crawl_cli_runtime_option_names(args)
+    source_runtime_overrides = _crawl_source_runtime_overrides(
+        settings=settings,
+        cli_runtime_option_names=cli_runtime_option_names,
+    )
+    crawl_date = parse_date(date_value).isoformat() if date_value else _today(settings)
     planned = []
-    for spec in enabled_daily_source_specs(args.source_id):
+    for spec in enabled_daily_source_specs(source_id):
         planned.extend(
             _plan_crawl_tasks(
                 database=database,
@@ -704,7 +932,7 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
                 crawl_date=crawl_date,
             )
         )
-    if args.plan_only:
+    if plan_only:
         _print_json(
             {
                 "status": "ok",
@@ -719,14 +947,14 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
     tasks = _order_crawl_tasks(
         [
             task
-            for task in database.list_crawl_tasks(source_id=args.source_id)
+            for task in database.list_crawl_tasks(source_id=source_id)
             if task["crawl_date"] == crawl_date and task["status"] in retryable_statuses
         ]
     )
-    selected_tasks = tasks[: args.limit_tasks] if args.limit_tasks else tasks
+    selected_tasks = tasks[:limit_tasks] if limit_tasks else tasks
     instrument_filter, instrument_filter_mode = _resolve_crawl_document_instrument_filter(
         settings=settings,
-        symbols_arg=args.symbols,
+        symbols_arg=symbols_arg,
         crawl_date=crawl_date,
     )
     stock_basic_mapping = _ensure_stock_basic_for_document_mapping(
@@ -740,30 +968,31 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         settings=settings,
         database=database,
         tasks=selected_tasks,
-        control_only=bool(args.control_only),
-        page_size=args.page_size,
-        max_pages=args.max_pages,
-        download_pdfs=not bool(args.skip_pdf_download),
-        pdf_limit=args.pdf_limit,
+        control_only=control_only,
+        page_size=page_size,
+        max_pages=max_pages,
+        download_pdfs=not skip_pdf_download,
+        pdf_limit=pdf_limit,
         instrument_filter=instrument_filter,
-        parallelism=args.parallel_sources,
-        request_timeout_seconds=args.request_timeout_seconds,
-        source_timeout_seconds=args.source_timeout_seconds,
-        instrument_parallelism=args.instrument_parallelism,
-        instrument_limit=args.instrument_limit,
-        interaction_schedule=args.interaction_schedule,
-        interaction_cold_no_data_days=args.interaction_cold_no_data_days,
-        interaction_cold_check_interval_days=args.interaction_cold_check_interval_days,
-        interaction_cold_lookback_days=args.interaction_cold_lookback_days,
+        parallelism=parallel_sources,
+        request_timeout_seconds=request_timeout_seconds,
+        source_timeout_seconds=source_timeout_seconds,
+        instrument_parallelism=instrument_parallelism,
+        instrument_limit=instrument_limit,
+        interaction_schedule=interaction_schedule,
+        interaction_cold_no_data_days=interaction_cold_no_data_days,
+        interaction_cold_check_interval_days=interaction_cold_check_interval_days,
+        interaction_cold_lookback_days=interaction_cold_lookback_days,
         interaction_unsupported_check_interval_days=(
-            args.interaction_unsupported_check_interval_days
+            interaction_unsupported_check_interval_days
         ),
-        watch=bool(args.watch),
+        source_runtime_overrides=source_runtime_overrides,
+        watch=watch,
     )
     status = "partial" if has_failures or len(selected_tasks) < len(tasks) else "ok"
     run_id = database.record_crawl_run(
         status="success" if status == "ok" else "failed",
-        source_id=args.source_id,
+        source_id=source_id,
         crawl_date=crawl_date,
         planned_count=len(planned),
         success_count=sum(1 for item in results if item["status"] == "success"),
@@ -771,31 +1000,32 @@ def cmd_crawl_daily(args: argparse.Namespace) -> int:
         document_count=sum(int(item.get("document_count", 0)) for item in results),
         raw_object_count=sum(int(item.get("raw_object_count", 0)) for item in results),
         parameters={
-            "control_only": bool(args.control_only),
+            "control_only": control_only,
             "force": bool(args.force),
             "ran_count": len(results),
             "remaining_task_count": len(tasks) - len(selected_tasks),
             "selected_task_statuses": sorted(retryable_statuses),
-            "page_size": args.page_size,
-            "max_pages": args.max_pages,
-            "download_pdfs": not bool(args.skip_pdf_download),
-            "pdf_limit": args.pdf_limit,
+            "page_size": page_size,
+            "max_pages": max_pages,
+            "download_pdfs": not skip_pdf_download,
+            "pdf_limit": pdf_limit,
             "instrument_filter_mode": instrument_filter_mode,
             "instrument_filter_count": len(instrument_filter or []),
             "instrument_filter_preview": (instrument_filter or [])[:10],
             "stock_basic_mapping": stock_basic_mapping,
-            "parallel_sources": args.parallel_sources,
-            "instrument_parallelism": args.instrument_parallelism,
-            "instrument_limit": args.instrument_limit,
-            "interaction_schedule": args.interaction_schedule,
-            "interaction_cold_no_data_days": args.interaction_cold_no_data_days,
-            "interaction_cold_check_interval_days": args.interaction_cold_check_interval_days,
-            "interaction_cold_lookback_days": args.interaction_cold_lookback_days,
+            "parallel_sources": parallel_sources,
+            "instrument_parallelism": instrument_parallelism,
+            "instrument_limit": instrument_limit,
+            "interaction_schedule": interaction_schedule,
+            "interaction_cold_no_data_days": interaction_cold_no_data_days,
+            "interaction_cold_check_interval_days": interaction_cold_check_interval_days,
+            "interaction_cold_lookback_days": interaction_cold_lookback_days,
             "interaction_unsupported_check_interval_days": (
-                args.interaction_unsupported_check_interval_days
+                interaction_unsupported_check_interval_days
             ),
-            "request_timeout_seconds": args.request_timeout_seconds,
-            "source_timeout_seconds": args.source_timeout_seconds,
+            "request_timeout_seconds": request_timeout_seconds,
+            "source_timeout_seconds": source_timeout_seconds,
+            "source_overrides": source_runtime_overrides,
         },
     )
     _print_json(
@@ -897,6 +1127,7 @@ def _run_crawl_tasks(
     interaction_cold_check_interval_days: int | None = None,
     interaction_cold_lookback_days: int | None = None,
     interaction_unsupported_check_interval_days: int | None = None,
+    source_runtime_overrides: dict[str, dict[str, Any]] | None = None,
     watch: bool = False,
 ) -> tuple[list[dict[str, Any]], bool]:
     total_tasks = len(tasks)
@@ -929,6 +1160,7 @@ def _run_crawl_tasks(
                 interaction_unsupported_check_interval_days=(
                     interaction_unsupported_check_interval_days
                 ),
+                source_runtime_overrides=source_runtime_overrides,
                 watch=watch,
             )
             for index, task in task_items
@@ -965,6 +1197,7 @@ def _run_crawl_tasks(
                     interaction_unsupported_check_interval_days=(
                         interaction_unsupported_check_interval_days
                     ),
+                    source_runtime_overrides=source_runtime_overrides,
                     watch=watch,
                 )
                 for index, task in task_items
@@ -974,6 +1207,47 @@ def _run_crawl_tasks(
     results = [item[1] for item in ordered]
     has_failures = any(item["status"] == "failed" for item in results)
     return results, has_failures
+
+
+def _effective_crawl_runtime_options(
+    *,
+    source_id: str,
+    source_runtime_overrides: dict[str, dict[str, Any]] | None,
+    page_size: int,
+    max_pages: int | None,
+    download_pdfs: bool,
+    pdf_limit: int | None,
+    request_timeout_seconds: float,
+    source_timeout_seconds: float | None,
+    instrument_parallelism: int | None,
+    instrument_limit: int | None,
+    interaction_schedule: str | None,
+    interaction_cold_no_data_days: int | None,
+    interaction_cold_check_interval_days: int | None,
+    interaction_cold_lookback_days: int | None,
+    interaction_unsupported_check_interval_days: int | None,
+) -> dict[str, Any]:
+    options = {
+        "page_size": page_size,
+        "max_pages": max_pages,
+        "download_pdfs": download_pdfs,
+        "pdf_limit": pdf_limit,
+        "request_timeout_seconds": request_timeout_seconds,
+        "source_timeout_seconds": source_timeout_seconds,
+        "instrument_parallelism": instrument_parallelism,
+        "instrument_limit": instrument_limit,
+        "interaction_schedule": interaction_schedule,
+        "interaction_cold_no_data_days": interaction_cold_no_data_days,
+        "interaction_cold_check_interval_days": interaction_cold_check_interval_days,
+        "interaction_cold_lookback_days": interaction_cold_lookback_days,
+        "interaction_unsupported_check_interval_days": (
+            interaction_unsupported_check_interval_days
+        ),
+    }
+    for key, value in (source_runtime_overrides or {}).get(source_id, {}).items():
+        if key in CRAWL_RUNTIME_OPTION_KEYS:
+            options[key] = value
+    return options
 
 
 def _run_one_crawl_task(
@@ -998,12 +1272,32 @@ def _run_one_crawl_task(
     interaction_cold_check_interval_days: int | None,
     interaction_cold_lookback_days: int | None,
     interaction_unsupported_check_interval_days: int | None,
+    source_runtime_overrides: dict[str, dict[str, Any]] | None,
     watch: bool,
 ) -> tuple[int, dict[str, Any]]:
     task_id = str(task["task_id"])
     source_id = str(task["source_id"])
     dataset = str(task["dataset"])
     crawl_date = str(task["crawl_date"])
+    effective_options = _effective_crawl_runtime_options(
+        source_id=source_id,
+        source_runtime_overrides=source_runtime_overrides,
+        page_size=page_size,
+        max_pages=max_pages,
+        download_pdfs=download_pdfs,
+        pdf_limit=pdf_limit,
+        request_timeout_seconds=request_timeout_seconds,
+        source_timeout_seconds=source_timeout_seconds,
+        instrument_parallelism=instrument_parallelism,
+        instrument_limit=instrument_limit,
+        interaction_schedule=interaction_schedule,
+        interaction_cold_no_data_days=interaction_cold_no_data_days,
+        interaction_cold_check_interval_days=interaction_cold_check_interval_days,
+        interaction_cold_lookback_days=interaction_cold_lookback_days,
+        interaction_unsupported_check_interval_days=(
+            interaction_unsupported_check_interval_days
+        ),
+    )
     _watch_print(
         watch,
         f"{_watch_task_prefix(phase='CRAWL', index=index, total=total_tasks)} RUNNING task_id={task_id} source={source_id} dataset={dataset} date={crawl_date}",
@@ -1016,21 +1310,27 @@ def _run_one_crawl_task(
             result = _run_real_crawl_task(
                 settings=settings,
                 task=task,
-                page_size=page_size,
-                max_pages=max_pages,
-                download_pdfs=download_pdfs,
-                pdf_limit=pdf_limit,
+                page_size=effective_options["page_size"],
+                max_pages=effective_options["max_pages"],
+                download_pdfs=effective_options["download_pdfs"],
+                pdf_limit=effective_options["pdf_limit"],
                 instrument_filter=instrument_filter,
-                request_timeout_seconds=request_timeout_seconds,
-                source_timeout_seconds=source_timeout_seconds,
-                instrument_parallelism=instrument_parallelism,
-                instrument_limit=instrument_limit,
-                interaction_schedule=interaction_schedule,
-                interaction_cold_no_data_days=interaction_cold_no_data_days,
-                interaction_cold_check_interval_days=interaction_cold_check_interval_days,
-                interaction_cold_lookback_days=interaction_cold_lookback_days,
+                request_timeout_seconds=effective_options["request_timeout_seconds"],
+                source_timeout_seconds=effective_options["source_timeout_seconds"],
+                instrument_parallelism=effective_options["instrument_parallelism"],
+                instrument_limit=effective_options["instrument_limit"],
+                interaction_schedule=effective_options["interaction_schedule"],
+                interaction_cold_no_data_days=(
+                    effective_options["interaction_cold_no_data_days"]
+                ),
+                interaction_cold_check_interval_days=(
+                    effective_options["interaction_cold_check_interval_days"]
+                ),
+                interaction_cold_lookback_days=(
+                    effective_options["interaction_cold_lookback_days"]
+                ),
                 interaction_unsupported_check_interval_days=(
-                    interaction_unsupported_check_interval_days
+                    effective_options["interaction_unsupported_check_interval_days"]
                 ),
             )
         database.finish_crawl_task(task_id=task_id, status="success")
@@ -1382,6 +1682,54 @@ def _daily_pipeline_option(
     return fallback
 
 
+def _daily_pipeline_crawl_option(
+    args: argparse.Namespace,
+    settings: QdcSettings,
+    pipeline_name: str,
+    crawl_name: str,
+    fallback: Any = None,
+) -> Any:
+    cli_value = getattr(args, pipeline_name)
+    if cli_value is not None:
+        return cli_value
+    pipeline_value = getattr(settings.daily_pipeline, pipeline_name)
+    if pipeline_value is not None:
+        return pipeline_value
+    crawl_value = getattr(settings.crawl_daily, crawl_name)
+    if crawl_value is not None:
+        return crawl_value
+    return fallback
+
+
+def _daily_pipeline_cli_crawl_runtime_option_names(args: argparse.Namespace) -> set[str]:
+    mapping = {
+        "crawl_page_size": "page_size",
+        "crawl_max_pages": "max_pages",
+        "crawl_pdf_limit": "pdf_limit",
+        "crawl_request_timeout_seconds": "request_timeout_seconds",
+        "crawl_source_timeout_seconds": "source_timeout_seconds",
+        "crawl_instrument_parallelism": "instrument_parallelism",
+        "crawl_instrument_limit": "instrument_limit",
+        "crawl_interaction_schedule": "interaction_schedule",
+        "crawl_interaction_cold_no_data_days": "interaction_cold_no_data_days",
+        "crawl_interaction_cold_check_interval_days": (
+            "interaction_cold_check_interval_days"
+        ),
+        "crawl_interaction_cold_lookback_days": "interaction_cold_lookback_days",
+        "crawl_interaction_unsupported_check_interval_days": (
+            "interaction_unsupported_check_interval_days"
+        ),
+    }
+    result = {
+        runtime_name
+        for cli_name, runtime_name in mapping.items()
+        if getattr(args, cli_name, None) is not None
+    }
+    if getattr(args, "skip_crawl_pdf_download", None) is not None:
+        result.add("download_pdfs")
+    return result
+
+
 def _daily_pipeline_source_ids(
     *,
     args: argparse.Namespace,
@@ -1435,71 +1783,107 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
     crawl_documents = bool(_daily_pipeline_option(args, settings, "crawl_documents", False))
     crawl_source_id = _daily_pipeline_option(args, settings, "crawl_source_id")
     crawl_limit_tasks = _daily_pipeline_option(args, settings, "crawl_limit_tasks")
-    crawl_page_size = int(_daily_pipeline_option(args, settings, "crawl_page_size", 30))
-    crawl_max_pages = _daily_pipeline_option(args, settings, "crawl_max_pages")
-    crawl_pdf_limit = _daily_pipeline_option(args, settings, "crawl_pdf_limit")
+    crawl_page_size = int(
+        _daily_pipeline_crawl_option(args, settings, "crawl_page_size", "page_size", 30)
+    )
+    crawl_max_pages = _daily_pipeline_crawl_option(
+        args,
+        settings,
+        "crawl_max_pages",
+        "max_pages",
+    )
+    crawl_pdf_limit = _daily_pipeline_crawl_option(
+        args,
+        settings,
+        "crawl_pdf_limit",
+        "pdf_limit",
+    )
     crawl_parallelism = int(
-        _daily_pipeline_option(
+        _daily_pipeline_crawl_option(
             args,
             settings,
             "crawl_parallelism",
+            "parallel_sources",
             DEFAULT_CRAWL_SOURCE_PARALLELISM,
         )
     )
-    crawl_instrument_parallelism = _daily_pipeline_option(
+    crawl_instrument_parallelism = _daily_pipeline_crawl_option(
         args,
         settings,
         "crawl_instrument_parallelism",
+        "instrument_parallelism",
     )
-    crawl_instrument_limit = _daily_pipeline_option(args, settings, "crawl_instrument_limit")
-    crawl_interaction_schedule = _daily_pipeline_option(
+    crawl_instrument_limit = _daily_pipeline_crawl_option(
+        args,
+        settings,
+        "crawl_instrument_limit",
+        "instrument_limit",
+    )
+    crawl_interaction_schedule = _daily_pipeline_crawl_option(
         args,
         settings,
         "crawl_interaction_schedule",
+        "interaction_schedule",
     )
-    crawl_interaction_cold_no_data_days = _daily_pipeline_option(
+    crawl_interaction_cold_no_data_days = _daily_pipeline_crawl_option(
         args,
         settings,
         "crawl_interaction_cold_no_data_days",
+        "interaction_cold_no_data_days",
     )
-    crawl_interaction_cold_check_interval_days = _daily_pipeline_option(
+    crawl_interaction_cold_check_interval_days = _daily_pipeline_crawl_option(
         args,
         settings,
         "crawl_interaction_cold_check_interval_days",
+        "interaction_cold_check_interval_days",
     )
-    crawl_interaction_cold_lookback_days = _daily_pipeline_option(
+    crawl_interaction_cold_lookback_days = _daily_pipeline_crawl_option(
         args,
         settings,
         "crawl_interaction_cold_lookback_days",
+        "interaction_cold_lookback_days",
     )
-    crawl_interaction_unsupported_check_interval_days = _daily_pipeline_option(
+    crawl_interaction_unsupported_check_interval_days = _daily_pipeline_crawl_option(
         args,
         settings,
         "crawl_interaction_unsupported_check_interval_days",
+        "interaction_unsupported_check_interval_days",
     )
     crawl_request_timeout_seconds = float(
-        _daily_pipeline_option(
+        _daily_pipeline_crawl_option(
             args,
             settings,
             "crawl_request_timeout_seconds",
+            "request_timeout_seconds",
             DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
         )
     )
-    crawl_source_timeout_seconds = _daily_pipeline_option(
+    crawl_source_timeout_seconds = _daily_pipeline_crawl_option(
         args,
         settings,
         "crawl_source_timeout_seconds",
+        "source_timeout_seconds",
         DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
     )
     if crawl_source_timeout_seconds is not None:
         crawl_source_timeout_seconds = float(crawl_source_timeout_seconds)
     skip_crawl_pdf_download = bool(
-        _daily_pipeline_option(args, settings, "skip_crawl_pdf_download", True)
+        _daily_pipeline_crawl_option(
+            args,
+            settings,
+            "skip_crawl_pdf_download",
+            "skip_pdf_download",
+            True,
+        )
     )
     skip_factors = bool(_daily_pipeline_option(args, settings, "skip_factors", False))
     skip_sync = bool(_daily_pipeline_option(args, settings, "skip_sync", False))
     skip_quality = bool(_daily_pipeline_option(args, settings, "skip_quality", False))
     skip_export = bool(_daily_pipeline_option(args, settings, "skip_export", False))
+    crawl_source_runtime_overrides = _crawl_source_runtime_overrides(
+        settings=settings,
+        cli_runtime_option_names=_daily_pipeline_cli_crawl_runtime_option_names(args),
+    )
 
     universe = _daily_task_universe(pipeline_universe, all_market=all_market)
     symbols = _resolve_daily_symbols(
@@ -1626,6 +2010,7 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
             interaction_unsupported_check_interval_days=(
                 crawl_interaction_unsupported_check_interval_days
             ),
+            source_runtime_overrides=crawl_source_runtime_overrides,
             watch=watch,
         )
         steps.append({"step": "crawl_documents", **crawl_result})
@@ -1796,6 +2181,7 @@ def _run_daily_pipeline_crawl_documents(
     interaction_cold_check_interval_days: int | None,
     interaction_cold_lookback_days: int | None,
     interaction_unsupported_check_interval_days: int | None,
+    source_runtime_overrides: dict[str, dict[str, Any]] | None,
     watch: bool,
 ) -> dict[str, Any]:
     _watch_print(
@@ -1841,6 +2227,7 @@ def _run_daily_pipeline_crawl_documents(
         interaction_unsupported_check_interval_days=(
             interaction_unsupported_check_interval_days
         ),
+        source_runtime_overrides=source_runtime_overrides,
         watch=watch,
     )
     remaining_task_count = len(tasks) - len(selected_tasks)
@@ -1884,6 +2271,7 @@ def _run_daily_pipeline_crawl_documents(
             "interaction_unsupported_check_interval_days": (
                 interaction_unsupported_check_interval_days
             ),
+            "source_overrides": source_runtime_overrides or {},
         },
     )
     return {
@@ -2573,13 +2961,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated instruments; announcement crawlers only persist matching instruments",
     )
     crawl_run_parser.add_argument("--limit-tasks", type=int)
-    crawl_run_parser.add_argument("--page-size", type=int, default=30)
+    crawl_run_parser.add_argument("--page-size", type=int)
     crawl_run_parser.add_argument("--max-pages", type=int)
     crawl_run_parser.add_argument("--pdf-limit", type=int)
     crawl_run_parser.add_argument(
         "--parallel-sources",
         type=int,
-        default=DEFAULT_CRAWL_SOURCE_PARALLELISM,
     )
     crawl_run_parser.add_argument(
         "--instrument-parallelism",
@@ -2595,18 +2982,16 @@ def build_parser() -> argparse.ArgumentParser:
     crawl_run_parser.add_argument(
         "--request-timeout-seconds",
         type=float,
-        default=DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
     )
     crawl_run_parser.add_argument(
         "--source-timeout-seconds",
         type=float,
-        default=DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
     )
     crawl_run_parser.add_argument(
         "--skip-pdf-download",
         dest="skip_pdf_download",
         action="store_true",
-        default=True,
+        default=None,
         help="Only collect announcement metadata; do not download public PDF files",
     )
     crawl_run_parser.add_argument(
@@ -2638,13 +3023,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated instruments; announcement crawlers only persist matching instruments",
     )
     crawl_daily_parser.add_argument("--limit-tasks", type=int)
-    crawl_daily_parser.add_argument("--page-size", type=int, default=30)
+    crawl_daily_parser.add_argument("--page-size", type=int)
     crawl_daily_parser.add_argument("--max-pages", type=int)
     crawl_daily_parser.add_argument("--pdf-limit", type=int)
     crawl_daily_parser.add_argument(
         "--parallel-sources",
         type=int,
-        default=DEFAULT_CRAWL_SOURCE_PARALLELISM,
     )
     crawl_daily_parser.add_argument(
         "--instrument-parallelism",
@@ -2660,18 +3044,16 @@ def build_parser() -> argparse.ArgumentParser:
     crawl_daily_parser.add_argument(
         "--request-timeout-seconds",
         type=float,
-        default=DEFAULT_CRAWL_REQUEST_TIMEOUT_SECONDS,
     )
     crawl_daily_parser.add_argument(
         "--source-timeout-seconds",
         type=float,
-        default=DEFAULT_CRAWL_SOURCE_TIMEOUT_SECONDS,
     )
     crawl_daily_parser.add_argument(
         "--skip-pdf-download",
         dest="skip_pdf_download",
         action="store_true",
-        default=True,
+        default=None,
         help="Only collect announcement metadata; do not download public PDF files",
     )
     crawl_daily_parser.add_argument(
@@ -2685,9 +3067,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Rerun existing crawl tasks for this date, including successful tasks",
     )
-    crawl_daily_parser.add_argument("--watch", action="store_true")
-    crawl_daily_parser.add_argument("--plan-only", action="store_true")
-    crawl_daily_parser.add_argument("--control-only", action="store_true")
+    crawl_daily_parser.add_argument("--watch", action="store_true", default=None)
+    crawl_daily_parser.add_argument("--plan-only", action="store_true", default=None)
+    crawl_daily_parser.add_argument("--control-only", action="store_true", default=None)
     crawl_daily_parser.set_defaults(func=cmd_crawl_daily)
 
     crawl_recover_parser = subparsers.add_parser(

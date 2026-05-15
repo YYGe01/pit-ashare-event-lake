@@ -3121,6 +3121,82 @@ def test_qdc_crawl_daily_retries_failed_same_day_task(
     assert database.silver_table_counts()["news"] == 1
 
 
+def test_qdc_crawl_daily_uses_config_defaults_and_source_overrides(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """
+crawl_daily:
+  page_size: 30
+  request_timeout_seconds: 30
+  source_timeout_seconds: 900
+  skip_pdf_download: true
+  source_overrides:
+    sse_announcement:
+      page_size: 500
+      request_timeout_seconds: 120
+      source_timeout_seconds: 900
+""",
+    )
+    captured: list[dict[str, object]] = []
+
+    class FakeSseAnnouncementCrawler:
+        def __init__(self, settings: QdcSettings) -> None:
+            self.settings = settings
+
+        def crawl_date(self, **kwargs) -> dict[str, object]:
+            captured.append(kwargs)
+            return {
+                "document_count": 1,
+                "raw_object_count": 1,
+                "provider_record_count": 1,
+                "pdf_downloaded_count": 0,
+                "pdf_failed_count": 0,
+                "pdf_skipped_count": 1,
+            }
+
+    monkeypatch.setattr(cli_module, "SseAnnouncementCrawler", FakeSseAnnouncementCrawler)
+
+    command = [
+        "--config",
+        str(config_path),
+        "crawl-daily",
+        "--date",
+        "2026-05-15",
+        "--source-id",
+        "sse_announcement",
+    ]
+    assert main(command) == 0
+    assert captured[-1]["page_size"] == 500
+    assert captured[-1]["request_timeout_seconds"] == 120
+    assert captured[-1]["source_timeout_seconds"] == 900
+    assert captured[-1]["download_pdfs"] is False
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    with database.connect() as conn:
+        crawl_parameters = json.loads(
+            conn.execute(
+                """
+                select parameters_json
+                from qdc_meta.crawl_run
+                order by created_at desc
+                limit 1
+                """
+            ).fetchone()[0]
+        )
+    assert crawl_parameters["page_size"] == 30
+    assert crawl_parameters["source_overrides"]["sse_announcement"] == {
+        "page_size": 500,
+        "request_timeout_seconds": 120.0,
+        "source_timeout_seconds": 900.0,
+    }
+
+    assert main([*command, "--force", "--page-size", "30"]) == 0
+    assert captured[-1]["page_size"] == 30
+    assert captured[-1]["request_timeout_seconds"] == 120
+
+
 def test_qdc_crawl_daily_bootstraps_stock_basic_for_news_mapping(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -4602,6 +4678,82 @@ daily_pipeline:
             "market_name": "csi300",
         }
     ]
+
+
+def test_qdc_daily_pipeline_crawl_documents_inherits_crawl_daily_config(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = _write_config(
+        tmp_path,
+        """
+daily_pipeline:
+  universe: csi300
+  source_id: akshare
+  source_ids:
+    - akshare
+  symbols: SH600000
+  batch_size: 1
+  crawl_documents: true
+  crawl_source_id: sse_announcement
+  skip_factors: true
+  skip_sync: true
+  skip_quality: true
+  skip_export: true
+crawl_daily:
+  page_size: 30
+  request_timeout_seconds: 30
+  source_timeout_seconds: 900
+  source_overrides:
+    sse_announcement:
+      page_size: 500
+      request_timeout_seconds: 120
+""",
+    )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "akshare",
+        SimpleNamespace(
+            stock_info_a_code_name=lambda: pd.DataFrame(
+                [{"code": "600000", "name": "浦发银行"}]
+            )
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "--config",
+                str(config_path),
+                "daily-pipeline",
+                "--date",
+                "2026-05-15",
+                "--control-only",
+            ]
+        )
+        == 0
+    )
+
+    database = QdcDatabase(QdcSettings.from_yaml(config_path))
+    with database.connect() as conn:
+        crawl_parameters = json.loads(
+            conn.execute(
+                """
+                select parameters_json
+                from qdc_meta.crawl_run
+                order by created_at desc
+                limit 1
+                """
+            ).fetchone()[0]
+        )
+    assert crawl_parameters["command"] == "daily-pipeline"
+    assert crawl_parameters["page_size"] == 30
+    assert crawl_parameters["request_timeout_seconds"] == 30.0
+    assert crawl_parameters["source_timeout_seconds"] == 900.0
+    assert crawl_parameters["source_overrides"]["sse_announcement"] == {
+        "page_size": 500,
+        "request_timeout_seconds": 120.0,
+    }
 
 
 def test_qdc_daily_pipeline_watch_outputs_pipeline_and_crawl_progress(

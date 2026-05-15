@@ -72,6 +72,40 @@ class DailyPipelineSettings:
 
 
 @dataclass(frozen=True)
+class CrawlOptionsSettings:
+    """Reusable crawler runtime options."""
+
+    page_size: int | None
+    max_pages: int | None
+    pdf_limit: int | None
+    parallel_sources: int | None
+    request_timeout_seconds: float | None
+    source_timeout_seconds: float | None
+    instrument_parallelism: int | None
+    instrument_limit: int | None
+    interaction_schedule: str | None
+    interaction_cold_no_data_days: int | None
+    interaction_cold_check_interval_days: int | None
+    interaction_cold_lookback_days: int | None
+    interaction_unsupported_check_interval_days: int | None
+    skip_pdf_download: bool | None
+
+
+@dataclass(frozen=True)
+class CrawlDailySettings(CrawlOptionsSettings):
+    """Default options for direct qdc crawl-daily runs."""
+
+    date: str | None
+    source_id: str | None
+    symbols: str | None
+    limit_tasks: int | None
+    watch: bool | None
+    plan_only: bool | None
+    control_only: bool | None
+    source_overrides: dict[str, CrawlOptionsSettings]
+
+
+@dataclass(frozen=True)
 class QlibProviderSettings:
     """External Qlib provider consumed as the base market data layer."""
 
@@ -103,6 +137,7 @@ class QdcSettings:
     unknown_copyright_policy: str
     text_event_classifier: TextEventClassifierSettings
     daily_pipeline: DailyPipelineSettings
+    crawl_daily: CrawlDailySettings
     qlib_provider: QlibProviderSettings
     universes: dict[str, list[str]]
 
@@ -121,6 +156,7 @@ class QdcSettings:
             payload=payload.get("llm", {}),
         )
         daily_pipeline = _parse_daily_pipeline_settings(payload.get("daily_pipeline", {}))
+        crawl_daily = _parse_crawl_daily_settings(payload.get("crawl_daily", {}))
         qlib_provider = _parse_qlib_provider_settings(payload.get("qlib_provider", {}))
         universes = _parse_universes(payload.get("universes", {}))
 
@@ -159,6 +195,7 @@ class QdcSettings:
             ),
             text_event_classifier=text_event_classifier,
             daily_pipeline=daily_pipeline,
+            crawl_daily=crawl_daily,
             qlib_provider=qlib_provider,
             universes=universes,
         )
@@ -267,6 +304,43 @@ class QdcSettings:
                 "skip_quality": self.daily_pipeline.skip_quality,
                 "skip_export": self.daily_pipeline.skip_export,
             },
+            "crawl_daily": {
+                "date": self.crawl_daily.date,
+                "source_id": self.crawl_daily.source_id,
+                "symbols": self.crawl_daily.symbols,
+                "limit_tasks": self.crawl_daily.limit_tasks,
+                "page_size": self.crawl_daily.page_size,
+                "max_pages": self.crawl_daily.max_pages,
+                "pdf_limit": self.crawl_daily.pdf_limit,
+                "parallel_sources": self.crawl_daily.parallel_sources,
+                "request_timeout_seconds": self.crawl_daily.request_timeout_seconds,
+                "source_timeout_seconds": self.crawl_daily.source_timeout_seconds,
+                "instrument_parallelism": self.crawl_daily.instrument_parallelism,
+                "instrument_limit": self.crawl_daily.instrument_limit,
+                "interaction_schedule": self.crawl_daily.interaction_schedule,
+                "interaction_cold_no_data_days": (
+                    self.crawl_daily.interaction_cold_no_data_days
+                ),
+                "interaction_cold_check_interval_days": (
+                    self.crawl_daily.interaction_cold_check_interval_days
+                ),
+                "interaction_cold_lookback_days": (
+                    self.crawl_daily.interaction_cold_lookback_days
+                ),
+                "interaction_unsupported_check_interval_days": (
+                    self.crawl_daily.interaction_unsupported_check_interval_days
+                ),
+                "skip_pdf_download": self.crawl_daily.skip_pdf_download,
+                "watch": self.crawl_daily.watch,
+                "plan_only": self.crawl_daily.plan_only,
+                "control_only": self.crawl_daily.control_only,
+                "source_overrides": {
+                    source_id: _crawl_options_as_dict(options)
+                    for source_id, options in sorted(
+                        self.crawl_daily.source_overrides.items()
+                    )
+                },
+            },
             "qlib_provider": {
                 "provider_uri": self.qlib_provider.provider_uri,
                 "required_fields": self.qlib_provider.required_fields,
@@ -356,6 +430,105 @@ def _parse_daily_pipeline_settings(payload: Any) -> DailyPipelineSettings:
         skip_quality=_optional_bool(spec.get("skip_quality")),
         skip_export=_optional_bool(spec.get("skip_export")),
     )
+
+
+def _parse_crawl_options_settings(payload: Any, *, section: str) -> CrawlOptionsSettings:
+    if payload and not isinstance(payload, dict):
+        raise ValueError(f"qdc {section} settings must be a mapping")
+    spec = payload or {}
+    return CrawlOptionsSettings(
+        page_size=_optional_int(spec.get("page_size")),
+        max_pages=_optional_int(spec.get("max_pages")),
+        pdf_limit=_optional_int(spec.get("pdf_limit")),
+        parallel_sources=_optional_int(spec.get("parallel_sources")),
+        request_timeout_seconds=_optional_float(spec.get("request_timeout_seconds")),
+        source_timeout_seconds=_optional_float(spec.get("source_timeout_seconds")),
+        instrument_parallelism=_optional_int(spec.get("instrument_parallelism")),
+        instrument_limit=_optional_int(spec.get("instrument_limit")),
+        interaction_schedule=_optional_str(spec.get("interaction_schedule")),
+        interaction_cold_no_data_days=_optional_int(
+            spec.get("interaction_cold_no_data_days")
+        ),
+        interaction_cold_check_interval_days=_optional_int(
+            spec.get("interaction_cold_check_interval_days")
+        ),
+        interaction_cold_lookback_days=_optional_int(
+            spec.get("interaction_cold_lookback_days")
+        ),
+        interaction_unsupported_check_interval_days=_optional_int(
+            spec.get("interaction_unsupported_check_interval_days")
+        ),
+        skip_pdf_download=_optional_bool(spec.get("skip_pdf_download")),
+    )
+
+
+def _parse_crawl_daily_settings(payload: Any) -> CrawlDailySettings:
+    if payload and not isinstance(payload, dict):
+        raise ValueError("qdc crawl_daily settings must be a mapping")
+    spec = payload or {}
+    base_options = _parse_crawl_options_settings(spec, section="crawl_daily")
+    raw_source_overrides = spec.get("source_overrides", {})
+    if raw_source_overrides and not isinstance(raw_source_overrides, dict):
+        raise ValueError("qdc crawl_daily.source_overrides settings must be a mapping")
+    source_overrides = {
+        str(source_id).strip(): _parse_crawl_options_settings(
+            source_spec,
+            section=f"crawl_daily.source_overrides.{source_id}",
+        )
+        for source_id, source_spec in (raw_source_overrides or {}).items()
+        if str(source_id).strip()
+    }
+    return CrawlDailySettings(
+        page_size=base_options.page_size,
+        max_pages=base_options.max_pages,
+        pdf_limit=base_options.pdf_limit,
+        parallel_sources=base_options.parallel_sources,
+        request_timeout_seconds=base_options.request_timeout_seconds,
+        source_timeout_seconds=base_options.source_timeout_seconds,
+        instrument_parallelism=base_options.instrument_parallelism,
+        instrument_limit=base_options.instrument_limit,
+        interaction_schedule=base_options.interaction_schedule,
+        interaction_cold_no_data_days=base_options.interaction_cold_no_data_days,
+        interaction_cold_check_interval_days=(
+            base_options.interaction_cold_check_interval_days
+        ),
+        interaction_cold_lookback_days=base_options.interaction_cold_lookback_days,
+        interaction_unsupported_check_interval_days=(
+            base_options.interaction_unsupported_check_interval_days
+        ),
+        skip_pdf_download=base_options.skip_pdf_download,
+        date=_optional_str(spec.get("date")),
+        source_id=_optional_str(spec.get("source_id")),
+        symbols=_optional_str(spec.get("symbols")),
+        limit_tasks=_optional_int(spec.get("limit_tasks")),
+        watch=_optional_bool(spec.get("watch")),
+        plan_only=_optional_bool(spec.get("plan_only")),
+        control_only=_optional_bool(spec.get("control_only")),
+        source_overrides=source_overrides,
+    )
+
+
+def _crawl_options_as_dict(options: CrawlOptionsSettings) -> dict[str, Any]:
+    return {
+        "page_size": options.page_size,
+        "max_pages": options.max_pages,
+        "pdf_limit": options.pdf_limit,
+        "parallel_sources": options.parallel_sources,
+        "request_timeout_seconds": options.request_timeout_seconds,
+        "source_timeout_seconds": options.source_timeout_seconds,
+        "instrument_parallelism": options.instrument_parallelism,
+        "instrument_limit": options.instrument_limit,
+        "interaction_schedule": options.interaction_schedule,
+        "interaction_cold_no_data_days": options.interaction_cold_no_data_days,
+        "interaction_cold_check_interval_days": (
+            options.interaction_cold_check_interval_days
+        ),
+        "interaction_cold_lookback_days": options.interaction_cold_lookback_days,
+        "interaction_unsupported_check_interval_days": (
+            options.interaction_unsupported_check_interval_days
+        ),
+        "skip_pdf_download": options.skip_pdf_download,
+    }
 
 
 def _parse_qlib_provider_settings(payload: Any) -> QlibProviderSettings:

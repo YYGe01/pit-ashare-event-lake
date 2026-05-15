@@ -20,6 +20,14 @@ conda run -n ai-trader qdc daily-pipeline --date 2026-05-14
 
 不建议长期把 `daily_pipeline.date` 写成固定日期，避免误跑旧日期。
 
+当前主线每日文档采集优先直接运行：
+
+```powershell
+conda run -n ai-trader qdc crawl-daily
+```
+
+`crawl_daily` 是文档采集默认参数的主配置；`daily_pipeline --crawl-documents` 会复用这些默认值，除非 `daily_pipeline.crawl_*` 显式配置了覆盖值。
+
 ## project
 
 | 参数 | 作用 |
@@ -67,6 +75,8 @@ conda run -n ai-trader qdc daily-pipeline --date 2026-05-14
 
 这是 `qdc daily-pipeline` 的默认参数区。命令行传参优先级高于这里的配置。
 
+`daily-pipeline` 仍保留为历史结构化诊断和一键兼容入口；当前主线文档采集默认参数放在 `crawl_daily`。本节的 `crawl_*` 参数默认建议保持 `null`，表示继承 `crawl_daily`；只有需要让 `daily-pipeline --crawl-documents` 与直接 `crawl-daily` 不同时，才在这里显式覆盖。
+
 | 参数 | 作用 |
 | --- | --- |
 | `date` | 固定默认运行日期。建议保持 `null`，除非只做一次固定日期任务。 |
@@ -90,24 +100,60 @@ conda run -n ai-trader qdc daily-pipeline --date 2026-05-14
 | `crawl_documents` | 是否在日频结构化任务后运行文档采集。 |
 | `crawl_source_id` | 文档采集源过滤；`null` 表示默认文档源全跑。 |
 | `crawl_limit_tasks` | 限制本次文档采集任务数量；生产保持 `null`。 |
-| `crawl_page_size` | 文档接口分页大小。 |
-| `crawl_max_pages` | 文档接口最大页数；完整采集通常保持 `null`，由各源默认早停。 |
-| `crawl_pdf_limit` | 公告 PDF 下载数量上限；默认不下载 PDF 时可保持 `null`。 |
-| `crawl_parallelism` | 多个文档 source 之间的并发数。 |
-| `crawl_request_timeout_seconds` | 单个 HTTP 请求超时时间。 |
-| `crawl_source_timeout_seconds` | 单个文档 source 总超时时间。互动问答全市场需要较大值。 |
-| `crawl_instrument_parallelism` | 互动问答等按标的循环源的标的并发数。 |
-| `crawl_instrument_limit` | 互动问答隐式股票池上限；`0` 表示全 active instruments。 |
-| `crawl_interaction_schedule` | 互动问答调度策略；默认 `cold-weekly`。如需严格每日全扫设为 `strict`。 |
-| `crawl_interaction_cold_no_data_days` | 连续多少次无目标日互动后进入 cold。 |
-| `crawl_interaction_cold_check_interval_days` | cold 标的每隔多少自然日复查一次。 |
-| `crawl_interaction_cold_lookback_days` | cold 复查时接受最近多少自然日的滚动窗口。 |
-| `crawl_interaction_unsupported_check_interval_days` | `missing_org` / unsupported 标的复查间隔。 |
-| `skip_crawl_pdf_download` | 是否跳过公告 PDF 下载。默认 `true`。 |
+| `crawl_page_size` | `daily-pipeline` 文档接口分页大小覆盖值；`null` 时继承 `crawl_daily.page_size`。 |
+| `crawl_max_pages` | `daily-pipeline` 文档接口最大页数覆盖值；完整采集通常保持 `null`。 |
+| `crawl_pdf_limit` | `daily-pipeline` 公告 PDF 下载数量上限覆盖值。 |
+| `crawl_parallelism` | `daily-pipeline` 文档 source 并发覆盖值；`null` 时继承 `crawl_daily.parallel_sources`。 |
+| `crawl_request_timeout_seconds` | `daily-pipeline` 单请求超时覆盖值；`null` 时继承 `crawl_daily.request_timeout_seconds`。 |
+| `crawl_source_timeout_seconds` | `daily-pipeline` 单 source 总超时覆盖值；`null` 时继承 `crawl_daily.source_timeout_seconds` 和 source override。 |
+| `crawl_instrument_parallelism` | `daily-pipeline` 标的循环源并发覆盖值。 |
+| `crawl_instrument_limit` | `daily-pipeline` 隐式股票池上限覆盖值。 |
+| `crawl_interaction_schedule` | `daily-pipeline` 互动问答调度策略覆盖值。 |
+| `crawl_interaction_cold_no_data_days` | `daily-pipeline` cold 阈值覆盖值。 |
+| `crawl_interaction_cold_check_interval_days` | `daily-pipeline` cold 复查间隔覆盖值。 |
+| `crawl_interaction_cold_lookback_days` | `daily-pipeline` cold 复查窗口覆盖值。 |
+| `crawl_interaction_unsupported_check_interval_days` | `daily-pipeline` unsupported 复查间隔覆盖值。 |
+| `skip_crawl_pdf_download` | `daily-pipeline` 是否跳过公告 PDF 下载的覆盖值；`null` 时继承 `crawl_daily.skip_pdf_download`。 |
 | `skip_factors` | 是否跳过因子构建。 |
 | `skip_sync` | 是否跳过 Parquet 同步。 |
 | `skip_quality` | 是否跳过质量检查。 |
 | `skip_export` | 是否跳过 Qlib 导出。 |
+
+## crawl_daily
+
+这是直接 `qdc crawl-daily` 的默认参数区，也是文档采集默认参数的主配置。命令行传参优先级最高；没有命令行覆盖时，source 级 `source_overrides` 优先于全局值。
+
+| 参数 | 作用 |
+| --- | --- |
+| `date` | 固定默认采集日期。建议保持 `null`，直接命令未传 `--date` 时按项目时区采集当天。 |
+| `source_id` | 默认 source 过滤；`null` 表示运行默认每日源清单。 |
+| `symbols` | 默认标的过滤；生产保持 `null`。 |
+| `limit_tasks` | 限制本次文档采集任务数量；生产保持 `null`。 |
+| `page_size` | 默认分页大小。当前全局为 `30`。 |
+| `max_pages` | 最大页数限制；完整采集保持 `null`。 |
+| `pdf_limit` | 公告 PDF 下载数量上限；默认不下载 PDF 时保持 `null`。 |
+| `parallel_sources` | 多个文档 source 之间的并发数。 |
+| `request_timeout_seconds` | 默认单请求超时。当前为 `30` 秒。 |
+| `source_timeout_seconds` | 默认单 source 总超时。当前为 `900` 秒，避免 CNINFO 公告完整扫描被 180 秒默认值截断。 |
+| `instrument_parallelism` | 互动问答等按标的循环源的标的并发数。 |
+| `instrument_limit` | 互动问答隐式股票池上限；`0` 表示全 active instruments。 |
+| `interaction_schedule` | 互动问答调度策略；默认 `cold-weekly`。 |
+| `interaction_cold_no_data_days` | 连续多少次无目标日互动后进入 cold。 |
+| `interaction_cold_check_interval_days` | cold 标的每隔多少自然日复查一次。 |
+| `interaction_cold_lookback_days` | cold 复查时接受最近多少自然日的滚动窗口。 |
+| `interaction_unsupported_check_interval_days` | `missing_org` / unsupported 标的复查间隔。 |
+| `skip_pdf_download` | 是否跳过公告 PDF 下载。默认 `true`。 |
+| `watch` | 是否默认输出 source 级进度。 |
+| `plan_only` | 是否默认只规划不执行。生产默认 `false`。 |
+| `control_only` | 是否默认只跑控制面不真实采集。生产默认 `false`。 |
+| `source_overrides` | source 级运行参数覆盖。用于记录已验证的源特定稳定参数，例如 `sse_announcement.page_size=500`。 |
+
+当前内置的 source 级参数来自 `2026-05-15` 真实采集：
+
+| source_id | 参数 | 原因 |
+| --- | --- | --- |
+| `sse_announcement` | `page_size=500`、`request_timeout_seconds=120`、`source_timeout_seconds=900` | `page_size=30/100` 连续翻页时被远端断开；`page_size=500` 完整扫描成功，写入 748 条。 |
+| `cninfo_investor_interaction` | `source_timeout_seconds=7200` | 全市场互动问答按标的循环，cold 调度下仍可能超过普通文档源 900 秒窗口。 |
 
 ## llm.text_event
 
