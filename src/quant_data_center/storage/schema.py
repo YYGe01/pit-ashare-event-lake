@@ -62,6 +62,18 @@ create table if not exists qdc_meta.source_object (
   created_at timestamp not null
 );
 
+create table if not exists qdc_meta.crawl_cursor (
+  source_id varchar not null,
+  dataset varchar not null,
+  cursor_scope varchar not null default '',
+  last_record_time timestamp,
+  last_record_key varchar,
+  recent_record_keys_json varchar not null default '[]',
+  metadata_json varchar not null default '{}',
+  updated_at timestamp not null,
+  primary key (source_id, dataset, cursor_scope)
+);
+
 create table if not exists qdc_meta.quality_issue (
   issue_id varchar primary key,
   job_id varchar,
@@ -132,6 +144,7 @@ CONTROL_TABLES = [
     "backfill_task",
     "dataset_watermark",
     "source_object",
+    "crawl_cursor",
     "quality_issue",
     "crawler_source",
     "crawl_task",

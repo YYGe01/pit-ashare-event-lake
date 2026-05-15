@@ -143,6 +143,8 @@ def scan_rolling_date_window(
     target_date: str,
     fetch_page: Callable[[int], tuple[list[dict[str, Any]], dict[str, Any]]],
     publish_time_getter: Callable[[dict[str, Any]], Any],
+    record_key_getter: Callable[[dict[str, Any]], Any] | None = None,
+    seen_record_keys: set[str] | None = None,
     max_pages: int | None = None,
     hard_max_pages: int = DEFAULT_ROLLING_SCAN_HARD_MAX_PAGES,
     lookahead_pages_after_older: int = DEFAULT_ROLLING_SCAN_LOOKAHEAD_PAGES,
@@ -198,6 +200,10 @@ def scan_rolling_date_window(
     complete = False
     target_rows: list[dict[str, Any]] = []
     sequential_page_nums: list[int] = []
+    seen_keys = {str(value).strip() for value in seen_record_keys or set() if str(value).strip()}
+    cursor_stop_page: int | None = None
+    cursor_stop_key: str | None = None
+    cursor_seen_record_count = 0
 
     if first is None:
         stop_reason = page_limit_kind
@@ -241,6 +247,25 @@ def scan_rolling_date_window(
                 break
             sequential_page_nums.append(page_num)
             metrics = fetched.scan_result.metrics
+            first_seen_index, first_seen_key, seen_count = _first_seen_record_index(
+                fetched.rows,
+                record_key_getter=record_key_getter,
+                seen_record_keys=seen_keys,
+            )
+            if first_seen_index is not None:
+                cursor_stop_page = page_num
+                cursor_stop_key = first_seen_key
+                cursor_seen_record_count += seen_count
+                effective_rows = fetched.rows[:first_seen_index]
+                effective_scan = classify_rolling_page(
+                    target_date=target_date,
+                    rows=effective_rows,
+                    publish_time_getter=publish_time_getter,
+                )
+                target_rows.extend(effective_scan.target_rows)
+                complete = True
+                stop_reason = "cursor_seen"
+                break
             page_target_count = int(metrics["target_record_count"])
             if not fetched.rows:
                 complete = True
@@ -290,8 +315,14 @@ def scan_rolling_date_window(
         "date_scan_sequential_pages": sequential_page_nums,
         "date_scan_first_target_page": _first_target_page(fetched_pages),
         "date_scan_last_target_page": _last_target_page(fetched_pages),
+        "incremental_cursor_enabled": bool(seen_keys),
+        "incremental_cursor_seen_record_count": cursor_seen_record_count,
+        "incremental_cursor_stop_page": cursor_stop_page,
+        "incremental_cursor_stop_key": cursor_stop_key,
         **aggregate_metrics,
     }
+    if cursor_stop_page is not None:
+        manifest["target_provider_record_count"] = len(target_rows)
     return RollingDateWindowScan(
         pages=pages,
         provider_rows=provider_rows,
@@ -433,6 +464,33 @@ def _aggregate_page_metrics(pages: Any) -> dict[str, int]:
         metrics["older_seen_count"] += int(page_metrics["older_seen_count"])
         metrics["unknown_date_count"] += int(page_metrics["unknown_date_count"])
     return metrics
+
+
+def _first_seen_record_index(
+    rows: list[dict[str, Any]],
+    *,
+    record_key_getter: Callable[[dict[str, Any]], Any] | None,
+    seen_record_keys: set[str],
+) -> tuple[int | None, str | None, int]:
+    if record_key_getter is None or not seen_record_keys:
+        return None, None, 0
+    first_index: int | None = None
+    first_key: str | None = None
+    seen_count = 0
+    for index, row in enumerate(rows):
+        key = _clean_record_key(record_key_getter(row))
+        if key and key in seen_record_keys:
+            seen_count += 1
+            if first_index is None:
+                first_index = index
+                first_key = key
+    return first_index, first_key, seen_count
+
+
+def _clean_record_key(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def _first_target_page(pages: dict[int, RollingFetchedPage]) -> int | None:

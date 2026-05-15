@@ -34,7 +34,11 @@ conda run -n ai-trader qdc quality --start <date> --end <date>
 conda run -n ai-trader qdc daily-health --date <date> --format markdown
 ```
 
-如果由 Codex 代跑且用户要求看到过程，优先用 `--no-capture-output`，把输出写入 `data/qdc_run_logs/<date>/`，并每 30 秒汇报当前命令、进程状态、`crawl_task`、`source_object` 或 `daily-health` 摘要；不要使用不存在的 `--watch` 参数。
+如果由 Codex 代跑且用户要求看到过程，优先用 `--no-capture-output` 和 `--watch`，把输出写入 `data/qdc_run_logs/<date>/`，并每 30 秒汇报当前命令、进程状态、`crawl_task`、`source_object` 或 `daily-health` 摘要。
+
+滚动新闻源同日重跑时，优先确认 `qdc_meta.crawl_cursor` 是否已有 `source_id + dataset + cursor_scope(date=<date>)` 游标。已有完整游标时，采集应在遇到已见 `record_key` 后停止，避免重复翻页到历史位置；没有完整游标时才按滚动日期窗口扫描。遇到源站慢响应时，先评估单请求超时是否过短；不要默认增加自动重试次数，因为重试会真实增加接口请求量。
+
+同日 `--force` 重跑会留下多个 raw manifest。判断日报时不要把同一非增量源的多次 full manifest 累加；应以最新 full manifest 为准。滚动增量源则使用最新 full manifest 加后续 incremental manifest。
 
 如果用户只要求检查报告，不要重新采集；直接运行 `qdc daily-health --date <date>`，必要时再查控制表和 raw manifest。
 
@@ -85,11 +89,13 @@ ok:
 - `source_not_run` / `crawl_task_unfinished`：先补跑或恢复任务，不改代码。
 - `crawl_task_failed`：看 `last_error`。网络、超时、源站 502 先重跑；稳定复现再改超时、重试或源策略。
 - 公告源 `cninfo_announcement` / `sse_announcement` 如果 `last_error=source timeout exceeded ...`，优先单源补跑并加大超时，例如 `qdc crawl-daily --date <date> --source-id cninfo_announcement --force --source-timeout-seconds 900`；确认仍复现再改代码。
+- `sync_parquet has no job_run covering the target date`：先确认本轮是否实际运行过 `qdc sync-parquet --layer all`；若已运行但仍提示，检查 CLI 是否记录了 `job_type=sync_parquet` 的 job_run。
 - `empty_source_result` / `below_*_rows`：先确认是否周末、节假日、显式 `--max-pages`、显式 `--symbols` 或上游真实低量。
 - `date_scan_incomplete`：正式采集不要用 `--max-pages` 限制；重跑该源。
 - `provider_records_without_silver` / `high_parse_failed_rate`：优先查 collector normalization、字段变化、过滤条件、去重键；确认后做永久代码修复并补测试。
 - 如果 raw/bronze 样本和 manifest 显示源站返回的 `publish_date` / `trade_date` 全部晚于目标日，例如目标日 `<date>` 但记录全是后一交易日，判定为源站已滚动或 latest-only 数据不可补；不要把后一日数据写入目标日，也不要跨日期采集来掩盖目标日报告，只记录结论并建议把该源调度提前到目标日收盘后或次日早间源站刷新前。
 - `low_mapping_rate` / `elevated_mapping_failures`：查 `stock_basic`、简称歧义和 instrument 映射规则；不要把低置信新闻直接计入公司级因子。
+- `eastmoney_public_sentiment` 如果 silver / factor 行数正常但 `mapping_rate=0%`，优先检查 manifest 指标口径是否使用 `date|instrument` 与 provider key 对齐，不要误判为真实映射失败。
 - `documents_without_factor_rows`：先重跑 `build-factors`；仍为空再修 factor builder。
 - `quality_issue:*`：读取 `observed_value`，判断是坏数据、解析 bug、因子 bug 还是环境问题。
 

@@ -14,6 +14,7 @@ from quant_data_center.crawlers.runtime import (
     call_with_proxy_policy,
     make_deadline,
     raise_if_deadline_exceeded,
+    request_timeout,
     sleep_with_deadline,
 )
 from quant_data_center.factor_engine.text_events import (
@@ -29,9 +30,11 @@ from quant_data_center.utils.instruments import normalize_instrument
 
 
 SOURCE_ID = "eastmoney_public_sentiment"
+EASTMONEY_STOCK_COMMENT_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 EASTMONEY_GUBA_RANK_URL = "https://guba.eastmoney.com/rank/"
 PARSER_VERSION = "eastmoney_public_sentiment_v1"
 MAX_KEYWORD_INSTRUMENTS = 60
+STOCK_COMMENT_PAGE_SIZE = 500
 
 
 class EastmoneyPublicSentimentCrawler:
@@ -56,8 +59,8 @@ class EastmoneyPublicSentimentCrawler:
     ) -> dict[str, Any]:
         if source_id != SOURCE_ID:
             raise ValueError(f"unsupported public sentiment source_id: {source_id}")
-        del request_timeout_seconds
         akshare = __import__("akshare")
+        requests = __import__("requests")
         deadline = make_deadline(source_timeout_seconds)
         observed_at = _timestamp()
         normalized_filter = (
@@ -67,10 +70,12 @@ class EastmoneyPublicSentimentCrawler:
         )
         fetch_result = _fetch_eastmoney_rows(
             akshare_module=akshare,
+            requests_module=requests,
             crawl_date=crawl_date,
             page_size=page_size,
             max_pages=max_pages,
             min_delay_seconds=min_delay_seconds,
+            request_timeout_seconds=request_timeout_seconds,
             deadline=deadline,
             use_environment_proxy=self.settings.use_environment_proxy,
         )
@@ -118,7 +123,7 @@ class EastmoneyPublicSentimentCrawler:
                 for row in provider_rows
                 if _is_parsable_row(row, crawl_date=crawl_date)
             ),
-            mapped_source_record_ids=(record.get("source_record_id") for record in records),
+            mapped_source_record_ids=(_record_provider_key(record) for record in records),
         )
         document_bundle = self.objects.put_document_bundle(
             dataset="public_sentiment",
@@ -167,19 +172,22 @@ class EastmoneyPublicSentimentCrawler:
 def _fetch_eastmoney_rows(
     *,
     akshare_module: Any,
+    requests_module: Any,
     crawl_date: str,
     page_size: int,
     max_pages: int | None,
     min_delay_seconds: float,
+    request_timeout_seconds: float,
     deadline: float | None,
     use_environment_proxy: bool,
 ) -> dict[str, Any]:
     raise_if_deadline_exceeded(deadline, source_id=SOURCE_ID)
-    comment_frame, comment_log = _call_akshare(
-        akshare_module.stock_comment_em,
+    comment_rows, comment_log = _fetch_stock_comment_rows(
+        requests_module=requests_module,
+        request_timeout_seconds=request_timeout_seconds,
+        deadline=deadline,
         use_environment_proxy=use_environment_proxy,
     )
-    comment_rows = _frame_rows(comment_frame)
     hot_rank_rows: list[dict[str, Any]] = []
     hot_rank_log: dict[str, str] = {}
     if hasattr(akshare_module, "stock_hot_rank_em"):
@@ -233,10 +241,126 @@ def _fetch_eastmoney_rows(
             "keyword_enriched_count": sum(1 for row in rows if row.get("keyword_text")),
         },
         "fetch_logs": {
-            "stock_comment_em": comment_log,
+            "stock_comment_datacenter": comment_log,
             "stock_hot_rank_em": hot_rank_log,
         },
         "keyword_failures": keyword_failures,
+    }
+
+
+def _fetch_stock_comment_rows(
+    *,
+    requests_module: Any,
+    request_timeout_seconds: float,
+    deadline: float | None,
+    use_environment_proxy: bool,
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    first_body = _request_stock_comment_page(
+        requests_module=requests_module,
+        page_number=1,
+        request_timeout_seconds=request_timeout_seconds,
+        deadline=deadline,
+        use_environment_proxy=use_environment_proxy,
+    )
+    first_result = first_body.get("result") if isinstance(first_body, dict) else {}
+    total_pages = _positive_int((first_result or {}).get("pages")) or 1
+    total_count = _positive_int((first_result or {}).get("count"))
+    rows = [
+        _standardize_stock_comment_api_row(row)
+        for row in ((first_result or {}).get("data") or [])
+        if isinstance(row, dict)
+    ]
+    for page_number in range(2, total_pages + 1):
+        body = _request_stock_comment_page(
+            requests_module=requests_module,
+            page_number=page_number,
+            request_timeout_seconds=request_timeout_seconds,
+            deadline=deadline,
+            use_environment_proxy=use_environment_proxy,
+        )
+        result = body.get("result") if isinstance(body, dict) else {}
+        rows.extend(
+            _standardize_stock_comment_api_row(row)
+            for row in ((result or {}).get("data") or [])
+            if isinstance(row, dict)
+        )
+    return rows, {
+        "provider": "eastmoney_datacenter_api",
+        "page_size": str(STOCK_COMMENT_PAGE_SIZE),
+        "page_count": str(total_pages),
+        "provider_count": "" if total_count is None else str(total_count),
+        "row_count": str(len(rows)),
+    }
+
+
+def _request_stock_comment_page(
+    *,
+    requests_module: Any,
+    page_number: int,
+    request_timeout_seconds: float,
+    deadline: float | None,
+    use_environment_proxy: bool,
+) -> dict[str, Any]:
+    raise_if_deadline_exceeded(deadline, source_id=SOURCE_ID)
+    response = call_with_proxy_policy(
+        requests_module.get,
+        EASTMONEY_STOCK_COMMENT_URL,
+        params=_stock_comment_params(page_number),
+        headers=_stock_comment_headers(),
+        timeout=request_timeout(
+            deadline=deadline,
+            default_seconds=request_timeout_seconds,
+            source_id=SOURCE_ID,
+        ),
+        use_environment_proxy=use_environment_proxy,
+    )
+    response.raise_for_status()
+    body = response.json()
+    if not isinstance(body, dict) or body.get("success") is False:
+        raise ValueError(f"eastmoney stock comment response failed on page {page_number}")
+    return body
+
+
+def _stock_comment_params(page_number: int) -> dict[str, str]:
+    return {
+        "sortColumns": "SECURITY_CODE",
+        "sortTypes": "1",
+        "pageSize": str(STOCK_COMMENT_PAGE_SIZE),
+        "pageNumber": str(page_number),
+        "reportName": "RPT_DMSK_TS_STOCKNEW",
+        "quoteColumns": (
+            "f2~01~SECURITY_CODE~CLOSE_PRICE,f8~01~SECURITY_CODE~TURNOVERRATE,"
+            "f3~01~SECURITY_CODE~CHANGE_RATE,f9~01~SECURITY_CODE~PE_DYNAMIC"
+        ),
+        "columns": "ALL",
+        "filter": "",
+        "token": "894050c76af8597a853f5b408b759f5d",
+    }
+
+
+def _stock_comment_headers() -> dict[str, str]:
+    return {
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://data.eastmoney.com/stockcomment/",
+        "User-Agent": "Mozilla/5.0",
+    }
+
+
+def _standardize_stock_comment_api_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "代码": row.get("SECURITY_CODE"),
+        "名称": row.get("SECURITY_NAME_ABBR"),
+        "交易日": row.get("TRADE_DATE"),
+        "最新价": row.get("CLOSE_PRICE"),
+        "涨跌幅": row.get("CHANGE_RATE"),
+        "换手率": row.get("TURNOVERRATE"),
+        "市盈率": row.get("PE_DYNAMIC"),
+        "主力成本": row.get("PRIME_COST"),
+        "机构参与度": row.get("ORG_PARTICIPATE"),
+        "综合得分": row.get("TOTALSCORE"),
+        "上升": row.get("RANK_UP"),
+        "目前排名": row.get("RANK"),
+        "关注指数": row.get("FOCUS"),
     }
 
 
@@ -403,6 +527,10 @@ def _provider_key(row: dict[str, Any]) -> str:
     return f"{row.get('trade_date') or ''}|{row.get('instrument') or ''}"
 
 
+def _record_provider_key(record: dict[str, Any]) -> str:
+    return f"{record.get('publish_date') or ''}|{record.get('instrument') or ''}"
+
+
 def _is_parsable_row(row: dict[str, Any], *, crawl_date: str) -> bool:
     return bool(row.get("instrument") and _date_text(row.get("trade_date")) == crawl_date)
 
@@ -480,6 +608,14 @@ def _number(value: Any) -> float | None:
     if result != result:
         return None
     return result
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
 
 
 def _json_value(value: Any) -> Any:

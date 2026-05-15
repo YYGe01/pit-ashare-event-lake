@@ -215,6 +215,16 @@ def cmd_sync_parquet(args: argparse.Namespace) -> int:
     database = QdcDatabase(settings)
     database.init_schema()
     result = QdcParquetSync(settings).sync(layer=args.layer, dataset=args.dataset)
+    database.record_job_run(
+        job_type="sync_parquet",
+        status="success",
+        dataset=args.dataset or args.layer,
+        parameters={
+            "layer": args.layer,
+            "dataset": args.dataset,
+            "written_count": result.get("written_count", 0),
+        },
+    )
     _print_json({"status": "ok", **result})
     return 0
 
@@ -1654,6 +1664,14 @@ def cmd_daily_pipeline(args: argparse.Namespace) -> int:
                 f"{_watch_task_prefix(phase='pipeline', index=4, total=2)} START step=sync_parquet",
             )
         sync_result = QdcParquetSync(settings).sync(layer="all")
+        database.record_job_run(
+            job_type="sync_parquet",
+            status="success",
+            dataset="all",
+            start_date=run_date,
+            end_date=run_date,
+            parameters={"layer": "all", "written_count": sync_result.get("written_count", 0)},
+        )
         steps.append({"step": "sync_parquet", "status": "ok", **sync_result})
         if watch:
             _watch_print(

@@ -53,6 +53,59 @@ def test_rolling_date_scan_fast_seeks_to_target_window() -> None:
     assert result.manifest_fields["date_scan_last_target_page"] == 16
 
 
+def test_rolling_date_scan_stops_at_seen_cursor_key() -> None:
+    calls: list[int] = []
+
+    def fetch_page(page_num: int):
+        calls.append(page_num)
+        rows_by_page = {
+            1: [
+                {
+                    "id": "fresh",
+                    "publish_time": "2026-05-15 10:10:00",
+                    "title": "new target row",
+                },
+                {
+                    "id": "seen",
+                    "publish_time": "2026-05-15 10:00:00",
+                    "title": "previously collected row",
+                },
+                {
+                    "id": "older-target",
+                    "publish_time": "2026-05-15 09:50:00",
+                    "title": "older row already covered by cursor",
+                },
+            ],
+            2: [
+                {
+                    "id": "older-page",
+                    "publish_time": "2026-05-14 23:59:00",
+                    "title": "older page",
+                }
+            ],
+        }
+        rows = rows_by_page.get(page_num, [])
+        return rows, {"page_num": page_num, "news_count": len(rows)}
+
+    result = scan_rolling_date_window(
+        target_date="2026-05-15",
+        fetch_page=fetch_page,
+        publish_time_getter=lambda row: row["publish_time"],
+        record_key_getter=lambda row: row["id"],
+        seen_record_keys={"seen"},
+        max_pages=10,
+    )
+
+    assert calls == [1]
+    assert [row["id"] for row in result.target_rows] == ["fresh"]
+    assert result.manifest_fields["date_scan_complete"] is True
+    assert result.manifest_fields["date_scan_stop_reason"] == "cursor_seen"
+    assert result.manifest_fields["incremental_cursor_enabled"] is True
+    assert result.manifest_fields["incremental_cursor_stop_page"] == 1
+    assert result.manifest_fields["incremental_cursor_stop_key"] == "seen"
+    assert result.manifest_fields["target_provider_record_count"] == 1
+
+
 def test_eastmoney_roll_news_uses_fast_metadata_delay() -> None:
     spec = crawler_source_spec("eastmoney_roll_news")
 

@@ -441,6 +441,102 @@ class QdcDatabase:
             columns = [item[0] for item in conn.description]
         return [_row_to_dict(columns, row) for row in rows]
 
+    def fetch_crawl_cursor(
+        self,
+        *,
+        source_id: str,
+        dataset: str,
+        cursor_scope: str = "",
+    ) -> dict[str, Any] | None:
+        with self.connect(read_only=True) as conn:
+            row = conn.execute(
+                """
+                select *
+                from qdc_meta.crawl_cursor
+                where source_id = ?
+                  and dataset = ?
+                  and cursor_scope = ?
+                """,
+                [source_id, dataset, cursor_scope],
+            ).fetchone()
+            if not row:
+                return None
+            columns = [item[0] for item in conn.description]
+        item = _row_to_dict(columns, row)
+        item["recent_record_keys"] = _json_loads_list(item.get("recent_record_keys_json"))
+        item["metadata"] = _json_loads_dict(item.get("metadata_json"))
+        return item
+
+    def upsert_crawl_cursor(
+        self,
+        *,
+        source_id: str,
+        dataset: str,
+        cursor_scope: str = "",
+        last_record_time: str | None = None,
+        last_record_key: str | None = None,
+        recent_record_keys: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        now = _now()
+        recent_json = _json_dumps(list(dict.fromkeys(recent_record_keys or []))[:500])
+        metadata_json = _json_dumps(metadata or {})
+        with self.connect() as conn:
+            existing = conn.execute(
+                """
+                select 1
+                from qdc_meta.crawl_cursor
+                where source_id = ?
+                  and dataset = ?
+                  and cursor_scope = ?
+                """,
+                [source_id, dataset, cursor_scope],
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    update qdc_meta.crawl_cursor
+                    set last_record_time = ?,
+                        last_record_key = ?,
+                        recent_record_keys_json = ?,
+                        metadata_json = ?,
+                        updated_at = ?
+                    where source_id = ?
+                      and dataset = ?
+                      and cursor_scope = ?
+                    """,
+                    [
+                        last_record_time,
+                        last_record_key,
+                        recent_json,
+                        metadata_json,
+                        now,
+                        source_id,
+                        dataset,
+                        cursor_scope,
+                    ],
+                )
+            else:
+                conn.execute(
+                    """
+                    insert into qdc_meta.crawl_cursor (
+                      source_id, dataset, cursor_scope, last_record_time,
+                      last_record_key, recent_record_keys_json, metadata_json, updated_at
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        source_id,
+                        dataset,
+                        cursor_scope,
+                        last_record_time,
+                        last_record_key,
+                        recent_json,
+                        metadata_json,
+                        now,
+                    ],
+                )
+
     def latest_universe_symbols(self, universe: str) -> list[str]:
         with self.connect() as conn:
             latest = conn.execute(
@@ -932,6 +1028,32 @@ def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
+def _json_loads_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if item not in (None, "")]
+    try:
+        payload = json.loads(str(value))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [str(item) for item in payload if item not in (None, "")]
+
+
+def _json_loads_dict(value: Any) -> dict[str, Any]:
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return value
+    try:
+        payload = json.loads(str(value))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _connect_duckdb_with_retry(
     database_path: Any,
     *,
@@ -975,6 +1097,7 @@ def _is_duckdb_lock_error(exc: BaseException) -> bool:
     return (
         "could not set lock" in message
         or "conflicting lock" in message
+        or "different configuration" in message
         or "another process" in message
         or "另一个程序正在使用此文件" in message
         or "进程无法访问" in message

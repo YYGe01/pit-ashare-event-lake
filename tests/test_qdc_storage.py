@@ -25,6 +25,7 @@ from quant_data_center.crawlers.sources.investor_interaction import (
     DEFAULT_INTERACTION_SCHEDULE,
     _schedule_options,
 )
+from quant_data_center.daily_health import _document_manifest_metrics
 from quant_data_center.exports.qlib import QLIB_FIELDS, inspect_qlib_provider
 from quant_data_center.jobs.backfill import parse_date, plan_backfill_tasks
 from quant_data_center.qlib_ext.handlers import DEFAULT_EXTERNAL_FIELDS
@@ -333,6 +334,44 @@ def test_qdc_run_backfill_control_only_updates_tasks_and_watermark(tmp_path: Pat
     assert watermark["universe"] == "csi300"
     assert watermark["min_date"] == "2026-05-01"
     assert watermark["max_date"] == "2026-05-03"
+
+
+def test_qdc_database_upserts_crawl_cursor(tmp_path: Path) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+
+    database.upsert_crawl_cursor(
+        source_id="eastmoney_roll_news",
+        dataset="news",
+        cursor_scope="date=2026-05-15",
+        last_record_time="2026-05-15 10:00:00",
+        last_record_key="news-1",
+        recent_record_keys=["news-1", "news-2"],
+        metadata={"date_scan_complete": True, "date_scan_stop_reason": "older_page_lookahead"},
+    )
+    database.upsert_crawl_cursor(
+        source_id="eastmoney_roll_news",
+        dataset="news",
+        cursor_scope="date=2026-05-15",
+        last_record_time="2026-05-15 10:10:00",
+        last_record_key="news-3",
+        recent_record_keys=["news-3", "news-1"],
+        metadata={"date_scan_complete": True, "date_scan_stop_reason": "cursor_seen"},
+    )
+
+    cursor = database.fetch_crawl_cursor(
+        source_id="eastmoney_roll_news",
+        dataset="news",
+        cursor_scope="date=2026-05-15",
+    )
+
+    assert cursor is not None
+    assert cursor["last_record_key"] == "news-3"
+    assert cursor["recent_record_keys"] == ["news-3", "news-1"]
+    assert cursor["metadata"]["date_scan_stop_reason"] == "cursor_seen"
+    assert database.table_counts()["crawl_cursor"] == 1
 
 
 def test_qdc_database_connect_retries_temporary_duckdb_lock(
@@ -2056,8 +2095,9 @@ def test_qdc_crawl_run_real_sina_news_with_fake_response(
     class FakeResponse:
         status_code = 200
 
-        def __init__(self, rows: list[dict[str, object]]) -> None:
-            self._rows = rows
+        def __init__(self, rows: list[dict[str, object]] | str) -> None:
+            self.text = rows if isinstance(rows, str) else ""
+            self._rows = rows if isinstance(rows, list) else []
 
         def raise_for_status(self) -> None:
             return None
@@ -2178,7 +2218,6 @@ def test_qdc_crawl_run_real_sina_news_with_fake_response(
     assert manifest["provider_record_count"] == 2
     assert manifest["newer_skipped_count"] == 1
     assert manifest["older_seen_count"] == 2
-
 
 def test_qdc_crawl_run_real_eastmoney_news_with_fake_response(
     tmp_path: Path, monkeypatch
@@ -5271,38 +5310,6 @@ def test_qdc_crawl_public_sentiment_builds_factor_and_preview(
         ]
     )
 
-    def stock_comment_em():
-        return pd.DataFrame(
-            [
-                {
-                    "代码": "600000",
-                    "名称": "浦发银行",
-                    "最新价": 10.0,
-                    "涨跌幅": 1.2,
-                    "换手率": 0.5,
-                    "机构参与度": 0.4,
-                    "综合得分": 77.0,
-                    "上升": 3,
-                    "目前排名": 12,
-                    "关注指数": 88.8,
-                    "交易日": "2026-05-14",
-                },
-                {
-                    "代码": "000001",
-                    "名称": "平安银行",
-                    "最新价": 11.0,
-                    "涨跌幅": -0.5,
-                    "换手率": 0.6,
-                    "机构参与度": 0.3,
-                    "综合得分": 66.0,
-                    "上升": -2,
-                    "目前排名": 30,
-                    "关注指数": 70.0,
-                    "交易日": "2026-05-14",
-                },
-            ]
-        )
-
     def stock_hot_rank_em():
         return pd.DataFrame(
             [
@@ -5336,11 +5343,69 @@ def test_qdc_crawl_public_sentiment_builds_factor_and_preview(
             ]
         )
 
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    stock_comment_calls = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        stock_comment_calls.append(
+            {"url": url, "params": dict(params or {}), "headers": headers, "timeout": timeout}
+        )
+        return FakeResponse(
+            {
+                "success": True,
+                "result": {
+                    "pages": 1,
+                    "count": 2,
+                    "data": [
+                        {
+                            "SECURITY_CODE": "600000",
+                            "SECURITY_NAME_ABBR": "浦发银行",
+                            "CLOSE_PRICE": 10.0,
+                            "CHANGE_RATE": 1.2,
+                            "TURNOVERRATE": 0.5,
+                            "ORG_PARTICIPATE": 0.4,
+                            "TOTALSCORE": 77.0,
+                            "RANK_UP": 3,
+                            "RANK": 12,
+                            "FOCUS": 88.8,
+                            "TRADE_DATE": "2026-05-14 00:00:00",
+                        },
+                        {
+                            "SECURITY_CODE": "000001",
+                            "SECURITY_NAME_ABBR": "平安银行",
+                            "CLOSE_PRICE": 11.0,
+                            "CHANGE_RATE": -0.5,
+                            "TURNOVERRATE": 0.6,
+                            "ORG_PARTICIPATE": 0.3,
+                            "TOTALSCORE": 66.0,
+                            "RANK_UP": -2,
+                            "RANK": 30,
+                            "FOCUS": 70.0,
+                            "TRADE_DATE": "2026-05-14 00:00:00",
+                        },
+                    ],
+                },
+            }
+        )
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", fake_get)
     monkeypatch.setitem(
         sys.modules,
         "akshare",
         SimpleNamespace(
-            stock_comment_em=stock_comment_em,
             stock_hot_rank_em=stock_hot_rank_em,
             stock_hot_keyword_em=stock_hot_keyword_em,
         ),
@@ -5365,7 +5430,19 @@ def test_qdc_crawl_public_sentiment_builds_factor_and_preview(
         )
         == 0
     )
+    assert len(stock_comment_calls) == 1
+    assert stock_comment_calls[0]["timeout"] == 30.0
     assert database.silver_table_counts()["public_sentiment"] == 2
+    manifest_uri = next(
+        item["uri"]
+        for item in database.list_source_objects(
+            dataset="public_sentiment", source_id="eastmoney_public_sentiment"
+        )
+        if item["layer"] == "raw_manifest"
+    )
+    manifest = json.loads(Path(manifest_uri).read_text(encoding="utf-8"))
+    assert manifest["mapped_source_record_count"] == 2
+    assert manifest["mapping_rate"] == 1.0
 
     assert (
         main(
@@ -6113,6 +6190,15 @@ def test_qdc_sync_parquet_writes_silver_and_gold_files(tmp_path: Path) -> None:
     assert list(gold["close"]) == [10.2, 10.6]
     source_objects = database.list_source_objects(source_id="qdc")
     assert {"silver", "gold"}.issubset({item["layer"] for item in source_objects})
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            select job_type, status, dataset
+            from qdc_meta.job_run
+            where job_type = 'sync_parquet'
+            """
+        ).fetchone()
+    assert row == ("sync_parquet", "success", "all")
 
 
 def test_qdc_quality_records_issues_for_invalid_daily_bar(tmp_path: Path) -> None:
@@ -6278,6 +6364,88 @@ def test_qdc_daily_health_accepts_sparse_interaction_source(tmp_path: Path, caps
 
     assert payload["status"] == "ok"
     assert payload["source_rows"][0]["reason_codes"] == []
+
+
+def test_qdc_daily_health_manifest_metrics_ignore_superseded_full_reruns(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_config(tmp_path)
+    settings = QdcSettings.from_yaml(config_path)
+    database = QdcDatabase(settings)
+    database.init_schema()
+    store = QdcObjectStore(settings)
+    target_date = "2026-05-13"
+
+    store.put_document_bundle(
+        dataset="public_sentiment",
+        source_id="eastmoney_public_sentiment",
+        partition_value=target_date,
+        stem="public_old_full",
+        manifest={
+            "provider_record_count": 2,
+            "parsed_unique_record_count": 2,
+            "mapped_source_record_count": 0,
+            "mapping_failed_count": 2,
+        },
+        records=[],
+    )
+    store.put_document_bundle(
+        dataset="public_sentiment",
+        source_id="eastmoney_public_sentiment",
+        partition_value=target_date,
+        stem="public_new_full",
+        manifest={
+            "provider_record_count": 2,
+            "parsed_unique_record_count": 2,
+            "mapped_source_record_count": 2,
+            "mapping_failed_count": 0,
+        },
+        records=[],
+    )
+    store.put_document_bundle(
+        dataset="news",
+        source_id="eastmoney_roll_news",
+        partition_value=target_date,
+        stem="roll_full",
+        manifest={
+            "provider_record_count": 100,
+            "parsed_unique_record_count": 100,
+            "mapped_source_record_count": 60,
+            "mapping_failed_count": 40,
+        },
+        records=[],
+    )
+    store.put_document_bundle(
+        dataset="news",
+        source_id="eastmoney_roll_news",
+        partition_value=target_date,
+        stem="roll_incremental",
+        manifest={
+            "incremental_cursor_enabled": True,
+            "provider_record_count": 10,
+            "parsed_unique_record_count": 10,
+            "mapped_source_record_count": 5,
+            "mapping_failed_count": 5,
+        },
+        records=[],
+    )
+
+    with database.connect() as conn:
+        metrics = _document_manifest_metrics(
+            conn,
+            control_tables=set(CONTROL_TABLES),
+            target_date=target_date,
+        )
+
+    public_metrics = metrics["eastmoney_public_sentiment"]
+    assert public_metrics["manifest_count"] == 1
+    assert public_metrics["provider_record_count"] == 2
+    assert public_metrics["mapped_source_record_count"] == 2
+
+    roll_metrics = metrics["eastmoney_roll_news"]
+    assert roll_metrics["manifest_count"] == 2
+    assert roll_metrics["provider_record_count"] == 110
+    assert roll_metrics["mapped_source_record_count"] == 65
 
 
 def test_qdc_export_qlib_writes_day_provider_files(tmp_path: Path, capsys) -> None:

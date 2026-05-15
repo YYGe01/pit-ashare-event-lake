@@ -344,16 +344,16 @@ def _document_manifest_metrics(
     rows = _query_dicts(
         conn,
         f"""
-        select source_id, dataset, uri, created_at
+        select rowid as source_object_rowid, source_id, dataset, uri, created_at
         from {CONTROL_SCHEMA}.source_object
         where layer = 'raw_manifest'
           and (uri like ? or uri like ?)
-        order by created_at desc
+        order by created_at desc, rowid desc
         limit 5000
         """,
         [f"%documents\\{target_date}\\%", f"%documents/{target_date}/%"],
     )
-    metrics: dict[str, dict[str, Any]] = {}
+    manifests_by_source: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         path = Path(str(row.get("uri") or ""))
         if not path.is_file():
@@ -365,6 +365,10 @@ def _document_manifest_metrics(
         if str(manifest.get("partition_value") or "") != target_date:
             continue
         source_id = str(manifest.get("source_id") or row.get("source_id") or "")
+        manifests_by_source.setdefault(source_id, []).append(manifest)
+
+    metrics: dict[str, dict[str, Any]] = {}
+    for source_id, manifests in manifests_by_source.items():
         item = metrics.setdefault(
             source_id,
             {
@@ -382,24 +386,36 @@ def _document_manifest_metrics(
                 "scan_stop_reasons": [],
             },
         )
-        item["manifest_count"] += 1
-        if manifest.get("date_scan_complete") is False:
-            item["incomplete_scan_count"] += 1
-            reason = manifest.get("date_scan_stop_reason")
-            if reason:
-                item["scan_stop_reasons"].append(str(reason))
-        for key in (
-            "provider_record_count",
-            "record_count",
-            "empty_result_count",
-            "duplicate_record_count",
-            "parse_failed_count",
-            "parsed_unique_record_count",
-            "mapped_source_record_count",
-            "mapping_failed_count",
-        ):
-            item[key] += int(manifest.get(key) or 0)
+        for manifest in _select_relevant_manifests(manifests):
+            item["manifest_count"] += 1
+            if manifest.get("date_scan_complete") is False:
+                item["incomplete_scan_count"] += 1
+                reason = manifest.get("date_scan_stop_reason")
+                if reason:
+                    item["scan_stop_reasons"].append(str(reason))
+            for key in (
+                "provider_record_count",
+                "record_count",
+                "empty_result_count",
+                "duplicate_record_count",
+                "parse_failed_count",
+                "parsed_unique_record_count",
+                "mapped_source_record_count",
+                "mapping_failed_count",
+            ):
+                item[key] += int(manifest.get(key) or 0)
     return metrics
+
+
+def _select_relevant_manifests(manifests_desc: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep latest full manifest plus newer incremental cursor manifests."""
+
+    selected = []
+    for manifest in manifests_desc:
+        selected.append(manifest)
+        if not bool(manifest.get("incremental_cursor_enabled")):
+            break
+    return selected
 
 
 def _silver_source_counts(

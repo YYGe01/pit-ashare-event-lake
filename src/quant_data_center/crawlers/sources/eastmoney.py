@@ -28,7 +28,7 @@ from quant_data_center.utils.instruments import normalize_instrument
 EASTMONEY_ROLL_NEWS_URL_TEMPLATE = "https://roll.eastmoney.com/default_{page_num}.html"
 EASTMONEY_REFERER = "https://roll.eastmoney.com/"
 PARSER_VERSION = "eastmoney_roll_news_v1"
-EASTMONEY_LIST_REQUEST_TIMEOUT_SECONDS = 10.0
+EASTMONEY_LIST_REQUEST_TIMEOUT_SECONDS = 30.0
 MAX_BODY_PREVIEW_CHARS = 1200
 EASTMONEY_BODY_FETCH_LIMIT = 0
 EASTMONEY_BODY_REQUEST_TIMEOUT_SECONDS = 5.0
@@ -58,6 +58,12 @@ class EastmoneyRollNewsCrawler:
         requests = __import__("requests")
         deadline = make_deadline(source_timeout_seconds)
         observed_at = _timestamp()
+        cursor = self.database.fetch_crawl_cursor(
+            source_id=source_id,
+            dataset="news",
+            cursor_scope=_cursor_scope(crawl_date),
+        )
+        previous_keys = _usable_cursor_keys(cursor)
 
         def fetch_page(page_num: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             raise_if_deadline_exceeded(deadline, source_id=source_id)
@@ -94,6 +100,8 @@ class EastmoneyRollNewsCrawler:
             fetch_page=fetch_page,
             publish_time_getter=lambda row: row.get("publish_time")
             or row.get("publish_date"),
+            record_key_getter=_provider_key,
+            seen_record_keys=previous_keys,
             before_fetch=lambda: sleep_with_deadline(
                 min_delay_seconds,
                 deadline=deadline,
@@ -105,6 +113,15 @@ class EastmoneyRollNewsCrawler:
         pages = scan.pages
         provider_rows = scan.provider_rows
         target_provider_rows = scan.target_rows
+        _upsert_rolling_cursor(
+            database=self.database,
+            source_id=source_id,
+            crawl_date=crawl_date,
+            rows=target_provider_rows,
+            scan_fields=scan.manifest_fields,
+            previous_keys=previous_keys,
+            observed_at=observed_at,
+        )
 
         raw_object_id = self.objects.put_json(
             dataset="news",
@@ -346,6 +363,58 @@ def _provider_key(row: dict[str, Any]) -> str:
         _article_id(_clean_text(row.get("url")))
         or _clean_text(row.get("url"))
         or f"{_clean_text(row.get('title'))}|{_clean_text(row.get('publish_time'))}"
+    )
+
+
+def _cursor_scope(crawl_date: str) -> str:
+    return f"date={crawl_date}"
+
+
+def _usable_cursor_keys(cursor: dict[str, Any] | None) -> set[str]:
+    if not cursor:
+        return set()
+    metadata = cursor.get("metadata") if isinstance(cursor.get("metadata"), dict) else {}
+    if metadata.get("date_scan_complete") is not True:
+        return set()
+    return {
+        str(value).strip()
+        for value in cursor.get("recent_record_keys") or []
+        if str(value).strip()
+    }
+
+
+def _upsert_rolling_cursor(
+    *,
+    database: QdcDatabase,
+    source_id: str,
+    crawl_date: str,
+    rows: list[dict[str, Any]],
+    scan_fields: dict[str, Any],
+    previous_keys: set[str],
+    observed_at: str,
+) -> None:
+    if not rows:
+        return
+    keys = [_provider_key(row) for row in rows]
+    keys = [key for key in keys if key]
+    if not keys:
+        return
+    recent_keys = list(dict.fromkeys([*keys, *sorted(previous_keys)]))[:500]
+    database.upsert_crawl_cursor(
+        source_id=source_id,
+        dataset="news",
+        cursor_scope=_cursor_scope(crawl_date),
+        last_record_time=_clean_text(rows[0].get("publish_time") or rows[0].get("publish_date")),
+        last_record_key=keys[0],
+        recent_record_keys=recent_keys,
+        metadata={
+            "crawl_date": crawl_date,
+            "date_scan_complete": bool(scan_fields.get("date_scan_complete")),
+            "date_scan_stop_reason": scan_fields.get("date_scan_stop_reason"),
+            "date_scan_pages_scanned": scan_fields.get("date_scan_pages_scanned"),
+            "target_provider_record_count": len(rows),
+            "updated_from_observed_at": observed_at,
+        },
     )
 
 
