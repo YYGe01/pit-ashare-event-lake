@@ -1,325 +1,151 @@
 # quant_data_center
 
-本仓库当前主线是个人 A 股事件与文本因子中心 `quant_data_center`，服务 Qlib 研究。
+> 面向 Qlib 研究的 A 股每日事件与外部因子数据中心（非结构化数据主线）。
 
-新的职责边界是：
+## 目录
 
-```text
-Qlib / 社区 cn_data / Qlib 增量脚本
-  -> 负责基础结构化行情、复权因子、交易日历和 instruments
+- [项目简介](#项目简介)
+- [核心能力](#核心能力)
+- [快速开始](#快速开始)
+- [每日采集工作流（推荐）](#每日采集工作流推荐)
+- [常用命令](#常用命令)
+- [项目结构](#项目结构)
+- [验证与质量检查](#验证与质量检查)
+- [文档与路线图](#文档与路线图)
+- [贡献指南](#贡献指南)
+- [安全与数据说明](#安全与数据说明)
 
-quant_data_center
-  -> 负责公告、新闻、研报、舆情、互动问答、监管处罚、招投标等非结构化和另类数据
-  -> 标准化为日频 external factors
-  -> 对齐并导出给 Qlib 使用
-```
+## 项目简介
 
-本仓库不做模型训练、组合回测、实盘下单或交易终端适配。历史回补和 AkShare 结构化采集能力保留为诊断、smoke 和应急补数能力，但不再是默认每日主线。
+`quant_data_center`（QDC）聚焦 **A 股非结构化与另类数据** 的每日采集、标准化、日频因子构建与 Qlib 对齐导出。
 
-当前实施计划见：
+- ✅ 本仓库主线：公告、新闻、研报、互动问答、公开舆情等数据。
+- ✅ 目标产出：可供 Qlib 使用的 external factors。
+- ❌ 不在本仓库范围：模型训练、组合回测、实盘下单、终端适配。
+- ❌ 默认不推进：历史大规模回补（除非明确要求）。
 
-```text
-docs/迁移实施计划.md
-docs/每日自动采集实施计划.md
-docs/训练数据源完整性评估与改进事项.md
-docs/数据流阅读指南.md
-docs/控制台产品设计方案.md
-```
+> 说明：QDC 依赖外部 Qlib 基础行情底座（如 `cn_data`）做对齐，不负责重建完整 OHLCV 基础行情。
 
-## 当前入口
+## 核心能力
 
-项目统一使用已存在的 `ai-trader` conda 环境；不要新建 `quant-data-center` conda 环境。需要同步依赖时，在 `ai-trader` 中执行 editable install。
+- **每日采集**：统一执行 `crawl-daily`，支持多源采集与控制表管理。
+- **因子加工**：基于文本/事件生成日频 external factors。
+- **数据分层**：raw / bronze / silver / parquet 同步。
+- **质量检查**：支持 dataset 级质量校验与每日健康摘要。
+- **Qlib 导出**：将 external factors 对齐交易日历与 instruments。
+- **控制台观察**：本地控制台查看任务状态与质量信号。
 
-```powershell
+## 快速开始
+
+### 1) 环境准备
+
+项目统一使用已有 conda 环境 `ai-trader`：
+
+```bash
 conda activate ai-trader
 python -m pip install -e ".[market,dev]"
+```
+
+如果自动化环境未激活 shell：
+
+```bash
+conda run -n ai-trader python -m pip install -e ".[market,dev]"
+```
+
+### 2) 基础检查
+
+```bash
 qdc validate-config
 qdc init
 qdc db-info
-qdc verify-qlib --provider-uri ~/.qlib/qlib_data/cn_data --start 2026-05-13 --end 2026-05-13 --instruments "SH600000,SZ000001" --fields '$close,$volume,$factor'
 ```
 
-当前默认每日流程是非结构化采集和外部因子加工，推荐分步执行，方便定位哪个阶段失败：
+## 每日采集工作流（推荐）
 
-```powershell
+推荐按阶段执行，便于定位失败点：
+
+```bash
 qdc crawl-daily --date 2026-05-13 --watch
 qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
 qdc sync-parquet --layer all
 qdc quality --start 2026-05-13 --end 2026-05-13
 qdc daily-health --date 2026-05-13 --format markdown
+```
+
+可选：启动控制台观察
+
+```bash
 qdc console --host 127.0.0.1 --port 8765
 ```
 
-`crawl-daily` 默认运行参数来自 [config/quant_data_center.yaml](config/quant_data_center.yaml) 的 `crawl_daily` 段；上交所公告等 source 级稳定参数已记录在 `crawl_daily.source_overrides`，日常不用再手写长参数。
+## 常用命令
 
-单源 smoke 和补跑示例：
+### 单源 smoke / 补跑
 
-```powershell
-qdc crawl-daily --date 2026-05-13 --source-id cninfo_announcement --page-size 100 --skip-pdf-download
+```bash
+qdc crawl-daily --date 2026-05-13 --source-id cninfo_announcement --page-size 10 --max-pages 1 --skip-pdf-download
 qdc crawl-daily --date 2026-05-13 --source-id sse_announcement
 qdc crawl-daily --date 2026-05-13 --source-id eastmoney_roll_news --page-size 100
 qdc crawl-daily --date 2026-05-13 --source-id eastmoney_research_report --page-size 100
-qdc crawl-daily --date 2026-05-14 --source-id cninfo_investor_interaction --symbols SZ002594 --page-size 20 --max-pages 1
-qdc crawl-daily --date 2026-05-14 --source-id cninfo_investor_interaction --page-size 50 --instrument-parallelism 8 --instrument-limit 0 --source-timeout-seconds 7200
-qdc crawl-daily --date 2026-05-14 --source-id eastmoney_public_sentiment --symbols "SH600000,SZ000001" --page-size 5 --max-pages 1
 ```
 
-`daily-pipeline` 是保留的一键流水线入口，会先跑历史结构化 `daily_bar` 任务，再按配置可选跑文档采集、因子、Parquet、quality 和 Qlib 导出。常用固定参数集中在 [config/quant_data_center.yaml](config/quant_data_center.yaml)；字段说明见 [config/README.md](config/README.md)。当前主线每日采集优先使用上面的分步流程。
+### 一键流水线（保留入口）
 
-```powershell
+```bash
 conda run -n ai-trader qdc daily-pipeline
 ```
 
-临时补跑固定日期时再显式传 `--date YYYY-MM-DD`。
+### Qlib 基础底座轻量校验
 
-如果由 Codex 或自动化终端代跑，建议把输出同步写入本地日志，日志目录是 `data/quant_data_center/logs`：
-
-```powershell
-$targetDate = "2026-05-13"
-$logDir = "data/quant_data_center/logs"
-New-Item -ItemType Directory -Force $logDir | Out-Null
-$logFile = Join-Path $logDir "daily-collection-$targetDate.log"
-
-function Invoke-QdcLogged {
-  param([string[]]$QdcArgs, [string]$LogFile)
-  ">>> qdc $($QdcArgs -join ' ')" | Tee-Object -FilePath $LogFile -Append
-  & conda run -n ai-trader qdc @QdcArgs 2>&1 | Tee-Object -FilePath $LogFile -Append
-  if ($LASTEXITCODE -ne 0) { throw "qdc $($QdcArgs -join ' ') failed with exit code $LASTEXITCODE" }
-}
-
-Invoke-QdcLogged -QdcArgs @("crawl-daily", "--date", $targetDate, "--watch") -LogFile $logFile
-Invoke-QdcLogged -QdcArgs @("build-factors", "--factor-set", "all", "--start", $targetDate, "--end", $targetDate) -LogFile $logFile
-Invoke-QdcLogged -QdcArgs @("sync-parquet", "--layer", "all") -LogFile $logFile
-Invoke-QdcLogged -QdcArgs @("quality", "--start", $targetDate, "--end", $targetDate) -LogFile $logFile
-Invoke-QdcLogged -QdcArgs @("daily-health", "--date", $targetDate, "--format", "markdown") -LogFile $logFile
+```bash
+qdc verify-qlib --provider-uri ~/.qlib/qlib_data/cn_data --start 2026-05-13 --end 2026-05-13 --instruments "SH600000,SZ000001" --fields '$close,$volume,$factor'
 ```
-
-`crawl-run` / `crawl-daily` 默认只采公告 metadata，不下载 PDF；需要留存公开 PDF 时显式加 `--download-pdfs`，可再配合 `--pdf-limit` 控制 smoke 下载量。
-滚动新闻源会按目标日期窗口向后翻页，跳过目标日之后的新闻，直到完整覆盖目标日；完整采集不建议传 `--max-pages`，只做接口 smoke 时再用它限制页数。
-互动问答源 `cninfo_investor_interaction` 按标的访问互动易公开问答接口；`crawl_daily.instrument_limit: 0` 表示默认使用全 active instruments，`crawl_daily.instrument_parallelism: 8` 控制标的并发。默认调度为 `cold-weekly` 冷标策略；冷标策略会把连续无互动的标的降频复查，并在复查时拉最近滚动窗口；这是前向延迟覆盖策略，不是半年后仍能补历史的回采能力。2026-05-15 实测当前免费入口不能可靠按 2024 / 2023 等旧日期窗口回采，训练 baseline 默认不要依赖互动问答。若要恢复严格每日全扫，显式传 `--interaction-schedule strict`。
-新闻采集依赖 `qdc_silver.stock_basic` 做标题到 instrument 的映射；当本地 `stock_basic` 为空时，`crawl-run` / `crawl-daily` 会先用 AkShare 初始化映射基准。`crawl-daily` 会自动重跑同日 failed 任务；若修复映射或解析逻辑后需要重跑已 success 的同日任务，显式加 `--force`。
-
-```powershell
-qdc crawl-daily --date 2026-05-13 --source-id eastmoney_roll_news --page-size 100 --force
-```
-
-单条文本事件分类可用于规则或 LLM 冒烟验证；全量因子默认仍走规则引擎：
-
-```powershell
-qdc classify-text-event --document-type announcement --title "公司收到交易所监管问询函"
-```
-
-## Qlib 基础行情底座
-
-QDC 不负责每天采集或下载社区版 `cn_data`。基础行情维护放在上层 `E:\code\qlib`：
-
-```text
-E:\code\qlib
-  -> Qlib 框架源码
-  -> 社区 cn_data 下载、替换或 Yahoo 增量更新脚本
-```
-
-本机已确认存在：
-
-```text
-C:\Users\Yuangen.yu\.qlib\qlib_data\cn_data
-```
-
-该目录包含 Qlib 标准结构：
-
-```text
-calendars/
-features/
-instruments/
-```
-
-并可读取 `$open`、`$high`、`$low`、`$close`、`$volume`、`$factor`。但当前本机这份数据日历只到 `2020-09-25`，需要由 Qlib 仓库侧更新到最近交易日后，再作为 QDC external factor 对齐底座。
-
-Qlib 社区数据源目前使用：
-
-```text
-https://github.com/chenditc/investment_data/releases
-```
-
-最近检查时，latest release 为 `2026-05-13`，资产 `qlib_bin.tar.gz` 约 550MB，近期 release 呈每日发布节奏。下载、解压、替换和健康检查属于 Qlib 仓库职责，不在 QDC 每日采集中执行。
-
-QDC 对 Qlib provider 只做轻量校验：
-
-```text
-provider_uri 是否存在
-calendars/day.txt 最新日期是否到最近完整交易日
-features 中 OHLCV 和 factor 是否存在
-抽样 D.features 能否读取 $close / $volume / $factor
-QDC external factors 是否能和该日历、instrument 对齐
-```
-
-## 非结构化数据源
-
-当前已接入的每日文档源：
-
-| 类型 | source_id | 默认定位 |
-| --- | --- | --- |
-| 公告 | `cninfo_announcement` | 主源，优先保留 metadata，可按需下载 PDF |
-| 公告 | `sse_announcement` | 上交所补源，默认可跳过 PDF 下载 |
-| 新闻 | `eastmoney_roll_news` | 当日滚动新闻补位 |
-| 新闻 | `sina_finance_news` | 近实时补位，历史日期可靠性有限 |
-| 研报 | `eastmoney_research_report` | 东方财富个股研报 metadata，默认不下载 PDF |
-| 互动问答 | `cninfo_investor_interaction` | 互动易公开问答 metadata，按标的采集；前向可选源，不作为历史回采或训练 baseline 依赖 |
-| 公开舆情 | `eastmoney_public_sentiment` | 东方财富公开关注度、排名和热门关键词 metadata |
-| 新闻 | `nbd_company_news` | 手动 smoke 源；已退出默认每日源 |
-
-额外 opt-in 新闻源：
-
-```text
-sina
-wallstreetcn
-10jqka
-eastmoney
-yuncaijing
-fenghuang
-jinrongjie
-cls
-yicai
-```
-
-这些源适合做覆盖率和事件映射观察，不直接作为训练级历史新闻结论。正式新闻训练需要授权历史新闻源。
-
-后续优先扩展的非结构化类别：
-
-```text
-研报全文 / 研报评论
-交易所监管问询和处罚
-法律诉讼和执行信息
-招投标 / 政府采购
-招聘 JD
-专利 / 商标 / 软著
-```
-
-## 历史和诊断能力
-
-以下命令保留为历史能力、smoke 或应急诊断，不再作为默认每日主线：
-
-```powershell
-qdc plan-backfill --dataset daily_bar --source-id akshare --universe csi300 --start 2026-05-01 --end 2026-05-03 --batch-size 1 --chunk-days 2
-qdc list-backfill --dataset daily_bar
-qdc run-backfill --dataset daily_bar --limit-tasks 4 --control-only
-qdc run-backfill --dataset daily_bar --retry-failed --limit-tasks 4
-qdc recover-running --dataset daily_bar --older-than-minutes 15
-qdc split-backfill --task-id <task_id> --batch-size 10
-qdc daily --date 2026-05-11 --universe csi300 --control-only
-qdc daily-pipeline --date 2026-05-11 --symbols "SH600000,SZ000001" --batch-size 1 --control-only
-```
-
-既有 AkShare 结构化能力包括：
-
-```text
-stock_basic
-trade_calendar
-daily_bar
-adj_factor
-price_limit
-trade_status
-announcement
-news
-```
-
-这些能力不删除，但日常不再用它们全 A 重采 OHLCV 和复权因子。
-
-## Qlib 联调
-
-如需验证 Qlib provider，可安装上层 Qlib 源码：
-
-```powershell
-conda run -n ai-trader python -m pip install -e E:\code\qlib
-```
-
-QDC 后续导出的重点是外部因子字段，例如：
-
-```text
-$news_count
-$news_sentiment_mean
-$news_risk_count
-$announcement_count
-$announcement_financing_count
-$announcement_regulatory_count
-$research_report_count
-$research_institution_count
-$research_rating_positive_count
-$question_count
-$reply_count
-$reply_delay_hours_mean
-$risk_topic_count
-$new_business_topic_count
-$sentiment_mean
-$public_sentiment_count
-$public_sentiment_heat_mean
-$public_sentiment_rank_best
-$public_sentiment_keyword_count
-$public_sentiment_risk_topic_count
-$public_sentiment_new_business_topic_count
-$public_sentiment_sentiment_mean
-```
-
-当前仓库保留 Qlib handler 示例：
-
-```text
-src/quant_data_center/qlib_ext/handlers.py
-config/qlib/workflow_config_lightgbm_alpha158_qdc_external.yaml
-```
-
-目标是在 Qlib 基础 `cn_data` 上追加 QDC external factors，而不是用 QDC 重建完整基础行情 provider。
 
 ## 项目结构
 
 ```text
-config/quant_data_center.yaml                 QDC 运行配置
-config/quant_data_center_daily_only.yaml      历史 daily-only 隔离配置，后续会降级为 smoke/诊断配置
-src/quant_data_center/                        QDC 源码
-src/quant_data_center/console_static/         本地控制台静态页面
-tests/test_qdc_storage.py                     当前 QDC 聚焦测试
-docs/每日自动采集实施计划.md                  当前非结构化每日采集计划
-docs/迁移实施计划.md                          长期迁移总纲和边界
-docs/训练数据源完整性评估与改进事项.md         训练数据职责和缺口评估
-docs/数据流阅读指南.md                        数据流阅读指南
-docs/控制台产品设计方案.md                    控制台信息架构
-docs/工作日志/                                智能体工作记录
-data/quant_data_center/                       本地运行数据，已 gitignored
-data/quant_data_center_daily_only/             历史 daily-only 运行数据，已 gitignored
+src/quant_data_center/                 QDC 源码
+config/quant_data_center.yaml          主配置
+config/quant_data_center_daily_only.yaml  历史/隔离配置
+docs/迁移实施计划.md                  迁移总纲与边界
+docs/每日自动采集实施计划.md          每日采集方案与状态
+docs/工作日志/                         智能体工作日志
+tests/                                 测试用例
+data/quant_data_center/                本地运行数据（gitignored）
 ```
 
-## 验证
+## 验证与质量检查
 
-常规验证：
+开发或提交前建议执行：
 
-```powershell
-qdc validate-config
-pytest
-ruff check .
-```
-
-非结构化链路 smoke：
-
-```powershell
-qdc crawl-daily --date 2026-05-13 --source-id cninfo_announcement --page-size 10 --max-pages 1 --skip-pdf-download
-qdc verify-qlib --provider-uri ~/.qlib/qlib_data/cn_data --start 2026-05-13 --end 2026-05-13 --instruments "SH600000,SZ000001" --fields '$close,$volume,$factor'
-qdc build-factors --factor-set all --start 2026-05-13 --end 2026-05-13
-qdc sync-parquet --layer all
-qdc quality
-qdc daily-health --date 2026-05-13 --format markdown
-```
-
-每日采集任务可直接使用项目 skill：
-
-```text
-.codex/skills/qdc-daily-collection/SKILL.md
-```
-
-该 skill 固定执行 `crawl-daily -> build-factors -> sync-parquet -> quality -> daily-health`，并按 `daily-health` 的 `ok / warning / error` 口径判断是否需要重跑、观察或修复代码。
-
-自动化环境未激活 shell 时：
-
-```powershell
+```bash
 conda run -n ai-trader qdc validate-config
 conda run -n ai-trader pytest
 conda run -n ai-trader ruff check .
 ```
+
+## 文档与路线图
+
+- 总体迁移与边界：`docs/迁移实施计划.md`
+- 每日采集主线：`docs/每日自动采集实施计划.md`
+- 配置说明：`config/README.md`
+- 日志记录：`docs/工作日志/`
+
+## 贡献指南
+
+欢迎通过 Issue / PR 参与改进。提交前请至少完成：
+
+1. 保持改动小而可验证。
+2. 仅提交与任务相关文件。
+3. 通过基础验证命令（`validate-config` / `pytest` / `ruff check`）。
+4. 不提交运行数据、凭据、密钥与本地环境文件。
+
+## 安全与数据说明
+
+- 禁止提交 `.env`、API key、cookie、密码、供应商凭据。
+- `data/quant_data_center/` 为本地运行目录，必须保持 gitignored。
+- raw/bronze 层采用追加写入，避免覆盖历史对象。
+
+---
+
+如果你是第一次接手本仓库，建议先从 `docs/每日自动采集实施计划.md` 的“当前状态/下一步”开始。
